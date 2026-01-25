@@ -1,96 +1,69 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
-All colors MUST be HSL.
-*/
-
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
-
-    --radius: 0.5rem;
-
-    --sidebar-background: 0 0% 98%;
-
-    --sidebar-foreground: 240 5.3% 26.1%;
-
-    --sidebar-primary: 240 5.9% 10%;
-
-    --sidebar-primary-foreground: 0 0% 98%;
-
-    --sidebar-accent: 240 4.8% 95.9%;
-
-    --sidebar-accent-foreground: 240 5.9% 10%;
-
-    --sidebar-border: 220 13% 91%;
-
-    --sidebar-ring: 217.2 91.2% 59.8%;
-  }
-
-  .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
+    /* Neon Pulse Theme - ME Jay */
+    --background: 248 12% 6%;
+    --foreground: 0 0% 100%;
+    
+    --card: 260 50% 12%;
+    --card-foreground: 0 0% 100%;
+    
+    --popover: 260 50% 12%;
+    --popover-foreground: 0 0% 100%;
+    
+    /* Primary - Hot Pink/Magenta */
+    --primary: 336 100% 50%;
+    --primary-foreground: 0 0% 100%;
+    
+    /* Secondary - Purple */
+    --secondary: 264 80% 58%;
+    --secondary-foreground: 0 0% 100%;
+    
+    /* Accent - Cyan */
+    --accent: 168 100% 48%;
+    --accent-foreground: 248 12% 6%;
+    
+    --muted: 260 20% 20%;
+    --muted-foreground: 0 0% 60%;
+    
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    
+    --border: 0 0% 100% / 0.1;
+    --input: 0 0% 100% / 0.1;
+    --ring: 336 100% 50%;
+    
+    --radius: 1rem;
+    
+    /* Custom ME Jay tokens */
+    --glass-bg: 0 0% 100% / 0.08;
+    --glass-border: 0 0% 100% / 0.1;
+    --text-secondary: 0 0% 100% / 0.6;
+    --text-muted: 0 0% 100% / 0.4;
+    
+    /* Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(336 100% 50%), hsl(264 80% 58%));
+    --gradient-secondary: linear-gradient(135deg, hsl(264 80% 58%), hsl(168 100% 48%));
+    --gradient-accent: linear-gradient(135deg, hsl(168 100% 48%), hsl(336 100% 50%));
+    --gradient-bg: linear-gradient(180deg, hsl(248 12% 6%) 0%, hsl(260 50% 12%) 50%, hsl(220 40% 10%) 100%);
+    
+    /* Shadows */
+    --shadow-primary: 0 10px 40px hsl(336 100% 50% / 0.4);
+    --shadow-glow: 0 0 60px hsl(336 100% 50% / 0.3);
+    
+    --sidebar-background: 248 12% 6%;
+    --sidebar-foreground: 0 0% 100%;
+    --sidebar-primary: 336 100% 50%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-accent: 264 80% 58%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 0 0% 100% / 0.1;
+    --sidebar-ring: 336 100% 50%;
   }
 }
 
@@ -98,8 +71,270 @@ All colors MUST be HSL.
   * {
     @apply border-border;
   }
-
+  
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--gradient-bg);
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow-x: hidden;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Space Grotesk', sans-serif;
+  }
+}
+
+@layer components {
+  /* Glass Card */
+  .glass-card {
+    @apply rounded-2xl p-5;
+    background: hsl(var(--glass-bg));
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid hsl(var(--glass-border));
+  }
+  
+  /* Primary Gradient Button */
+  .btn-primary-gradient {
+    @apply rounded-xl font-semibold text-white transition-all duration-200;
+    background: var(--gradient-primary);
+    box-shadow: var(--shadow-primary);
+  }
+  
+  .btn-primary-gradient:hover {
+    @apply scale-[1.02];
+    box-shadow: 0 15px 50px hsl(336 100% 50% / 0.5);
+  }
+  
+  .btn-primary-gradient:active {
+    @apply scale-[0.98];
+  }
+  
+  /* Secondary Glass Button */
+  .btn-glass {
+    @apply rounded-xl font-medium transition-all duration-200;
+    background: hsl(var(--glass-bg));
+    border: 1px solid hsl(var(--glass-border));
+  }
+  
+  .btn-glass:hover {
+    background: hsl(0 0% 100% / 0.12);
+  }
+  
+  /* Gradient Text */
+  .text-gradient {
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  
+  .text-gradient-accent {
+    background: linear-gradient(135deg, hsl(336 100% 50%), hsl(264 80% 58%), hsl(168 100% 48%));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  
+  /* Orbs */
+  .orb {
+    @apply absolute rounded-full pointer-events-none;
+    filter: blur(60px);
+  }
+  
+  .orb-primary {
+    @apply bg-primary;
+  }
+  
+  .orb-secondary {
+    @apply bg-secondary;
+  }
+  
+  .orb-accent {
+    @apply bg-accent;
+  }
+  
+  /* Status Badges */
+  .badge-ready {
+    @apply px-2 py-0.5 rounded text-[9px] font-semibold uppercase;
+    background: hsl(168 100% 48% / 0.2);
+    color: hsl(var(--accent));
+  }
+  
+  .badge-analyzing {
+    @apply px-2 py-0.5 rounded text-[9px] font-semibold uppercase;
+    background: hsl(336 100% 50% / 0.2);
+    color: hsl(var(--primary));
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  
+  .badge-basic {
+    @apply px-2 py-0.5 rounded text-[9px] font-semibold uppercase;
+    background: hsl(0 0% 100% / 0.1);
+    color: hsl(var(--text-muted));
+  }
+  
+  /* Control Buttons */
+  .ctrl-btn {
+    @apply flex items-center justify-center rounded-full transition-all duration-200 cursor-pointer;
+  }
+  
+  .ctrl-primary {
+    @apply w-[72px] h-[72px] text-white;
+    background: var(--gradient-primary);
+    box-shadow: var(--shadow-primary);
+  }
+  
+  .ctrl-primary:hover {
+    @apply scale-105;
+    box-shadow: 0 15px 50px hsl(336 100% 50% / 0.5);
+  }
+  
+  .ctrl-secondary {
+    @apply w-[52px] h-[52px] text-white;
+    background: hsl(var(--glass-bg));
+    border: 1px solid hsl(var(--glass-border));
+  }
+  
+  .ctrl-secondary:hover {
+    background: hsl(0 0% 100% / 0.12);
+  }
+  
+  /* Vinyl Animation */
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  
+  .vinyl-spin {
+    animation: spin 3s linear infinite;
+  }
+  
+  .vinyl-spin-slow {
+    animation: spin 6s linear infinite;
+  }
+  
+  .vinyl-paused {
+    animation-play-state: paused;
+  }
+  
+  /* Pulse Animation */
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  
+  /* Beat Pulse */
+  @keyframes beat-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.02); }
+  }
+  
+  .beat-pulse {
+    animation: beat-pulse 0.5s ease-in-out infinite;
+  }
+  
+  /* Tab Bar */
+  .tab-bar {
+    @apply fixed bottom-0 left-0 right-0 h-[84px] flex justify-around items-start pt-3 z-50;
+    background: hsl(248 12% 6% / 0.95);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-top: 1px solid hsl(var(--glass-border));
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+  
+  /* Energy Toggle */
+  .energy-toggle {
+    @apply flex rounded-xl p-1;
+    background: hsl(0 0% 100% / 0.05);
+  }
+  
+  .energy-option {
+    @apply flex-1 py-2.5 text-center rounded-lg text-[13px] cursor-pointer transition-all duration-200;
+    color: hsl(var(--text-muted));
+  }
+  
+  .energy-option:hover {
+    color: hsl(var(--text-secondary));
+  }
+  
+  .energy-option.active {
+    @apply text-white;
+    background: var(--gradient-secondary);
+  }
+  
+  /* Track Item */
+  .track-item {
+    @apply flex items-center gap-3 p-2.5 rounded-xl cursor-pointer transition-colors duration-200;
+    background: hsl(0 0% 100% / 0.03);
+  }
+  
+  .track-item:hover {
+    background: hsl(0 0% 100% / 0.06);
+  }
+  
+  .track-item.playing {
+    background: hsl(336 100% 50% / 0.1);
+    border: 1px solid hsl(336 100% 50% / 0.2);
+  }
+  
+  /* Slider Track */
+  .slider-track {
+    @apply h-1.5 rounded-full relative;
+    background: hsl(0 0% 100% / 0.1);
+  }
+  
+  .slider-fill {
+    @apply h-full rounded-full;
+    background: var(--gradient-primary);
+  }
+  
+  /* Album Art */
+  .album-art {
+    @apply rounded-2xl flex items-center justify-center relative overflow-hidden;
+    background: var(--gradient-primary);
+  }
+  
+  .album-art-glow {
+    box-shadow: 0 20px 60px hsl(336 100% 50% / 0.3);
+  }
+  
+  /* Playlist Card */
+  .playlist-card {
+    @apply rounded-2xl p-3.5 cursor-pointer transition-all duration-200;
+    background: hsl(var(--glass-bg));
+    border: 1px solid hsl(var(--glass-border));
+  }
+  
+  .playlist-card:hover {
+    @apply -translate-y-0.5;
+    background: hsl(0 0% 100% / 0.1);
+  }
+  
+  /* Create Playlist Button */
+  .create-playlist-btn {
+    @apply flex flex-col items-center justify-center gap-2 rounded-2xl py-7 px-3.5 cursor-pointer transition-all duration-200;
+    background: hsl(0 0% 100% / 0.03);
+    border: 2px dashed hsl(var(--glass-border));
+    color: hsl(var(--text-muted));
+  }
+  
+  .create-playlist-btn:hover {
+    background: hsl(0 0% 100% / 0.05);
+    border-color: hsl(var(--primary));
+    color: hsl(var(--primary));
+  }
+  
+  /* Scrollbar */
+  ::-webkit-scrollbar {
+    display: none;
+  }
+  
+  * {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
   }
 }
