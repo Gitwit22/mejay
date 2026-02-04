@@ -5,18 +5,28 @@ import { PartyModeView } from '@/components/PartyModeView';
 import { PlaylistsView } from '@/components/PlaylistsView';
 import { useDJStore } from '@/stores/djStore';
 import logo from '@/assets/me-jay-logo.png';
+import { useSearchParams } from 'react-router-dom';
 
 type TabId = 'library' | 'party' | 'playlists';
 
 const Index = () => {
-  const [activeTab, setActiveTab] = useState<TabId>('party');
-  const { loadTracks, loadPlaylists, loadSettings } = useDJStore();
+  const [searchParams] = useSearchParams();
+  const tabFromUrl = searchParams.get('tab') as TabId | null;
+  const [activeTab, setActiveTab] = useState<TabId>(tabFromUrl || 'party');
 
+  // Initialize app data on mount only
   useEffect(() => {
-    loadTracks();
-    loadPlaylists();
-    loadSettings();
-  }, [loadTracks, loadPlaylists, loadSettings]);
+    useDJStore.getState().loadTracks();
+    useDJStore.getState().loadPlaylists();
+    useDJStore.getState().loadSettings();
+  }, []);
+
+  // Sync tab from URL
+  useEffect(() => {
+    if (tabFromUrl && ['library', 'party', 'playlists'].includes(tabFromUrl)) {
+      setActiveTab(tabFromUrl);
+    }
+  }, [tabFromUrl]);
 
   return (
     <div className="min-h-screen min-h-[100dvh] relative overflow-hidden">
