@@ -26,6 +26,16 @@ export interface Settings {
   maxTempoPercent: number;
   energyMode: 'chill' | 'normal' | 'hype';
   shuffleEnabled: boolean;
+  // Mix timing controls
+  nextSongStartOffset: number; // seconds into next song to start
+  mixTriggerMode: 'remaining' | 'elapsed' | 'manual';
+  mixTriggerSeconds: number; // when to start bringing in next track
+  // Tempo controls
+  tempoMode: 'auto' | 'locked';
+  lockedBpm: number;
+  // Scratch settings
+  scratchQuantize: '1/4' | '1/2' | '1';
+  scratchIntensity: number; // 0-1
 }
 
 interface MeJayDB extends DBSchema {
@@ -136,6 +146,13 @@ export async function getSettings(): Promise<Settings> {
     maxTempoPercent: 6,
     energyMode: 'normal',
     shuffleEnabled: false,
+    nextSongStartOffset: 0,
+    mixTriggerMode: 'remaining',
+    mixTriggerSeconds: 20,
+    tempoMode: 'auto',
+    lockedBpm: 128,
+    scratchQuantize: '1/4',
+    scratchIntensity: 0.5,
   };
 }
 
