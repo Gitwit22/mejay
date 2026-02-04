@@ -440,22 +440,38 @@ export const useDJStore = create<DJState>((set, get) => {
       
       let trackIds: string[];
       if (source.type === 'import') {
-        trackIds = state.tracks.map(t => t.id);
+        // Only include tracks that have a valid fileBlob
+        trackIds = state.tracks.filter(t => t.fileBlob).map(t => t.id);
       } else if (source.type === 'playlist' && source.playlistId) {
         const playlist = state.playlists.find(p => p.id === source.playlistId);
-        trackIds = playlist?.trackIds || [];
+        // Only include tracks that exist and have a valid fileBlob
+        trackIds = (playlist?.trackIds || []).filter(id => {
+          const track = state.tracks.find(t => t.id === id);
+          return track?.fileBlob;
+        });
       } else {
+        console.error('[DJ Store] Invalid party source');
         return;
       }
+
+      console.log('[DJ Store] Starting party mode with', trackIds.length, 'playable tracks');
       
       if (state.settings.shuffleEnabled) {
         trackIds = [...trackIds].sort(() => Math.random() - 0.5);
       }
 
-      if (trackIds.length === 0) return;
+      if (trackIds.length === 0) {
+        console.error('[DJ Store] No playable tracks - all tracks may be missing file data');
+        return;
+      }
 
       const firstTrackId = trackIds[0];
       const firstTrack = state.tracks.find(t => t.id === firstTrackId);
+      
+      if (!firstTrack?.fileBlob) {
+        console.error('[DJ Store] First track has no fileBlob');
+        return;
+      }
       
       await get().loadTrackToDeck(firstTrackId, 'A');
       
