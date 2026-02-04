@@ -72,29 +72,52 @@ let dbInstance: IDBPDatabase<MeJayDB> | null = null;
 export async function getDB(): Promise<IDBPDatabase<MeJayDB>> {
   if (dbInstance) return dbInstance;
 
-  dbInstance = await openDB<MeJayDB>('me-jay-db', 2, {
-    upgrade(db, oldVersion) {
-      // Tracks store
-      if (!db.objectStoreNames.contains('tracks')) {
-        const trackStore = db.createObjectStore('tracks', { keyPath: 'id' });
-        trackStore.createIndex('by-name', 'displayName');
-        trackStore.createIndex('by-bpm', 'bpm');
-      }
+  try {
+    console.log('[DB] Opening IndexedDB...');
+    dbInstance = await openDB<MeJayDB>('me-jay-db', 2, {
+      upgrade(db, oldVersion, newVersion) {
+        console.log('[DB] Upgrading from version', oldVersion, 'to', newVersion);
+        
+        // Tracks store
+        if (!db.objectStoreNames.contains('tracks')) {
+          console.log('[DB] Creating tracks store');
+          const trackStore = db.createObjectStore('tracks', { keyPath: 'id' });
+          trackStore.createIndex('by-name', 'displayName');
+          trackStore.createIndex('by-bpm', 'bpm');
+        }
 
-      // Playlists store
-      if (!db.objectStoreNames.contains('playlists')) {
-        const playlistStore = db.createObjectStore('playlists', { keyPath: 'id' });
-        playlistStore.createIndex('by-name', 'name');
-      }
+        // Playlists store
+        if (!db.objectStoreNames.contains('playlists')) {
+          console.log('[DB] Creating playlists store');
+          const playlistStore = db.createObjectStore('playlists', { keyPath: 'id' });
+          playlistStore.createIndex('by-name', 'name');
+        }
 
-      // Settings store
-      if (!db.objectStoreNames.contains('settings')) {
-        db.createObjectStore('settings', { keyPath: 'id' });
-      }
-    },
-  });
-
-  return dbInstance;
+        // Settings store
+        if (!db.objectStoreNames.contains('settings')) {
+          console.log('[DB] Creating settings store');
+          db.createObjectStore('settings', { keyPath: 'id' });
+        }
+      },
+      blocked() {
+        console.warn('[DB] Database upgrade blocked - close other tabs');
+      },
+      blocking() {
+        console.warn('[DB] This connection is blocking an upgrade');
+        dbInstance?.close();
+        dbInstance = null;
+      },
+      terminated() {
+        console.warn('[DB] Database connection terminated unexpectedly');
+        dbInstance = null;
+      },
+    });
+    console.log('[DB] Database opened successfully');
+    return dbInstance;
+  } catch (error) {
+    console.error('[DB] Failed to open database:', error);
+    throw error;
+  }
 }
 
 // Track operations
