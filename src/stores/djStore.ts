@@ -76,6 +76,7 @@ interface DJState {
   createPlaylist: (name: string) => Promise<void>;
   addTrackToPlaylist: (playlistId: string, trackId: string) => Promise<void>;
   removeTrackFromPlaylist: (playlistId: string, trackId: string) => Promise<void>;
+  reorderPlaylistTracks: (playlistId: string, fromIndex: number, toIndex: number) => Promise<void>;
   deletePlaylistById: (id: string) => Promise<void>;
   
   // Helper to get current party tracks
@@ -346,6 +347,8 @@ export const useDJStore = create<DJState>((set, get) => {
       const state = get();
       const { partyTrackIds, nowPlayingIndex, pendingNextIndex, settings, activeDeck, tracks } = state;
       
+      if (!state.isPartyMode || partyTrackIds.length === 0) return;
+      
       // Determine next index
       let nextIndex: number;
       
@@ -416,7 +419,7 @@ export const useDJStore = create<DJState>((set, get) => {
           set({ deckB: { ...initialDeckState, trackId: nextTrackId, duration } });
         }
 
-        // Start playback and crossfade
+        // Start playback and crossfade immediately (regardless of mixTriggerMode)
         get().play(nextDeck);
         
         setTimeout(() => {
@@ -627,6 +630,22 @@ export const useDJStore = create<DJState>((set, get) => {
       if (!playlist) return;
       
       const newTrackIds = playlist.trackIds.filter(id => id !== trackId);
+      await updatePlaylist(playlistId, { trackIds: newTrackIds });
+      set(state => ({
+        playlists: state.playlists.map(p =>
+          p.id === playlistId ? { ...p, trackIds: newTrackIds } : p
+        ),
+      }));
+    },
+
+    reorderPlaylistTracks: async (playlistId: string, fromIndex: number, toIndex: number) => {
+      const playlist = get().playlists.find(p => p.id === playlistId);
+      if (!playlist) return;
+
+      const newTrackIds = [...playlist.trackIds];
+      const [removed] = newTrackIds.splice(fromIndex, 1);
+      newTrackIds.splice(toIndex, 0, removed);
+
       await updatePlaylist(playlistId, { trackIds: newTrackIds });
       set(state => ({
         playlists: state.playlists.map(p =>
