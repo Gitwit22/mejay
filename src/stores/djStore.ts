@@ -160,8 +160,15 @@ export const useDJStore = create<DJState>((set, get) => {
 
     loadTracks: async () => {
       set({ isLoadingTracks: true });
-      const tracks = await getAllTracks();
-      set({ tracks, isLoadingTracks: false });
+      try {
+        console.log('[DJ Store] Loading tracks from IndexedDB...');
+        const tracks = await getAllTracks();
+        console.log('[DJ Store] Loaded tracks:', tracks.length);
+        set({ tracks, isLoadingTracks: false });
+      } catch (error) {
+        console.error('[DJ Store] Failed to load tracks:', error);
+        set({ isLoadingTracks: false });
+      }
     },
 
     loadPlaylists: async () => {
