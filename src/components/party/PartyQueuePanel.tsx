@@ -1,4 +1,4 @@
-import { Music, GripVertical, Play, SkipForward, Shuffle, RotateCcw, Check } from 'lucide-react';
+import { Music, GripVertical, Play, SkipForward, Shuffle, Repeat, Check } from 'lucide-react';
 import { useDJStore } from '@/stores/djStore';
 import { cn } from '@/lib/utils';
 import { formatDuration } from '@/lib/utils';
@@ -12,7 +12,6 @@ export function PartyQueuePanel() {
     tracks,
     settings,
     shufflePartyTracks,
-    restartPlaylist,
     playNow,
     playNext,
     moveTrackInParty,
@@ -80,11 +79,16 @@ export function PartyQueuePanel() {
             Shuffle Now
           </button>
           <button
-            onClick={restartPlaylist}
-            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground transition-colors"
-            title="Restart Playlist"
+            onClick={() => updateUserSettings({ loopPlaylist: !settings.loopPlaylist })}
+            className={cn(
+              'p-1.5 rounded-lg transition-colors',
+              settings.loopPlaylist 
+                ? 'bg-primary/20 text-primary' 
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+            title={settings.loopPlaylist ? 'Loop On' : 'Loop Off'}
           >
-            <RotateCcw className="w-4 h-4" />
+            <Repeat className="w-4 h-4" />
           </button>
         </div>
       </div>
