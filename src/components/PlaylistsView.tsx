@@ -1,13 +1,102 @@
-import { Plus, ListMusic, Trash2, Music, Play, Edit2 } from 'lucide-react';
-import { useState } from 'react';
+import { Plus, ListMusic, Trash2, Music, Play, Edit2, ArrowUpDown, GripVertical } from 'lucide-react';
+import { useState, useCallback } from 'react';
 import { useDJStore } from '@/stores/djStore';
 import { cn, formatDuration } from '@/lib/utils';
+import { useNavigate } from 'react-router-dom';
+import { Track } from '@/lib/db';
+
+// Playlist Track List Component with drag reordering
+function PlaylistTrackList({ 
+  tracks, 
+  playlistId, 
+  isReordering, 
+  onRemove 
+}: { 
+  tracks: Track[]; 
+  playlistId: string; 
+  isReordering: boolean; 
+  onRemove: (trackId: string) => void;
+}) {
+  const { reorderPlaylistTracks } = useDJStore();
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+  const handleDragStart = (index: number) => {
+    setDraggedIndex(index);
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    setDragOverIndex(index);
+  };
+
+  const handleDrop = (toIndex: number) => {
+    if (draggedIndex !== null && draggedIndex !== toIndex) {
+      reorderPlaylistTracks(playlistId, draggedIndex, toIndex);
+    }
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+  };
+
+  return (
+    <>
+      {tracks.map((track, index) => (
+        <div 
+          key={track.id} 
+          className={cn(
+            "track-item group transition-all",
+            isReordering && "cursor-grab active:cursor-grabbing",
+            draggedIndex === index && "opacity-50",
+            dragOverIndex === index && draggedIndex !== index && "border-t-2 border-primary"
+          )}
+          draggable={isReordering}
+          onDragStart={() => handleDragStart(index)}
+          onDragOver={(e) => handleDragOver(e, index)}
+          onDrop={() => handleDrop(index)}
+          onDragEnd={handleDragEnd}
+        >
+          {isReordering ? (
+            <GripVertical className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+          ) : (
+            <span className="text-xs text-muted-foreground w-6">{index + 1}</span>
+          )}
+          <div className="album-art w-12 h-12 !rounded-lg flex-shrink-0">
+            <Music className="w-5 h-5 text-white/60" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h5 className="text-sm font-medium truncate">{track.displayName}</h5>
+            <p className="text-xs text-muted-foreground flex items-center gap-2">
+              {track.bpm ? `${Math.round(track.bpm)} BPM` : 'No BPM'}
+              <span>•</span>
+              <span>{formatDuration(track.duration)}</span>
+            </p>
+          </div>
+          {!isReordering && (
+            <button
+              onClick={() => onRemove(track.id)}
+              className="opacity-0 group-hover:opacity-100 p-2 rounded-lg transition-opacity hover:bg-destructive/20"
+            >
+              <Trash2 className="w-4 h-4 text-destructive" />
+            </button>
+          )}
+        </div>
+      ))}
+    </>
+  );
+}
 
 export function PlaylistsView() {
+  const navigate = useNavigate();
   const { playlists, tracks, createPlaylist, deletePlaylistById, startPartyMode, removeTrackFromPlaylist } = useDJStore();
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [selectedPlaylist, setSelectedPlaylist] = useState<string | null>(null);
+  const [isReordering, setIsReordering] = useState(false);
 
   const handleCreate = async () => {
     if (newPlaylistName.trim()) {
@@ -17,10 +106,12 @@ export function PlaylistsView() {
     }
   };
 
-  const handlePlayPlaylist = (playlistId: string) => {
+  const handlePlayPlaylist = async (playlistId: string) => {
     const playlist = playlists.find(p => p.id === playlistId);
     if (playlist && playlist.trackIds.length > 0) {
-      startPartyMode({ type: 'playlist', playlistId });
+      await startPartyMode({ type: 'playlist', playlistId });
+      // Navigate to party mode tab
+      navigate('/?tab=party');
     }
   };
 
@@ -28,7 +119,7 @@ export function PlaylistsView() {
   const playlistTracks = selectedPlaylistData
     ? selectedPlaylistData.trackIds
         .map(id => tracks.find(t => t.id === id))
-        .filter(Boolean)
+        .filter((t): t is Track => t !== undefined)
     : [];
 
   if (selectedPlaylist && selectedPlaylistData) {
@@ -46,16 +137,30 @@ export function PlaylistsView() {
           <p className="text-sm text-muted-foreground">{playlistTracks.length} tracks</p>
         </div>
 
-        {/* Play Button */}
-        {playlistTracks.length > 0 && (
+        {/* Action Buttons */}
+        <div className="flex gap-3 mb-5">
+          {playlistTracks.length > 0 && (
+            <button
+              onClick={() => handlePlayPlaylist(selectedPlaylist)}
+              className="btn-primary-gradient flex items-center justify-center gap-2.5 flex-1 py-4 text-[15px]"
+            >
+              <Play className="w-5 h-5" />
+              Play This Set
+            </button>
+          )}
           <button
-            onClick={() => handlePlayPlaylist(selectedPlaylist)}
-            className="btn-primary-gradient flex items-center justify-center gap-2.5 w-full py-4 text-[15px] mb-5"
+            onClick={() => setIsReordering(!isReordering)}
+            className={cn(
+              'flex items-center justify-center gap-2 px-4 py-4 rounded-xl text-[15px] transition-colors',
+              isReordering 
+                ? 'bg-primary text-primary-foreground' 
+                : 'btn-glass'
+            )}
           >
-            <Play className="w-5 h-5" />
-            Play This Set
+            <ArrowUpDown className="w-5 h-5" />
+            {isReordering ? 'Done' : 'Reorder'}
           </button>
-        )}
+        </div>
 
         {/* Track List */}
         <div className="flex flex-col gap-2 flex-1 overflow-y-auto pb-4">
@@ -68,28 +173,12 @@ export function PlaylistsView() {
               </p>
             </div>
           ) : (
-            playlistTracks.map((track, index) => (
-              <div key={track!.id} className="track-item group">
-                <span className="text-xs text-muted-foreground w-6">{index + 1}</span>
-                <div className="album-art w-12 h-12 !rounded-lg flex-shrink-0">
-                  <Music className="w-5 h-5 text-white/60" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h5 className="text-sm font-medium truncate">{track!.displayName}</h5>
-                  <p className="text-xs text-muted-foreground flex items-center gap-2">
-                    {track!.bpm ? `${Math.round(track!.bpm)} BPM` : 'No BPM'}
-                    <span>•</span>
-                    <span>{formatDuration(track!.duration)}</span>
-                  </p>
-                </div>
-                <button
-                  onClick={() => removeTrackFromPlaylist(selectedPlaylist, track!.id)}
-                  className="opacity-0 group-hover:opacity-100 p-2 rounded-lg transition-opacity hover:bg-destructive/20"
-                >
-                  <Trash2 className="w-4 h-4 text-destructive" />
-                </button>
-              </div>
-            ))
+            <PlaylistTrackList
+              tracks={playlistTracks}
+              playlistId={selectedPlaylist}
+              isReordering={isReordering}
+              onRemove={(trackId) => removeTrackFromPlaylist(selectedPlaylist, trackId)}
+            />
           )}
         </div>
       </div>
