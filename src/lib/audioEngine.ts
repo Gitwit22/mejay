@@ -1,13 +1,13 @@
 // Web Audio API based audio engine for ME Jay
-// Provides dual-deck playback, crossfading, tempo control, and scratching
+// Provides dual-deck playback, crossfading, tempo control, and volume matching
 
 export type DeckId = 'A' | 'B';
-export type ScratchType = 'baby' | 'chirp' | 'transformer' | 'tear' | 'stab';
 
 interface DeckState {
   audioBuffer: AudioBuffer | null;
   sourceNode: AudioBufferSourceNode | null;
   gainNode: GainNode | null;
+  trackGainNode: GainNode | null; // Per-track gain for volume matching
   playbackRate: number;
   baseBpm: number; // Original detected BPM
   isPlaying: boolean;
@@ -15,20 +15,13 @@ interface DeckState {
   startedAt: number;
   pausedAt: number;
   duration: number;
+  trackGainDb: number; // Applied gain adjustment
 }
-
-// Scratch envelope definitions (time in beats, rate multiplier)
-const SCRATCH_ENVELOPES: Record<ScratchType, { duration: number; envelope: Array<[number, number]> }> = {
-  baby: { duration: 1, envelope: [[0, 1], [0.25, -0.5], [0.5, 0.5], [0.75, -0.5], [1, 1]] },
-  chirp: { duration: 0.5, envelope: [[0, 0], [0.15, 1.5], [0.35, -1], [0.5, 1]] },
-  transformer: { duration: 1, envelope: [[0, 1], [0.125, 0], [0.25, 1], [0.375, 0], [0.5, 1], [0.625, 0], [0.75, 1], [0.875, 0], [1, 1]] },
-  tear: { duration: 1, envelope: [[0, 0.3], [0.33, 0.6], [0.66, 0.9], [1, 1]] },
-  stab: { duration: 0.25, envelope: [[0, 0], [0.1, 2], [0.25, 1]] },
-};
 
 class AudioEngine {
   private audioContext: AudioContext | null = null;
   private masterGain: GainNode | null = null;
+  private limiterNode: DynamicsCompressorNode | null = null;
   private decks: Record<DeckId, DeckState> = {
     A: this.createEmptyDeck(),
     B: this.createEmptyDeck(),
@@ -38,17 +31,19 @@ class AudioEngine {
   private onTrackEnd: ((deck: DeckId) => void) | null = null;
   private onMixTrigger: (() => void) | null = null;
   private animationFrameId: number | null = null;
-  private scratchTimeout: number | null = null;
   private mixCheckEnabled: boolean = false;
   private mixTriggerMode: 'remaining' | 'elapsed' | 'manual' = 'remaining';
   private mixTriggerSeconds: number = 20;
   private mixTriggered: boolean = false;
+  private limiterEnabled: boolean = true;
+  private limiterStrength: 'light' | 'medium' | 'strong' = 'medium';
 
   private createEmptyDeck(): DeckState {
     return {
       audioBuffer: null,
       sourceNode: null,
       gainNode: null,
+      trackGainNode: null,
       playbackRate: 1,
       baseBpm: 120,
       isPlaying: false,
@@ -56,6 +51,7 @@ class AudioEngine {
       startedAt: 0,
       pausedAt: 0,
       duration: 0,
+      trackGainDb: 0,
     };
   }
 
@@ -63,17 +59,73 @@ class AudioEngine {
     if (this.audioContext) return;
 
     this.audioContext = new AudioContext();
+    
+    // Create master chain: deck gains -> limiter -> master gain -> destination
     this.masterGain = this.audioContext.createGain();
+    this.limiterNode = this.audioContext.createDynamicsCompressor();
+    
+    this.updateLimiter();
+    
+    this.limiterNode.connect(this.masterGain);
     this.masterGain.connect(this.audioContext.destination);
 
     // Create gain nodes for each deck
-    this.decks.A.gainNode = this.audioContext.createGain();
-    this.decks.B.gainNode = this.audioContext.createGain();
-    this.decks.A.gainNode.connect(this.masterGain);
-    this.decks.B.gainNode.connect(this.masterGain);
+    // Chain: source -> trackGainNode (volume match) -> gainNode (crossfade) -> limiter
+    for (const deckId of ['A', 'B'] as DeckId[]) {
+      this.decks[deckId].trackGainNode = this.audioContext.createGain();
+      this.decks[deckId].gainNode = this.audioContext.createGain();
+      this.decks[deckId].trackGainNode!.connect(this.decks[deckId].gainNode!);
+      this.decks[deckId].gainNode!.connect(this.limiterNode);
+    }
 
     this.updateCrossfade();
     this.startTimeUpdateLoop();
+  }
+
+  private updateLimiter(): void {
+    if (!this.limiterNode) return;
+    
+    if (!this.limiterEnabled) {
+      // Bypass limiter
+      this.limiterNode.threshold.value = 0;
+      this.limiterNode.ratio.value = 1;
+      return;
+    }
+    
+    // Configure limiter based on strength
+    switch (this.limiterStrength) {
+      case 'light':
+        this.limiterNode.threshold.value = -3;
+        this.limiterNode.knee.value = 10;
+        this.limiterNode.ratio.value = 4;
+        this.limiterNode.attack.value = 0.003;
+        this.limiterNode.release.value = 0.25;
+        break;
+      case 'medium':
+        this.limiterNode.threshold.value = -6;
+        this.limiterNode.knee.value = 6;
+        this.limiterNode.ratio.value = 8;
+        this.limiterNode.attack.value = 0.002;
+        this.limiterNode.release.value = 0.15;
+        break;
+      case 'strong':
+        this.limiterNode.threshold.value = -10;
+        this.limiterNode.knee.value = 3;
+        this.limiterNode.ratio.value = 20;
+        this.limiterNode.attack.value = 0.001;
+        this.limiterNode.release.value = 0.1;
+        break;
+    }
+  }
+
+  setLimiterEnabled(enabled: boolean): void {
+    this.limiterEnabled = enabled;
+    this.updateLimiter();
+  }
+
+  setLimiterStrength(strength: 'light' | 'medium' | 'strong'): void {
+    this.limiterStrength = strength;
+    this.updateLimiter();
   }
 
   private startTimeUpdateLoop(): void {
@@ -154,7 +206,45 @@ class AudioEngine {
     this.onTrackEnd = callback;
   }
 
-  async loadTrack(deck: DeckId, blob: Blob, bpm?: number): Promise<number> {
+  // Measure loudness of an audio buffer (RMS proxy for LUFS)
+  measureLoudness(audioBuffer: AudioBuffer): number {
+    const channelData = audioBuffer.getChannelData(0);
+    let sumSquares = 0;
+    
+    // Sample every 100th sample for performance
+    const step = 100;
+    let count = 0;
+    
+    for (let i = 0; i < channelData.length; i += step) {
+      sumSquares += channelData[i] * channelData[i];
+      count++;
+    }
+    
+    const rms = Math.sqrt(sumSquares / count);
+    const db = 20 * Math.log10(rms + 0.0001); // Avoid log(0)
+    
+    return db;
+  }
+
+  // Calculate gain to match target loudness
+  calculateGain(measuredDb: number, targetDb: number): number {
+    return targetDb - measuredDb;
+  }
+
+  // Apply per-track gain for volume matching
+  setTrackGain(deck: DeckId, gainDb: number): void {
+    const deckState = this.decks[deck];
+    deckState.trackGainDb = gainDb;
+    
+    if (deckState.trackGainNode) {
+      // Convert dB to linear gain, clamped to reasonable range
+      const clampedDb = Math.max(-12, Math.min(12, gainDb));
+      const linearGain = Math.pow(10, clampedDb / 20);
+      deckState.trackGainNode.gain.value = linearGain;
+    }
+  }
+
+  async loadTrack(deck: DeckId, blob: Blob, bpm?: number, gainDb?: number): Promise<number> {
     await this.initialize();
     
     if (!this.audioContext) throw new Error('Audio context not initialized');
@@ -170,16 +260,37 @@ class AudioEngine {
     this.decks[deck].currentTime = 0;
     this.decks[deck].pausedAt = 0;
     this.decks[deck].baseBpm = bpm || 120;
+    
+    // Apply track gain if provided
+    if (gainDb !== undefined) {
+      this.setTrackGain(deck, gainDb);
+    }
 
     return audioBuffer.duration;
   }
 
   // Load track and set initial offset (start at X seconds)
-  async loadTrackWithOffset(deck: DeckId, blob: Blob, offsetSeconds: number, bpm?: number): Promise<number> {
-    const duration = await this.loadTrack(deck, blob, bpm);
+  async loadTrackWithOffset(deck: DeckId, blob: Blob, offsetSeconds: number, bpm?: number, gainDb?: number): Promise<number> {
+    const duration = await this.loadTrack(deck, blob, bpm, gainDb);
     const clampedOffset = Math.max(0, Math.min(offsetSeconds, duration - 1));
     this.decks[deck].pausedAt = clampedOffset;
     return duration;
+  }
+
+  // Analyze and store loudness for a blob
+  async analyzeLoudness(blob: Blob): Promise<{ loudnessDb: number; gainDb: number }> {
+    await this.initialize();
+    if (!this.audioContext) throw new Error('Audio context not initialized');
+    
+    const arrayBuffer = await blob.arrayBuffer();
+    const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
+    
+    const loudnessDb = this.measureLoudness(audioBuffer);
+    // Target: -14 dB (streaming standard) adjusted by user preference
+    const targetDb = -14;
+    const gainDb = this.calculateGain(loudnessDb, targetDb);
+    
+    return { loudnessDb, gainDb };
   }
 
   getBaseBpm(deck: DeckId): number {
@@ -225,7 +336,7 @@ class AudioEngine {
     const source = this.audioContext.createBufferSource();
     source.buffer = deckState.audioBuffer;
     source.playbackRate.value = deckState.playbackRate;
-    source.connect(deckState.gainNode!);
+    source.connect(deckState.trackGainNode!);
 
     // Calculate start offset
     const offset = deckState.pausedAt;
@@ -367,53 +478,9 @@ class AudioEngine {
     }
   }
 
-  // Quantized scratch effect
-  performScratch(deck: DeckId, type: ScratchType, intensity: number = 0.5): void {
-    if (!this.audioContext || !this.decks[deck].audioBuffer || !this.decks[deck].isPlaying) return;
-    
-    const deckState = this.decks[deck];
-    const bpm = deckState.baseBpm || 120;
-    const beatDuration = 60 / bpm; // seconds per beat
-    const envelope = SCRATCH_ENVELOPES[type];
-    const scratchDuration = envelope.duration * beatDuration * 1000; // ms
-    
-    // Store original playback rate
-    const originalRate = deckState.playbackRate;
-    
-    // Apply scratch envelope
-    let step = 0;
-    const steps = envelope.envelope;
-    
-    const applyStep = () => {
-      if (step >= steps.length - 1) {
-        // Reset to original
-        this.setTempo(deck, originalRate);
-        return;
-      }
-      
-      const [, rateMultiplier] = steps[step];
-      const scaledRate = originalRate * (1 + (rateMultiplier - 1) * intensity);
-      this.setTempo(deck, scaledRate);
-      
-      step++;
-      const nextTime = (steps[step][0] - steps[step - 1][0]) * scratchDuration;
-      this.scratchTimeout = window.setTimeout(applyStep, nextTime);
-    };
-    
-    // Clear any existing scratch
-    if (this.scratchTimeout) {
-      clearTimeout(this.scratchTimeout);
-    }
-    
-    applyStep();
-  }
-
   destroy(): void {
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);
-    }
-    if (this.scratchTimeout) {
-      clearTimeout(this.scratchTimeout);
     }
     this.stop('A');
     this.stop('B');
