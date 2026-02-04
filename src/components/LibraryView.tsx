@@ -1,15 +1,34 @@
-import { Search, Upload, Trash2, Music } from 'lucide-react';
+import { Search, Upload, Music, MoreVertical, ListPlus, Check, Plus, X } from 'lucide-react';
 import { useState, useRef } from 'react';
 import { useDJStore } from '@/stores/djStore';
 import { cn, formatDuration } from '@/lib/utils';
+import { toast } from '@/hooks/use-toast';
 
 export function LibraryView() {
-  const { tracks, isLoadingTracks, importTracks, deleteTrackById, loadTrackToDeck, deckA } = useDJStore();
+  const { 
+    tracks, 
+    isLoadingTracks, 
+    importTracks, 
+    deleteTrackById, 
+    loadTrackToDeck, 
+    deckA,
+    playlists,
+    addTrackToPlaylist,
+    createPlaylist,
+  } = useDJStore();
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeMenuTrackId, setActiveMenuTrackId] = useState<string | null>(null);
+  const [showAddToPlaylist, setShowAddToPlaylist] = useState<string | null>(null);
+  const [newPlaylistName, setNewPlaylistName] = useState('');
+  const [playlistSearchQuery, setPlaylistSearchQuery] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const filteredTracks = tracks.filter(track =>
     track.displayName.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const filteredPlaylists = playlists.filter(p =>
+    p.name.toLowerCase().includes(playlistSearchQuery.toLowerCase())
   );
 
   const handleImport = () => {
@@ -29,6 +48,34 @@ export function LibraryView() {
 
   const handleTrackClick = async (trackId: string) => {
     await loadTrackToDeck(trackId, 'A');
+  };
+
+  const handleAddToPlaylist = async (playlistId: string, trackId: string) => {
+    await addTrackToPlaylist(playlistId, trackId);
+    const playlist = playlists.find(p => p.id === playlistId);
+    toast({
+      title: 'Added to playlist',
+      description: `Track added to "${playlist?.name}"`,
+    });
+    setShowAddToPlaylist(null);
+    setActiveMenuTrackId(null);
+  };
+
+  const handleCreateAndAdd = async (trackId: string) => {
+    if (!newPlaylistName.trim()) return;
+    await createPlaylist(newPlaylistName.trim());
+    // Find the newly created playlist
+    const newPlaylist = useDJStore.getState().playlists.find(p => p.name === newPlaylistName.trim());
+    if (newPlaylist) {
+      await addTrackToPlaylist(newPlaylist.id, trackId);
+      toast({
+        title: 'Created & added',
+        description: `Track added to "${newPlaylistName.trim()}"`,
+      });
+    }
+    setNewPlaylistName('');
+    setShowAddToPlaylist(null);
+    setActiveMenuTrackId(null);
   };
 
   return (
@@ -88,7 +135,7 @@ export function LibraryView() {
               key={track.id}
               onClick={() => handleTrackClick(track.id)}
               className={cn(
-                'track-item group',
+                'track-item group relative',
                 deckA.trackId === track.id && 'playing'
               )}
             >
@@ -122,20 +169,159 @@ export function LibraryView() {
                     <span className="block text-[11px] text-muted-foreground">BPM</span>
                   </div>
                 ) : null}
+                
+                {/* 3-dot menu */}
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    deleteTrackById(track.id);
+                    setActiveMenuTrackId(activeMenuTrackId === track.id ? null : track.id);
                   }}
-                  className="opacity-0 group-hover:opacity-100 p-2 rounded-lg transition-opacity hover:bg-destructive/20"
+                  className="p-2 rounded-lg transition-opacity hover:bg-white/10"
                 >
-                  <Trash2 className="w-4 h-4 text-destructive" />
+                  <MoreVertical className="w-4 h-4 text-muted-foreground" />
                 </button>
               </div>
+
+              {/* Dropdown Menu */}
+              {activeMenuTrackId === track.id && (
+                <div 
+                  className="absolute right-2 top-full mt-1 z-50 glass-card !p-2 min-w-[180px] animate-fade-in"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button
+                    onClick={() => setShowAddToPlaylist(track.id)}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm hover:bg-white/10 transition-colors"
+                  >
+                    <ListPlus className="w-4 h-4" />
+                    Add to Playlist...
+                  </button>
+                  <button
+                    onClick={() => {
+                      deleteTrackById(track.id);
+                      setActiveMenuTrackId(null);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-destructive hover:bg-destructive/10 transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                    Delete
+                  </button>
+                </div>
+              )}
             </div>
           ))
         )}
       </div>
+
+      {/* Add to Playlist Modal */}
+      {showAddToPlaylist && (
+        <div 
+          className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50"
+          onClick={() => {
+            setShowAddToPlaylist(null);
+            setActiveMenuTrackId(null);
+          }}
+        >
+          <div 
+            className="glass-card w-full max-w-sm mx-4 mb-4 sm:mb-0 max-h-[70vh] flex flex-col animate-scale-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold">Add to Playlist</h3>
+              <button
+                onClick={() => {
+                  setShowAddToPlaylist(null);
+                  setActiveMenuTrackId(null);
+                }}
+                className="p-1 rounded-lg hover:bg-white/10"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Search playlists */}
+            <div className="flex items-center gap-2 bg-white/5 rounded-lg px-3 py-2 mb-3">
+              <Search className="w-4 h-4 text-muted-foreground" />
+              <input
+                type="text"
+                placeholder="Search playlists..."
+                value={playlistSearchQuery}
+                onChange={(e) => setPlaylistSearchQuery(e.target.value)}
+                className="flex-1 bg-transparent text-sm outline-none"
+              />
+            </div>
+
+            {/* Playlist list */}
+            <div className="flex-1 overflow-y-auto space-y-1 mb-4">
+              {filteredPlaylists.length === 0 && playlists.length > 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">
+                  No playlists match your search
+                </p>
+              ) : playlists.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">
+                  No playlists yet
+                </p>
+              ) : (
+                filteredPlaylists.map((playlist) => {
+                  const isAlreadyIn = playlist.trackIds.includes(showAddToPlaylist);
+                  return (
+                    <button
+                      key={playlist.id}
+                      onClick={() => !isAlreadyIn && handleAddToPlaylist(playlist.id, showAddToPlaylist)}
+                      disabled={isAlreadyIn}
+                      className={cn(
+                        'w-full flex items-center gap-3 p-3 rounded-lg transition-colors text-left',
+                        isAlreadyIn 
+                          ? 'bg-white/5 opacity-50 cursor-not-allowed' 
+                          : 'hover:bg-white/10'
+                      )}
+                    >
+                      <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary to-secondary flex items-center justify-center">
+                        <Music className="w-5 h-5 text-white/80" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{playlist.name}</p>
+                        <p className="text-xs text-muted-foreground">{playlist.trackIds.length} tracks</p>
+                      </div>
+                      {isAlreadyIn && (
+                        <Check className="w-4 h-4 text-primary" />
+                      )}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Divider */}
+            <div className="border-t border-white/10 pt-4">
+              <p className="text-xs text-muted-foreground mb-2">Or create new playlist</p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="New playlist name..."
+                  value={newPlaylistName}
+                  onChange={(e) => setNewPlaylistName(e.target.value)}
+                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
+                />
+                <button
+                  onClick={() => handleCreateAndAdd(showAddToPlaylist)}
+                  disabled={!newPlaylistName.trim()}
+                  className="btn-primary-gradient px-4 py-2 text-sm disabled:opacity-50"
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Click outside to close menu */}
+      {activeMenuTrackId && !showAddToPlaylist && (
+        <div 
+          className="fixed inset-0 z-40"
+          onClick={() => setActiveMenuTrackId(null)}
+        />
+      )}
     </div>
   );
 }

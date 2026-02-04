@@ -1,10 +1,10 @@
-import { Plus, ListMusic, Trash2, Music } from 'lucide-react';
+import { Plus, ListMusic, Trash2, Music, Play, Edit2 } from 'lucide-react';
 import { useState } from 'react';
 import { useDJStore } from '@/stores/djStore';
-import { cn } from '@/lib/utils';
+import { cn, formatDuration } from '@/lib/utils';
 
 export function PlaylistsView() {
-  const { playlists, tracks, createPlaylist, deletePlaylistById, startPartyMode } = useDJStore();
+  const { playlists, tracks, createPlaylist, deletePlaylistById, startPartyMode, removeTrackFromPlaylist } = useDJStore();
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [selectedPlaylist, setSelectedPlaylist] = useState<string | null>(null);
@@ -20,13 +20,15 @@ export function PlaylistsView() {
   const handlePlayPlaylist = (playlistId: string) => {
     const playlist = playlists.find(p => p.id === playlistId);
     if (playlist && playlist.trackIds.length > 0) {
-      startPartyMode(playlist.trackIds);
+      startPartyMode({ type: 'playlist', playlistId });
     }
   };
 
   const selectedPlaylistData = playlists.find(p => p.id === selectedPlaylist);
   const playlistTracks = selectedPlaylistData
-    ? tracks.filter(t => selectedPlaylistData.trackIds.includes(t.id))
+    ? selectedPlaylistData.trackIds
+        .map(id => tracks.find(t => t.id === id))
+        .filter(Boolean)
     : [];
 
   if (selectedPlaylist && selectedPlaylistData) {
@@ -50,7 +52,7 @@ export function PlaylistsView() {
             onClick={() => handlePlayPlaylist(selectedPlaylist)}
             className="btn-primary-gradient flex items-center justify-center gap-2.5 w-full py-4 text-[15px] mb-5"
           >
-            <ListMusic className="w-5 h-5" />
+            <Play className="w-5 h-5" />
             Play This Set
           </button>
         )}
@@ -62,21 +64,30 @@ export function PlaylistsView() {
               <Music className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
               <h4 className="text-lg font-semibold mb-2">Empty Playlist</h4>
               <p className="text-sm text-muted-foreground">
-                Add tracks from your Library
+                Add tracks from your Library using the ⋯ menu
               </p>
             </div>
           ) : (
-            playlistTracks.map((track) => (
-              <div key={track.id} className="track-item">
+            playlistTracks.map((track, index) => (
+              <div key={track!.id} className="track-item group">
+                <span className="text-xs text-muted-foreground w-6">{index + 1}</span>
                 <div className="album-art w-12 h-12 !rounded-lg flex-shrink-0">
                   <Music className="w-5 h-5 text-white/60" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h5 className="text-sm font-medium truncate">{track.displayName}</h5>
-                  <p className="text-xs text-muted-foreground">
-                    {track.bpm ? `${Math.round(track.bpm)} BPM` : 'No BPM'}
+                  <h5 className="text-sm font-medium truncate">{track!.displayName}</h5>
+                  <p className="text-xs text-muted-foreground flex items-center gap-2">
+                    {track!.bpm ? `${Math.round(track!.bpm)} BPM` : 'No BPM'}
+                    <span>•</span>
+                    <span>{formatDuration(track!.duration)}</span>
                   </p>
                 </div>
+                <button
+                  onClick={() => removeTrackFromPlaylist(selectedPlaylist, track!.id)}
+                  className="opacity-0 group-hover:opacity-100 p-2 rounded-lg transition-opacity hover:bg-destructive/20"
+                >
+                  <Trash2 className="w-4 h-4 text-destructive" />
+                </button>
               </div>
             ))
           )}
@@ -108,11 +119,13 @@ export function PlaylistsView() {
         {playlists.map((playlist) => (
           <div
             key={playlist.id}
-            onClick={() => setSelectedPlaylist(playlist.id)}
             className="playlist-card group relative"
           >
             {/* Cover Art Grid */}
-            <div className="aspect-square rounded-xl mb-2.5 grid grid-cols-2 grid-rows-2 gap-0.5 overflow-hidden">
+            <div 
+              onClick={() => setSelectedPlaylist(playlist.id)}
+              className="aspect-square rounded-xl mb-2.5 grid grid-cols-2 grid-rows-2 gap-0.5 overflow-hidden cursor-pointer"
+            >
               <div className="bg-gradient-to-br from-primary to-secondary" />
               <div className="bg-gradient-to-br from-secondary to-accent" />
               <div className="bg-gradient-to-br from-accent to-primary" />
@@ -124,16 +137,41 @@ export function PlaylistsView() {
               {playlist.trackIds.length} tracks
             </p>
 
-            {/* Delete Button */}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                deletePlaylistById(playlist.id);
-              }}
-              className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 p-2 rounded-lg bg-background/80 transition-opacity hover:bg-destructive/20"
-            >
-              <Trash2 className="w-4 h-4 text-destructive" />
-            </button>
+            {/* Actions */}
+            <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              {playlist.trackIds.length > 0 && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handlePlayPlaylist(playlist.id);
+                  }}
+                  className="p-2 rounded-lg bg-primary/80 hover:bg-primary transition-colors"
+                  title="Play"
+                >
+                  <Play className="w-4 h-4 text-white" />
+                </button>
+              )}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedPlaylist(playlist.id);
+                }}
+                className="p-2 rounded-lg bg-background/80 hover:bg-white/20 transition-colors"
+                title="Edit"
+              >
+                <Edit2 className="w-4 h-4" />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deletePlaylistById(playlist.id);
+                }}
+                className="p-2 rounded-lg bg-background/80 hover:bg-destructive/20 transition-colors"
+                title="Delete"
+              >
+                <Trash2 className="w-4 h-4 text-destructive" />
+              </button>
+            </div>
           </div>
         ))}
       </div>

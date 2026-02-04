@@ -11,6 +11,9 @@ export interface Track {
   analysisStatus: 'pending' | 'analyzing' | 'ready' | 'basic';
   fileBlob?: Blob;
   addedAt: number;
+  // Auto volume matching
+  loudnessDb?: number; // Measured loudness in dB (RMS proxy)
+  gainDb?: number; // Calculated gain to apply
 }
 
 export interface Playlist {
@@ -19,6 +22,11 @@ export interface Playlist {
   trackIds: string[];
   createdAt: number;
   updatedAt: number;
+}
+
+export interface PartySource {
+  type: 'import' | 'playlist';
+  playlistId?: string;
 }
 
 export interface Settings {
@@ -33,9 +41,13 @@ export interface Settings {
   // Tempo controls
   tempoMode: 'auto' | 'locked';
   lockedBpm: number;
-  // Scratch settings
-  scratchQuantize: '1/4' | '1/2' | '1';
-  scratchIntensity: number; // 0-1
+  // Volume matching
+  autoVolumeMatch: boolean;
+  targetLoudness: number; // 0-1 scale (quiet to club)
+  limiterEnabled: boolean;
+  limiterStrength: 'light' | 'medium' | 'strong';
+  // Party mode
+  loopPlaylist: boolean;
 }
 
 interface MeJayDB extends DBSchema {
@@ -60,19 +72,25 @@ let dbInstance: IDBPDatabase<MeJayDB> | null = null;
 export async function getDB(): Promise<IDBPDatabase<MeJayDB>> {
   if (dbInstance) return dbInstance;
 
-  dbInstance = await openDB<MeJayDB>('me-jay-db', 1, {
-    upgrade(db) {
+  dbInstance = await openDB<MeJayDB>('me-jay-db', 2, {
+    upgrade(db, oldVersion) {
       // Tracks store
-      const trackStore = db.createObjectStore('tracks', { keyPath: 'id' });
-      trackStore.createIndex('by-name', 'displayName');
-      trackStore.createIndex('by-bpm', 'bpm');
+      if (!db.objectStoreNames.contains('tracks')) {
+        const trackStore = db.createObjectStore('tracks', { keyPath: 'id' });
+        trackStore.createIndex('by-name', 'displayName');
+        trackStore.createIndex('by-bpm', 'bpm');
+      }
 
       // Playlists store
-      const playlistStore = db.createObjectStore('playlists', { keyPath: 'id' });
-      playlistStore.createIndex('by-name', 'name');
+      if (!db.objectStoreNames.contains('playlists')) {
+        const playlistStore = db.createObjectStore('playlists', { keyPath: 'id' });
+        playlistStore.createIndex('by-name', 'name');
+      }
 
       // Settings store
-      db.createObjectStore('settings', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('settings')) {
+        db.createObjectStore('settings', { keyPath: 'id' });
+      }
     },
   });
 
@@ -151,8 +169,11 @@ export async function getSettings(): Promise<Settings> {
     mixTriggerSeconds: 20,
     tempoMode: 'auto',
     lockedBpm: 128,
-    scratchQuantize: '1/4',
-    scratchIntensity: 0.5,
+    autoVolumeMatch: true,
+    targetLoudness: 0.7,
+    limiterEnabled: true,
+    limiterStrength: 'medium',
+    loopPlaylist: true,
   };
 }
 

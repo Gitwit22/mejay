@@ -1,4 +1,4 @@
-import { Play, Pause, SkipForward, Music, Shuffle } from 'lucide-react';
+import { Play, Pause, SkipForward, Music, Shuffle, Repeat } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useDJStore } from '@/stores/djStore';
 import { cn } from '@/lib/utils';
@@ -11,9 +11,9 @@ export function NowPlaying() {
     deckB,
     activeDeck,
     isPartyMode,
-    queue,
+    partyTrackIds,
+    nowPlayingIndex,
     settings,
-    startPartyMode,
     togglePlayPause,
     skip,
     updateUserSettings,
@@ -21,17 +21,17 @@ export function NowPlaying() {
 
   const currentDeck = activeDeck === 'A' ? deckA : deckB;
   const currentTrack = tracks.find(t => t.id === currentDeck.trackId);
-  const nextTrack = queue[0] ? tracks.find(t => t.id === queue[0]) : null;
+  
+  // Get next track from party list
+  const nextIndex = nowPlayingIndex + 1;
+  const nextTrackId = nextIndex < partyTrackIds.length ? partyTrackIds[nextIndex] : null;
+  const nextTrack = nextTrackId ? tracks.find(t => t.id === nextTrackId) : null;
+  
+  const hasMoreTracks = nowPlayingIndex < partyTrackIds.length - 1 || settings.loopPlaylist;
 
   const progress = currentDeck.duration > 0 
     ? (currentDeck.currentTime / currentDeck.duration) * 100 
     : 0;
-
-  const handleStartParty = () => {
-    if (tracks.length > 0) {
-      startPartyMode();
-    }
-  };
 
   return (
     <div className="glass-card">
@@ -69,7 +69,9 @@ export function NowPlaying() {
           {currentTrack?.displayName || 'No Track Selected'}
         </h3>
         <p className="text-xs text-muted-foreground">
-          {isPartyMode ? 'Party Mode Active' : 'Press Play to Start'}
+          {isPartyMode 
+            ? `${nowPlayingIndex + 1} of ${partyTrackIds.length}`
+            : 'Press Play to Start'}
         </p>
       </div>
 
@@ -119,14 +121,14 @@ export function NowPlaying() {
             'ctrl-btn ctrl-secondary',
             settings.shuffleEnabled && 'ring-2 ring-primary'
           )}
+          title={settings.shuffleEnabled ? 'Shuffle On' : 'Shuffle Off'}
         >
           <Shuffle className="w-4 h-4" />
         </button>
 
         <button
-          onClick={isPartyMode ? () => togglePlayPause() : handleStartParty}
+          onClick={() => togglePlayPause()}
           className="ctrl-btn ctrl-primary"
-          disabled={tracks.length === 0}
         >
           {currentDeck.isPlaying ? (
             <Pause className="w-6 h-6" />
@@ -138,9 +140,21 @@ export function NowPlaying() {
         <button
           onClick={skip}
           className="ctrl-btn ctrl-secondary"
-          disabled={!isPartyMode || queue.length === 0}
+          disabled={!hasMoreTracks}
+          title="Skip"
         >
           <SkipForward className="w-4 h-4" />
+        </button>
+        
+        <button
+          onClick={() => updateUserSettings({ loopPlaylist: !settings.loopPlaylist })}
+          className={cn(
+            'ctrl-btn ctrl-secondary',
+            settings.loopPlaylist && 'ring-2 ring-accent'
+          )}
+          title={settings.loopPlaylist ? 'Loop On' : 'Loop Off'}
+        >
+          <Repeat className="w-4 h-4" />
         </button>
       </div>
 
