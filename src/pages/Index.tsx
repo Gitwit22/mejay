@@ -6,6 +6,8 @@ import { PlaylistsView } from '@/components/PlaylistsView';
 import { useDJStore } from '@/stores/djStore';
 import logo from '@/assets/me-jay-logo.png';
 import { useSearchParams } from 'react-router-dom';
+import { DevPlanSwitcher } from '@/components/DevPlanSwitcher';
+import { UpgradeModal } from '@/components/UpgradeModal';
 
 type TabId = 'library' | 'party' | 'playlists';
 
@@ -30,6 +32,12 @@ const Index = () => {
 
   return (
     <div className="min-h-screen min-h-[100dvh] relative overflow-hidden">
+      {/* Dev Plan Switcher */}
+      <DevPlanSwitcher />
+
+      {/* Upgrade Modal */}
+      <UpgradeModal />
+
       {/* Background Orbs */}
       <div className="orb orb-primary w-[250px] h-[250px] opacity-50 -top-20 -right-20" />
       <div className="orb orb-secondary w-[200px] h-[200px] opacity-50 bottom-[180px] -left-[100px]" />
