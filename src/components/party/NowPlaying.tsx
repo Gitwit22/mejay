@@ -1,9 +1,10 @@
-import { Play, Pause, SkipForward, Music, Shuffle, Repeat, Volume2 } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Music, Shuffle, Repeat, Volume2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useDJStore } from '@/stores/djStore';
 import { cn } from '@/lib/utils';
 import { formatDuration } from '@/lib/utils';
 import { Slider } from '@/components/ui/slider';
+import React from 'react';
 
 export function NowPlaying() {
   const {
@@ -16,6 +17,8 @@ export function NowPlaying() {
     nowPlayingIndex,
     settings,
     togglePlayPause,
+    smartBack,
+    restartCurrentTrack,
     skip,
     updateUserSettings,
     setMasterVolume,
@@ -35,12 +38,41 @@ export function NowPlaying() {
     ? (currentDeck.currentTime / currentDeck.duration) * 100 
     : 0;
 
+  const startAt = currentTrack
+    ? Math.max(0, Math.min(settings.nextSongStartOffset ?? 0, Math.max(0, currentTrack.duration - 0.25)))
+    : 0;
+  const startPct = currentDeck.duration > 0 ? (startAt / currentDeck.duration) * 100 : 0;
+
+  const backPressTimerRef = React.useRef<number | null>(null);
+  const backLongPressFiredRef = React.useRef(false);
+  const clearBackTimer = () => {
+    if (backPressTimerRef.current !== null) {
+      window.clearTimeout(backPressTimerRef.current);
+      backPressTimerRef.current = null;
+    }
+  };
+
+  const onBackPointerDown = () => {
+    backLongPressFiredRef.current = false;
+    clearBackTimer();
+    backPressTimerRef.current = window.setTimeout(() => {
+      backLongPressFiredRef.current = true;
+      restartCurrentTrack();
+    }, 450);
+  };
+
+  const onBackPointerUp = () => {
+    const wasLongPress = backLongPressFiredRef.current;
+    clearBackTimer();
+    if (!wasLongPress) smartBack();
+  };
+
   return (
     <div className="glass-card">
       {/* Album Art with Vinyl Effect */}
       <motion.div
         className={cn(
-          'album-art album-art-glow w-[160px] h-[160px] mx-auto mb-4',
+          'album-art album-art-glow w-[120px] h-[120px] sm:w-[160px] sm:h-[160px] mx-auto mb-3 sm:mb-4',
           currentDeck.isPlaying && 'vinyl-spin'
         )}
         animate={currentDeck.isPlaying ? { rotate: 360 } : { rotate: 0 }}
@@ -66,7 +98,7 @@ export function NowPlaying() {
       </motion.div>
 
       {/* Track Info */}
-      <div className="text-center mb-3">
+      <div className="text-center mb-2 sm:mb-3">
         <h3 className="text-lg font-semibold mb-0.5 truncate">
           {currentTrack?.displayName || 'No Track Selected'}
         </h3>
@@ -102,8 +134,21 @@ export function NowPlaying() {
       )}
 
       {/* Progress Bar */}
-      <div className="mb-4">
+      <div className="mb-3 sm:mb-4">
         <div className="slider-track">
+          {startAt > 0.01 && (
+            <>
+              <div
+                className="start-trim-shade"
+                style={{ width: `${Math.max(0, Math.min(100, startPct))}%` }}
+              />
+              <div
+                className="start-trim-tick"
+                style={{ left: `${Math.max(0, Math.min(100, startPct))}%` }}
+                aria-hidden="true"
+              />
+            </>
+          )}
           <div 
             className="slider-fill transition-all duration-200"
             style={{ width: `${progress}%` }}
@@ -113,10 +158,28 @@ export function NowPlaying() {
           <span>{formatDuration(currentDeck.currentTime)}</span>
           <span>-{formatDuration(currentDeck.duration - currentDeck.currentTime)}</span>
         </div>
+        {startAt > 0.01 && (
+          <div className="mt-1 text-[10px] text-muted-foreground">
+            Start: {formatDuration(startAt)}
+          </div>
+        )}
       </div>
 
       {/* Controls */}
       <div className="flex justify-center items-center gap-4">
+        <button
+          onPointerDown={onBackPointerDown}
+          onPointerUp={onBackPointerUp}
+          onPointerCancel={clearBackTimer}
+          onPointerLeave={clearBackTimer}
+          onContextMenu={(e) => e.preventDefault()}
+          className="ctrl-btn ctrl-secondary"
+          title="Back (tap) / Restart (hold)"
+          type="button"
+        >
+          <SkipBack className="w-4 h-4" />
+        </button>
+
         <button
           onClick={() => updateUserSettings({ shuffleEnabled: !settings.shuffleEnabled })}
           className={cn(
@@ -124,6 +187,7 @@ export function NowPlaying() {
             settings.shuffleEnabled && 'ring-2 ring-primary'
           )}
           title={settings.shuffleEnabled ? 'Shuffle On' : 'Shuffle Off'}
+          type="button"
         >
           <Shuffle className="w-4 h-4" />
         </button>
@@ -131,6 +195,7 @@ export function NowPlaying() {
         <button
           onClick={() => togglePlayPause()}
           className="ctrl-btn ctrl-primary"
+          type="button"
         >
           {currentDeck.isPlaying ? (
             <Pause className="w-6 h-6" />
@@ -144,6 +209,7 @@ export function NowPlaying() {
           className="ctrl-btn ctrl-secondary"
           disabled={!hasMoreTracks}
           title="Skip"
+          type="button"
         >
           <SkipForward className="w-4 h-4" />
         </button>
@@ -155,13 +221,14 @@ export function NowPlaying() {
             settings.loopPlaylist && 'ring-2 ring-accent'
           )}
           title={settings.loopPlaylist ? 'Loop On' : 'Loop Off'}
+          type="button"
         >
           <Repeat className="w-4 h-4" />
         </button>
       </div>
 
       {/* Master Volume */}
-      <div className="mt-4 px-2">
+      <div className="mt-3 sm:mt-4 px-2">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
             <Volume2 className="w-4 h-4 text-muted-foreground" />
@@ -183,7 +250,7 @@ export function NowPlaying() {
 
       {/* Next Up Preview */}
       {nextTrack && (
-        <div className="mt-4 flex items-center gap-2 p-2.5 rounded-lg bg-white/5">
+        <div className="hidden sm:flex mt-4 items-center gap-2 p-2.5 rounded-lg bg-white/5">
           <div className="album-art w-8 h-8 !rounded-md">
             <Music className="w-3 h-3 text-white/60" />
           </div>

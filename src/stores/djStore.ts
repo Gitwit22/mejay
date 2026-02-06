@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { createJSONStorage, persist } from 'zustand/middleware';
 import { Track, Settings, getAllTracks, getSettings, addTrack, updateTrack, deleteTrack, updateSettings, generateId, getAllPlaylists, Playlist, addPlaylist, updatePlaylist, deletePlaylist, PartySource, resetLocalDatabase } from '@/lib/db';
 import { audioEngine, DeckId } from '@/lib/audioEngine';
 import { analyzeBPM } from '@/lib/bpmDetector';
@@ -61,6 +62,9 @@ interface DJState {
   pause: (deck?: DeckId) => void;
   togglePlayPause: (deck?: DeckId) => void;
   seek: (deck: DeckId, time: number) => void;
+  restartCurrentTrack: (deck?: DeckId) => void;
+  smartBack: (deck?: DeckId) => void;
+  playPreviousTrack: (deck?: DeckId) => Promise<void>;
   skip: (reason?: 'user' | 'auto' | 'end' | 'switch') => void;
   
   // Party mode
@@ -112,7 +116,27 @@ const initialDeckState: DeckState = {
   playbackRate: 1,
 };
 
-export const useDJStore = create<DJState>((set, get) => {
+const getDjSessionStorage = () => {
+  try {
+    return sessionStorage;
+  } catch {
+    return undefined;
+  }
+};
+
+const djStoreNoopStorage = {
+  getItem: (_name: string) => null,
+  setItem: (_name: string, _value: string) => {
+    // noop
+  },
+  removeItem: (_name: string) => {
+    // noop
+  },
+};
+
+export const useDJStore = create<DJState>()(
+  persist(
+    (set, get) => {
   let scheduledTimeouts: number[] = [];
   let masterVolumeSaveTimeout: number | null = null;
 
@@ -129,6 +153,24 @@ export const useDJStore = create<DJState>((set, get) => {
 
   const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
+  const getEffectiveStartTimeSec = (track: Track | undefined, settings: Settings | undefined) => {
+    const base = (settings?.nextSongStartOffset ?? 0);
+    const duration = track?.duration;
+    if (!duration || !Number.isFinite(duration)) return Math.max(0, base);
+    return clamp(base, 0, Math.max(0, duration - 0.25));
+  };
+
+  const getDeckState = (state: DJState, deck: DeckId) => (deck === 'A' ? state.deckA : state.deckB);
+
+  const getDeckTrack = (state: DJState, deck: DeckId) => {
+    const deckState = getDeckState(state, deck);
+    return deckState.trackId ? state.tracks.find(t => t.id === deckState.trackId) : undefined;
+  };
+
+  const getDeckCurrentTime = (state: DJState, deck: DeckId) => {
+    return audioEngine.getCurrentTime(deck) || getDeckState(state, deck).currentTime || 0;
+  };
+
   const defaultSettings: Settings = {
     crossfadeSeconds: 8,
     maxTempoPercent: 6,
@@ -141,6 +183,8 @@ export const useDJStore = create<DJState>((set, get) => {
     mixTriggerSeconds: 20,
     tempoMode: 'auto',
     lockedBpm: 128,
+    autoBaseBpm: null,
+    autoOffsetBpm: 0,
     autoVolumeMatch: true,
     targetLoudness: 0.7,
     limiterEnabled: true,
@@ -193,55 +237,14 @@ export const useDJStore = create<DJState>((set, get) => {
     return clamp(biased, energy.crossfadeSecMin, energy.crossfadeSecMax);
   };
 
-  const normalizeBpmNear = (bpm: number, anchorBpm: number) => {
-    const candidates = [bpm / 2, bpm, bpm * 2].filter(v => Number.isFinite(v) && v > 0);
-    if (candidates.length === 0) return bpm;
-    return candidates.reduce((best, candidate) => {
-      return Math.abs(candidate - anchorBpm) < Math.abs(best - anchorBpm) ? candidate : best;
-    }, candidates[0]);
-  };
-
-  const computeAutoBlendBpm = (settings: Settings, currentBpm: number, nextBpm: number) => {
-    const safeCurrent = Math.max(1, currentBpm || 120);
-    const safeNext = Math.max(1, nextBpm || 120);
-
-    // Half/double normalize so 70 ↔ 140 doesn't cause silly stretches.
-    const normalizedNext = normalizeBpmNear(safeNext, safeCurrent);
-
-    // Bias toward the current track (don't warp what's playing too aggressively).
-    const biasToCurrent = settings.energyMode === 'hype' ? 0.6 : settings.energyMode === 'chill' ? 0.8 : 0.7;
-    let target = safeCurrent * biasToCurrent + normalizedNext * (1 - biasToCurrent);
-
-    // Clamp to what both tracks can reasonably stretch to given maxTempoPercent.
-    const maxPct = clamp(settings.maxTempoPercent ?? 6, 0, 30) / 100;
-    const currentMin = safeCurrent * (1 - maxPct);
-    const currentMax = safeCurrent * (1 + maxPct);
-    const nextMin = normalizedNext * (1 - maxPct);
-    const nextMax = normalizedNext * (1 + maxPct);
-
-    const intersectionMin = Math.max(currentMin, nextMin);
-    const intersectionMax = Math.min(currentMax, nextMax);
-
-    if (intersectionMin <= intersectionMax) {
-      target = clamp(target, intersectionMin, intersectionMax);
-    } else {
-      // If there's no overlap, prefer smallest change from current.
-      target = clamp(target, currentMin, currentMax);
-    }
-
-    return target;
-  };
-
-  const computeTargetBpm = (settings: Settings, currentTrackBpm?: number, nextTrackBpm?: number) => {
+  const computeTargetBpm = (settings: Settings) => {
     if (settings.tempoMode === 'locked') return settings.lockedBpm;
-
-    const current = currentTrackBpm || 120;
-    // Auto Match is a two-track negotiation. If next isn't known yet, don't invent a master BPM.
-    if (settings.tempoMode === 'auto' && nextTrackBpm) {
-      return computeAutoBlendBpm(settings, current, nextTrackBpm);
+    if (settings.tempoMode === 'auto') {
+      if (settings.autoBaseBpm === null || !Number.isFinite(settings.autoBaseBpm)) return null;
+      const offset = Number.isFinite(settings.autoOffsetBpm) ? settings.autoOffsetBpm : 0;
+      return settings.autoBaseBpm + offset;
     }
-
-    return current;
+    return null;
   };
 
   const computeAutoMixTriggerSecondsTrack = (state: DJState) => {
@@ -261,7 +264,11 @@ export const useDJStore = create<DJState>((set, get) => {
     const effectiveCrossfadeSeconds = getEffectiveCrossfadeSeconds(state.settings.crossfadeSeconds ?? 8, state.settings.energyMode);
     const energy = getEnergyProfile(state.settings.energyMode);
 
-    const targetBpm = computeTargetBpm(state.settings, outgoingTrack?.bpm, nextTrackBpm);
+    const outgoingRate = Math.max(0.25, audioEngine.getTempo(outgoingDeck) || 1);
+
+    const targetBpm = computeTargetBpm(state.settings)
+      ?? ((outgoingTrack?.bpm ?? audioEngine.getBaseBpm(outgoingDeck) ?? 120) * outgoingRate);
+
     const beatSec = 60 / Math.max(1, targetBpm);
     const barSec = beatSec * 4;
 
@@ -279,22 +286,17 @@ export const useDJStore = create<DJState>((set, get) => {
 
     const desiredRealSeconds = endEarlySeconds + effectiveCrossfadeSeconds + rampSec + settleSec + quantWindowSec + twoStepExtraSec;
     // Convert from real seconds to track-time seconds for the engine's "remaining" trigger.
-    // Use engine tempo (more reliable than store state when ramps/automation are involved).
-    const outgoingRate = Math.max(0.25, audioEngine.getTempo(outgoingDeck) || 1);
     // Engine trigger compares against *track-time* remaining; convert from real seconds.
     return desiredRealSeconds * outgoingRate;
   };
 
   const applyImmediateTempoToActiveDeck = (state: DJState) => {
-    // Auto Match should not change what you hear immediately.
-    if (state.settings.tempoMode === 'auto') return;
-
     const deck = state.activeDeck;
     const deckState = deck === 'A' ? state.deckA : state.deckB;
     if (!deckState.trackId) return;
 
-    const track = state.tracks.find(t => t.id === deckState.trackId);
-    const targetBpm = computeTargetBpm(state.settings, track?.bpm);
+    const targetBpm = computeTargetBpm(state.settings);
+    if (targetBpm === null) return;
     const ratio = audioEngine.calculateTempoRatio(deck, targetBpm, state.settings.maxTempoPercent);
     get().setTempo(deck, ratio);
   };
@@ -418,7 +420,7 @@ export const useDJStore = create<DJState>((set, get) => {
       }
 
       try {
-        localStorage.removeItem('mejay:lastTab');
+        sessionStorage.removeItem('mejay:lastTab');
       } catch {
         // ignore
       }
@@ -678,6 +680,122 @@ export const useDJStore = create<DJState>((set, get) => {
       }
     },
 
+    restartCurrentTrack: (deck?: DeckId) => {
+      const state = get();
+      const targetDeck = deck || state.activeDeck;
+      const track = getDeckTrack(state, targetDeck);
+      if (!track) return;
+
+      const startAt = getEffectiveStartTimeSec(track, state.settings);
+      audioEngine.seek(targetDeck, startAt);
+
+      if (targetDeck === 'A') {
+        set(s => ({ deckA: { ...s.deckA, currentTime: startAt } }));
+      } else {
+        set(s => ({ deckB: { ...s.deckB, currentTime: startAt } }));
+      }
+
+      toast({
+        title: 'Restarted',
+        description: `Start: ${Math.floor(startAt / 60)}:${Math.floor(startAt % 60).toString().padStart(2, '0')}`,
+      });
+    },
+
+    playPreviousTrack: async (deck?: DeckId) => {
+      const state = get();
+      const targetDeck = deck || state.activeDeck;
+
+      if (!state.isPartyMode || state.partyTrackIds.length === 0) {
+        // Non-party mode: no queue context, so just restart.
+        get().restartCurrentTrack(targetDeck);
+        return;
+      }
+
+      if (state.nowPlayingIndex === 0 && !state.settings.loopPlaylist) {
+        get().restartCurrentTrack(targetDeck);
+        return;
+      }
+
+      const previousIndex = state.nowPlayingIndex > 0
+        ? state.nowPlayingIndex - 1
+        : (state.settings.loopPlaylist ? state.partyTrackIds.length - 1 : 0);
+
+      const previousTrackId = state.partyTrackIds[previousIndex];
+      const previousTrack = state.tracks.find(t => t.id === previousTrackId);
+      if (!previousTrack?.fileBlob) return;
+
+      clearScheduledTimeouts();
+
+      // Cancel any ongoing mix abruptly (predictable control behavior).
+      if (state.mixInProgress) {
+        set({ mixInProgress: false });
+        try {
+          audioEngine.stop('A');
+          audioEngine.stop('B');
+        } catch {
+          // ignore
+        }
+
+        set(s => ({
+          deckA: { ...s.deckA, isPlaying: false },
+          deckB: { ...s.deckB, isPlaying: false },
+        }));
+      }
+
+      const currentDeckState = getDeckState(state, targetDeck);
+      const wasPlaying = audioEngine.isPlaying(targetDeck) || currentDeckState.isPlaying;
+      const preservedTempo = Math.max(0.25, audioEngine.getTempo(targetDeck) || currentDeckState.playbackRate || 1);
+      const gainDb = state.settings.autoVolumeMatch ? previousTrack.gainDb : undefined;
+
+      const startAt = getEffectiveStartTimeSec(previousTrack, state.settings);
+      const duration = await audioEngine.loadTrackWithOffset(targetDeck, previousTrack.fileBlob, startAt, previousTrack.bpm, gainDb);
+      if (previousTrack.bpm) audioEngine.setBaseBpm(targetDeck, previousTrack.bpm);
+      audioEngine.setTempo(targetDeck, preservedTempo);
+
+      if (targetDeck === 'A') {
+        set({ deckA: { ...initialDeckState, trackId: previousTrackId, duration, currentTime: startAt, playbackRate: preservedTempo } });
+      } else {
+        set({ deckB: { ...initialDeckState, trackId: previousTrackId, duration, currentTime: startAt, playbackRate: preservedTempo } });
+      }
+
+      set({
+        activeDeck: targetDeck,
+        nowPlayingIndex: previousIndex,
+        pendingNextIndex: null,
+        crossfadeValue: targetDeck === 'A' ? 0 : 1,
+      });
+      audioEngine.setCrossfade(targetDeck === 'A' ? 0 : 1);
+
+      if (wasPlaying) {
+        audioEngine.play(targetDeck);
+        if (targetDeck === 'A') set(s => ({ deckA: { ...s.deckA, isPlaying: true } }));
+        else set(s => ({ deckB: { ...s.deckB, isPlaying: true } }));
+      }
+
+      // Keep automix trigger aligned with the new outgoing track.
+      const after = get();
+      const triggerSecondsTrack = computeAutoMixTriggerSecondsTrack(after);
+      audioEngine.setMixTriggerConfig('remaining', triggerSecondsTrack);
+      audioEngine.enableMixCheck(after.settings.mixTriggerMode !== 'manual');
+      audioEngine.resetMixTrigger();
+
+      toast({ title: 'Previous Track' });
+    },
+
+    smartBack: (deck?: DeckId) => {
+      const state = get();
+      const targetDeck = deck || state.activeDeck;
+      const currentTime = getDeckCurrentTime(state, targetDeck);
+      const threshold = 2.5;
+
+      if (currentTime > threshold) {
+        get().restartCurrentTrack(targetDeck);
+        return;
+      }
+
+      void get().playPreviousTrack(targetDeck);
+    },
+
     skip: (reason: 'user' | 'auto' | 'end' | 'switch' = 'user') => {
       const state = get();
       const { partyTrackIds, nowPlayingIndex, pendingNextIndex, settings, activeDeck, tracks } = state;
@@ -730,7 +848,7 @@ export const useDJStore = create<DJState>((set, get) => {
       if (!nextTrack?.fileBlob) return;
 
       // Calculate target BPM
-      const targetBpm = computeTargetBpm(settings, currentTrack?.bpm, nextTrack?.bpm);
+      const targetBpm = computeTargetBpm(settings) ?? (currentTrack?.bpm || 120);
 
       // Get track gain for volume matching
       const gainDb = settings.autoVolumeMatch ? nextTrack.gainDb : undefined;
@@ -789,20 +907,6 @@ export const useDJStore = create<DJState>((set, get) => {
         const fadeCandidate = incomingStartAt + preRollSec;
         const quantFade = audioEngine.getNextBeatTimeFrom(currentDeck, fadeCandidate, energy.fadeQuantBeats) ?? fadeCandidate;
         fadeAt = Math.min(quantFade, safeLatestCrossfadeStart);
-      }
-
-      // Auto Match: ramp the outgoing deck toward the blend BPM before the crossfade.
-      if (settings.tempoMode === 'auto' && currentTrack?.bpm && nextTrack?.bpm) {
-        const currentRateNow = Math.max(0.25, audioEngine.getTempo(currentDeck) || currentDeckState.playbackRate || 1);
-        const outgoingTargetRatio = audioEngine.calculateTempoRatio(currentDeck, targetBpm, settings.maxTempoPercent);
-        const delta = Math.abs(outgoingTargetRatio - currentRateNow);
-
-        // Avoid tiny adjustments.
-        if (delta > 0.002) {
-          const rampStart = Math.max(ctxNow + 0.05, fadeAt - 8);
-          const rampDurationMs = Math.max(600, Math.min(8000, (fadeAt - rampStart) * 1000));
-          audioEngine.rampTempo(currentDeck, outgoingTargetRatio, rampStart, rampDurationMs);
-        }
       }
 
       set({ mixInProgress: true });
@@ -929,10 +1033,28 @@ export const useDJStore = create<DJState>((set, get) => {
       // Apply Start Offset to the first track in Party Mode as well.
       const startOffsetSeconds = clamp(get().settings.nextSongStartOffset ?? 0, 0, 120);
       await get().loadTrackToDeck(firstTrackId, 'A', startOffsetSeconds);
+
+      // If Auto Match is enabled but has no baseline yet (fresh installs / old settings),
+      // capture it from what's currently playing (relative lock starting at 0).
+      if (state.settings.tempoMode === 'auto' && state.settings.autoBaseBpm === null) {
+        const baseBpm = firstTrack?.bpm ?? audioEngine.getBaseBpm('A') ?? 120;
+        const rate = Math.max(0.25, audioEngine.getTempo('A') || 1);
+        const effectiveBpm = baseBpm * rate;
+        await updateSettings({ autoBaseBpm: effectiveBpm, autoOffsetBpm: 0 });
+        set(s => ({ settings: { ...s.settings, autoBaseBpm: effectiveBpm, autoOffsetBpm: 0 } }));
+      }
       
       // Apply locked tempo if set
       if (state.settings.tempoMode === 'locked' && firstTrack?.bpm) {
         const ratio = audioEngine.calculateTempoRatio('A', state.settings.lockedBpm, state.settings.maxTempoPercent);
+        audioEngine.setTempo('A', ratio);
+      }
+
+      // Apply Auto Match tempo if baseline exists (or was just captured).
+      const afterBaseline = get().settings;
+      const autoTarget = computeTargetBpm(afterBaseline);
+      if (afterBaseline.tempoMode === 'auto' && autoTarget !== null) {
+        const ratio = audioEngine.calculateTempoRatio('A', autoTarget, afterBaseline.maxTempoPercent);
         audioEngine.setTempo('A', ratio);
       }
       
@@ -1144,6 +1266,23 @@ export const useDJStore = create<DJState>((set, get) => {
     },
 
     updateUserSettings: async (updates: Partial<Settings>) => {
+      const before = get();
+
+      // When enabling Auto Match, capture a baseline from the currently playing deck
+      // including any tempo stretch already applied, then set slider offset to 0.
+      if (updates.tempoMode === 'auto' && before.settings.tempoMode !== 'auto') {
+        const deck = before.activeDeck;
+        const deckState = deck === 'A' ? before.deckA : before.deckB;
+        const track = deckState.trackId ? before.tracks.find(t => t.id === deckState.trackId) : undefined;
+
+        const baseBpm = track?.bpm ?? audioEngine.getBaseBpm(deck) ?? 120;
+        const rate = Math.max(0.25, audioEngine.getTempo(deck) || deckState.playbackRate || 1);
+        const effectiveBpm = baseBpm * rate;
+
+        updates.autoBaseBpm = effectiveBpm;
+        updates.autoOffsetBpm = 0;
+      }
+
       // Energy Mode biasing (no UI changes): apply defaults unless explicitly overridden.
       if (updates.energyMode) {
         if (updates.targetLoudness === undefined) {
@@ -1166,6 +1305,8 @@ export const useDJStore = create<DJState>((set, get) => {
       if (state.isPartyMode && (
         updates.tempoMode !== undefined ||
         updates.lockedBpm !== undefined ||
+        updates.autoBaseBpm !== undefined ||
+        updates.autoOffsetBpm !== undefined ||
         updates.maxTempoPercent !== undefined
       )) {
         applyImmediateTempoToActiveDeck(state);
@@ -1178,6 +1319,8 @@ export const useDJStore = create<DJState>((set, get) => {
         updates.energyMode !== undefined ||
         updates.tempoMode !== undefined ||
         updates.lockedBpm !== undefined ||
+        updates.autoBaseBpm !== undefined ||
+        updates.autoOffsetBpm !== undefined ||
         updates.maxTempoPercent !== undefined
       )) {
         const triggerSecondsTrack = computeAutoMixTriggerSecondsTrack(get());
@@ -1286,4 +1429,45 @@ export const useDJStore = create<DJState>((set, get) => {
         .filter(Boolean) as Track[];
     },
   };
-});
+    },
+    {
+      name: 'mejay:djStore',
+      version: 1,
+      storage: createJSONStorage(() => getDjSessionStorage() ?? djStoreNoopStorage),
+      partialize: (state) => ({
+        // Deck state: persist only what can be safely/consistently restored.
+        deckA: {
+          trackId: state.deckA.trackId,
+          playbackRate: state.deckA.playbackRate,
+        },
+        deckB: {
+          trackId: state.deckB.trackId,
+          playbackRate: state.deckB.playbackRate,
+        },
+
+        activeDeck: state.activeDeck,
+        isPartyMode: state.isPartyMode,
+        partySource: state.partySource,
+        partyTrackIds: state.partyTrackIds,
+        nowPlayingIndex: state.nowPlayingIndex,
+        pendingNextIndex: state.pendingNextIndex,
+        pendingSourceSwitch: state.pendingSourceSwitch,
+        queuedSourceSwitch: state.queuedSourceSwitch,
+        crossfadeValue: state.crossfadeValue,
+
+        // User settings are small and serializable.
+        settings: state.settings,
+      }),
+      // Ensure nested objects (deckA/deckB) merge instead of replacing.
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState ?? {}) as Partial<DJState>;
+        return {
+          ...currentState,
+          ...persisted,
+          deckA: { ...currentState.deckA, ...(persisted.deckA ?? {}) },
+          deckB: { ...currentState.deckB, ...(persisted.deckB ?? {}) },
+        } as DJState;
+      },
+    }
+  )
+);

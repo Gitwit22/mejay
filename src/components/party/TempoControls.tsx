@@ -10,6 +10,10 @@ export function TempoControls() {
   const currentDeck = activeDeck === 'A' ? deckA : deckB;
   const currentTrack = tracks.find(t => t.id === currentDeck.trackId);
 
+  const autoTargetBpm = settings.autoBaseBpm !== null
+    ? Math.round((settings.autoBaseBpm + (settings.autoOffsetBpm ?? 0)) * 10) / 10
+    : null;
+
   return (
     <GatedSection feature="tempoControl" label="Upgrade for Tempo Control">
       <div className="glass-card space-y-4">
@@ -80,6 +84,34 @@ export function TempoControls() {
               step={1}
               className="w-full"
             />
+          </div>
+        )}
+
+        {/* Auto Match Offset Slider */}
+        {settings.tempoMode === 'auto' && (
+          <div>
+            <div className="flex justify-between mb-2">
+              <span className="text-xs text-muted-foreground">Tempo Offset</span>
+              <span className="text-xs font-semibold text-accent">
+                {settings.autoOffsetBpm >= 0 ? '+' : ''}{Math.round(settings.autoOffsetBpm)} BPM
+              </span>
+            </div>
+            <Slider
+              value={[settings.autoOffsetBpm ?? 0]}
+              onValueChange={([v]) => updateUserSettings({ autoOffsetBpm: v })}
+              min={-20}
+              max={20}
+              step={1}
+              className="w-full"
+            />
+            <div className="mt-2 flex items-center justify-between text-[10px] text-muted-foreground">
+              <span>
+                Base: {settings.autoBaseBpm !== null ? Math.round(settings.autoBaseBpm) : '—'} BPM
+              </span>
+              <span>
+                Target: {autoTargetBpm !== null ? Math.round(autoTargetBpm) : '—'} BPM
+              </span>
+            </div>
           </div>
         )}
 

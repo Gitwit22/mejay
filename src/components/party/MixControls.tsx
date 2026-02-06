@@ -44,7 +44,7 @@ export function MixControls() {
       {/* A) Incoming Track */}
       <div>
         <div className="flex justify-between mb-2">
-          <span className="text-xs text-muted-foreground">Start Offset</span>
+          <span className="text-xs text-muted-foreground">Song Start (Trim)</span>
           <span className="text-xs font-semibold text-accent">{Math.round(settings.nextSongStartOffset)}s</span>
         </div>
         <Slider
@@ -56,7 +56,7 @@ export function MixControls() {
           className="w-full"
         />
         <p className="text-[9px] text-muted-foreground mt-1">
-          Skip intro: start incoming track at this position
+          Playback starts here (used by Skip intro + Restart/Back)
         </p>
       </div>
 

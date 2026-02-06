@@ -46,6 +46,9 @@ export interface Settings {
   // Tempo controls
   tempoMode: 'auto' | 'locked';
   lockedBpm: number;
+  // Auto tempo baseline + offset (Auto Match)
+  autoBaseBpm: number | null;
+  autoOffsetBpm: number;
   // Volume matching
   autoVolumeMatch: boolean;
   targetLoudness: number; // 0-1 scale (quiet to club)
@@ -215,6 +218,8 @@ export async function getSettings(): Promise<Settings> {
     mixTriggerSeconds: 20,
     tempoMode: 'auto',
     lockedBpm: 128,
+    autoBaseBpm: null,
+    autoOffsetBpm: 0,
     autoVolumeMatch: true,
     targetLoudness: 0.7,
     limiterEnabled: true,

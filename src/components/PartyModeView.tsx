@@ -20,11 +20,25 @@ import { MixControls } from './party/MixControls';
 import { TempoControls } from './party/TempoControls';
 import { VolumeControls } from './party/VolumeControls';
 import { PartySourceChooser } from './party/PartySourceChooser';
+import { PartyDeck } from './party/PartyDeck';
+import { PartyTransportControls } from './party/PartyTransportControls';
+import {
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+} from '@/components/ui/drawer';
 
 type PanelView = 'queue' | 'settings';
 
-export function PartyModeView() {
+type PartyModeViewProps = {
+  onExit?: () => void;
+};
+
+export function PartyModeView({ onExit }: PartyModeViewProps) {
   const [activePanel, setActivePanel] = useState<PanelView>('queue');
+  const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
+  const [mobilePanel, setMobilePanel] = useState<PanelView>('queue');
   const [saveOpen, setSaveOpen] = useState(false);
   const [playlistName, setPlaylistName] = useState('');
 
@@ -56,12 +70,18 @@ export function PartyModeView() {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-h-0 overflow-hidden">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+      <div
+        className={cn(
+          'flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3 flex-shrink-0',
+          // Mobile Play screen contract: nothing above the decks.
+          isPartyMode && 'hidden lg:flex'
+        )}
+      >
         <div>
           <span className="text-[11px] text-muted-foreground uppercase tracking-[2px]">Auto DJ</span>
-          <h2 className="text-[24px] font-bold text-gradient-accent">Party Mode</h2>
+          <h2 className="text-[22px] sm:text-[24px] font-bold text-gradient-accent">Party Mode</h2>
           {isPartyMode && partySource && (
             <div className="flex items-center gap-1.5 mt-1">
               {partySource.type === 'import' ? (
@@ -179,36 +199,75 @@ export function PartyModeView() {
             </div>
 
             <div className="flex items-center gap-1 p-1 rounded-xl bg-white/5 w-full sm:w-auto">
-            <button
-              onClick={() => setActivePanel('queue')}
-              className={cn(
-                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
-                activePanel === 'queue'
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-            >
-              <ListMusic className="w-3.5 h-3.5" />
-              Queue
-              {upcomingCount > 0 && (
-                <span className="ml-1 px-1.5 py-0.5 rounded-full bg-white/20 text-[10px]">
-                  {upcomingCount}
-                </span>
-              )}
-            </button>
-            <button
-              onClick={() => setActivePanel('settings')}
-              className={cn(
-                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
-                activePanel === 'settings'
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-            >
-              <Settings className="w-3.5 h-3.5" />
-              Settings
-            </button>
-          </div>
+              {/* Mobile: open drawers. Desktop: switch inline panels. */}
+              <button
+                onClick={() => {
+                  setActivePanel('queue');
+                  setMobilePanel('queue');
+                  setMobilePanelOpen(true);
+                }}
+                className={cn(
+                  'flex lg:hidden items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
+                  'text-muted-foreground hover:text-foreground'
+                )}
+                type="button"
+              >
+                <ListMusic className="w-3.5 h-3.5" />
+                Queue
+                {upcomingCount > 0 && (
+                  <span className="ml-1 px-1.5 py-0.5 rounded-full bg-white/20 text-[10px]">
+                    {upcomingCount}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => {
+                  setActivePanel('settings');
+                  setMobilePanel('settings');
+                  setMobilePanelOpen(true);
+                }}
+                className={cn(
+                  'flex lg:hidden items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
+                  'text-muted-foreground hover:text-foreground'
+                )}
+                type="button"
+              >
+                <Settings className="w-3.5 h-3.5" />
+                Settings
+              </button>
+
+              <button
+                onClick={() => setActivePanel('queue')}
+                className={cn(
+                  'hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
+                  activePanel === 'queue'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+                type="button"
+              >
+                <ListMusic className="w-3.5 h-3.5" />
+                Queue
+                {upcomingCount > 0 && (
+                  <span className="ml-1 px-1.5 py-0.5 rounded-full bg-white/20 text-[10px]">
+                    {upcomingCount}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => setActivePanel('settings')}
+                className={cn(
+                  'hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
+                  activePanel === 'settings'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+                type="button"
+              >
+                <Settings className="w-3.5 h-3.5" />
+                Settings
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -217,26 +276,70 @@ export function PartyModeView() {
       {!isPartyMode ? (
         <PartySourceChooser />
       ) : (
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-4 min-h-0 overflow-hidden">
-          {/* Left Column - Now Playing */}
-          <div className="flex flex-col gap-4 overflow-y-auto scrollbar-thin pr-1">
-            <NowPlaying />
+        <div className="flex-1 min-h-0 overflow-hidden">
+          {/* Mobile: Play screen contract (100dvh, 2 decks, floating transport, no scroll). */}
+          <div className="lg:hidden relative h-[100dvh] overflow-hidden flex flex-col">
+            <div className="flex-1 min-h-0 grid grid-rows-2">
+              <PartyDeck deck="A" className="h-full border-b border-white/10" />
+              <PartyDeck deck="B" className="h-full" />
+            </div>
+
+            <div className="fixed bottom-[calc(env(safe-area-inset-bottom,0)+16px)] left-1/2 -translate-x-1/2 z-50">
+              <PartyTransportControls
+                onExit={onExit}
+                onOpenQueue={() => {
+                  setMobilePanel('queue');
+                  setMobilePanelOpen(true);
+                }}
+                onOpenSettings={() => {
+                  setMobilePanel('settings');
+                  setMobilePanelOpen(true);
+                }}
+              />
+            </div>
           </div>
 
-          {/* Right Column - Queue or Settings */}
-          <div className="flex flex-col gap-4 overflow-y-auto scrollbar-thin pr-1">
-            {activePanel === 'queue' ? (
-              <PartyQueuePanel />
-            ) : (
-              <>
-                <VolumeControls />
-                <MixControls />
-                <TempoControls />
-              </>
-            )}
+          {/* Desktop: split layout with internal scrolling columns. */}
+          <div className="hidden lg:grid flex-1 grid-cols-2 gap-4 min-h-0 overflow-hidden">
+            <div className="flex flex-col gap-4 overflow-y-auto scrollbar-thin pr-1 min-h-0">
+              <NowPlaying />
+            </div>
+            <div className="flex flex-col gap-4 overflow-y-auto scrollbar-thin pr-1 min-h-0">
+              {activePanel === 'queue' ? (
+                <PartyQueuePanel />
+              ) : (
+                <>
+                  <VolumeControls />
+                  <MixControls />
+                  <TempoControls />
+                </>
+              )}
+            </div>
           </div>
         </div>
       )}
+
+      {/* Mobile bottom sheet: Queue / Settings */}
+      <Drawer open={mobilePanelOpen} onOpenChange={setMobilePanelOpen}>
+        <DrawerContent className="mejay-drawer">
+          <DrawerHeader className="pb-2">
+            <DrawerTitle>{mobilePanel === 'queue' ? 'Queue' : 'Settings'}</DrawerTitle>
+          </DrawerHeader>
+          <div className="flex-1 min-h-0 overflow-hidden px-4 pb-[calc(env(safe-area-inset-bottom,0)+16px)]">
+            {mobilePanel === 'queue' ? (
+              <div className="h-full overflow-hidden">
+                <PartyQueuePanel />
+              </div>
+            ) : (
+              <div className="h-full overflow-y-auto space-y-4 scrollbar-thin pr-1">
+                <VolumeControls />
+                <MixControls />
+                <TempoControls />
+              </div>
+            )}
+          </div>
+        </DrawerContent>
+      </Drawer>
     </div>
   );
 }

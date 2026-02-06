@@ -4,6 +4,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { BrowserRouter, Routes, Route, Outlet, useNavigate } from "react-router-dom";
+import { audioEngine } from "@/lib/audioEngine";
+import { useDJStore } from "@/stores/djStore";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import WelcomePage from "./app/pages/WelcomePage";
@@ -77,11 +79,37 @@ const AppShellLayout = () => {
   return <Outlet />;
 };
 
+const AppLifetimeAudioCleanup = () => {
+  useEffect(() => {
+    const handlePageHide = () => {
+      // Do not tie audio lifecycle to route/tab UI mounts.
+      // Only shut down on document lifecycle end.
+      try {
+        useDJStore.getState().stopPartyMode();
+      } catch {
+        // ignore
+      }
+
+      try {
+        audioEngine.destroy();
+      } catch {
+        // ignore
+      }
+    };
+
+    window.addEventListener("pagehide", handlePageHide);
+    return () => window.removeEventListener("pagehide", handlePageHide);
+  }, []);
+
+  return null;
+};
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <Toaster />
       <Sonner />
+      <AppLifetimeAudioCleanup />
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<WelcomePage />} />

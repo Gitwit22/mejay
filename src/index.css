@@ -266,6 +266,19 @@
     margin-right: auto;
   }
 
+  /* Full-screen app viewport with dvh override (mobile address bar safe). */
+  .mejay-screen {
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  .mejay-drawer {
+    height: 85vh;
+    height: 85dvh;
+    overflow: hidden;
+  }
+
   /* Align fixed top-right controls to the same gutter */
   .mejay-fixed-right {
     right: calc(var(--mejay-mobile-gutter) + 0.75rem) !important;
@@ -315,6 +328,17 @@
   .slider-fill {
     @apply h-full rounded-full;
     background: var(--gradient-primary);
+  }
+
+  .start-trim-tick {
+    @apply absolute top-[-2px] h-[calc(100%+4px)] w-[2px] rounded-full;
+    background: hsl(0 0% 100% / 0.7);
+    box-shadow: 0 0 0 1px hsl(0 0% 0% / 0.15);
+  }
+
+  .start-trim-shade {
+    @apply absolute inset-y-0 left-0 rounded-full;
+    background: hsl(0 0% 100% / 0.06);
   }
   
   /* Album Art */

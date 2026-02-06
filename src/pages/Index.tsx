@@ -8,6 +8,7 @@ import { useSearchParams } from 'react-router-dom';
 import { DevPlanSwitcher } from '@/components/DevPlanSwitcher';
 import { UpgradeModal } from '@/components/UpgradeModal';
 import { TopRightSettingsMenu } from '@/components/TopRightSettingsMenu';
+import { cn } from '@/lib/utils';
 
 type TabId = 'library' | 'party' | 'playlists';
 
@@ -19,7 +20,7 @@ const Index = () => {
   const [activeTab, setActiveTab] = useState<TabId>(() => {
     if (tabFromUrl && ['library', 'party', 'playlists'].includes(tabFromUrl)) return tabFromUrl;
     try {
-      const stored = localStorage.getItem(LAST_TAB_KEY) as TabId | null;
+      const stored = sessionStorage.getItem(LAST_TAB_KEY) as TabId | null;
       if (stored && ['library', 'party', 'playlists'].includes(stored)) return stored;
     } catch {
       // ignore
@@ -44,19 +45,23 @@ const Index = () => {
   // Persist tab selection so refresh returns you to the same view.
   useEffect(() => {
     try {
-      localStorage.setItem(LAST_TAB_KEY, activeTab);
+      sessionStorage.setItem(LAST_TAB_KEY, activeTab);
     } catch {
       // ignore
     }
   }, [activeTab]);
 
   return (
-    <div className="min-h-[100dvh] relative overflow-hidden mejay-viewport">
+    <div className="mejay-screen relative mejay-viewport flex flex-col">
       {/* Dev Plan Switcher */}
-      <DevPlanSwitcher />
+      <div className={cn(activeTab === 'party' && 'hidden lg:block')}>
+        <DevPlanSwitcher />
+      </div>
 
       {/* Settings Menu */}
-      <TopRightSettingsMenu className="mejay-fixed-right" />
+      <div className={cn(activeTab === 'party' && 'hidden lg:block')}>
+        <TopRightSettingsMenu className="mejay-fixed-right" />
+      </div>
 
       {/* Upgrade Modal */}
       <UpgradeModal />
@@ -67,22 +72,33 @@ const Index = () => {
       <div className="orb orb-accent w-[180px] h-[180px] opacity-50 -bottom-10 -right-10" />
 
       {/* Main Content */}
-      <div className="relative z-10 px-5 pt-14 pb-[100px] h-[100dvh] overflow-y-auto">
-        {/* Logo Header */}
-        <div className="flex justify-center mb-2">
-          <div className="inline-flex rounded-2xl border border-white/10 bg-transparent p-3 shadow-[0_18px_60px_rgba(0,0,0,0.55)]">
-            <img src="/image.jpg" alt="MEJay" className="h-16 w-auto object-contain" />
+      <div
+        className={cn(
+          'relative z-10 flex flex-col flex-1 min-h-0 overflow-hidden',
+          activeTab === 'party' ? 'p-0' : 'px-5 pt-14'
+        )}
+      >
+        {/* Logo Header (hide in Party Mode to maximize usable viewport) */}
+        {activeTab !== 'party' && (
+          <div className="flex justify-center mb-2 flex-shrink-0">
+            <div className="inline-flex rounded-2xl border border-white/10 bg-transparent p-3 shadow-[0_18px_60px_rgba(0,0,0,0.55)]">
+              <img src="/image.jpg" alt="MEJay" className="h-16 w-auto object-contain" />
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Tab Content */}
-        {activeTab === 'library' && <LibraryView />}
-        {activeTab === 'party' && <PartyModeView />}
-        {activeTab === 'playlists' && <PlaylistsView />}
+        <div className="flex-1 min-h-0 overflow-hidden">
+          {activeTab === 'library' && <LibraryView />}
+          {activeTab === 'party' && <PartyModeView onExit={() => setActiveTab('library')} />}
+          {activeTab === 'playlists' && <PlaylistsView />}
+        </div>
       </div>
 
       {/* Tab Bar */}
-      <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
+      <div className={cn(activeTab === 'party' && 'hidden lg:block')}>
+        <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
+      </div>
     </div>
   );
 };
