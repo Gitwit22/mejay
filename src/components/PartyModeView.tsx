@@ -215,7 +215,7 @@ export function PartyModeView() {
       ) : (
         <div className="flex-1 min-h-0">
           {/* Mobile: single-column scroll with collapsible sections. */}
-          <div className="lg:hidden space-y-4">
+          <div className="lg:hidden space-y-4 pb-[calc(env(safe-area-inset-bottom,0)+16px)]">
             <NowPlaying />
 
             <div className="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm overflow-hidden">
@@ -257,7 +257,7 @@ export function PartyModeView() {
               </div>
 
               {/* Fixed-height scroll area so the layout stays stable */}
-              <div className="h-[38dvh] min-h-[260px] max-h-[420px] overflow-y-auto scrollbar-thin px-4 pb-[calc(env(safe-area-inset-bottom,0)+16px)]">
+              <div className="h-[38dvh] min-h-[260px] max-h-[420px] overflow-y-auto scrollbar-thin px-4 pb-[calc(env(safe-area-inset-bottom,0)+40px)]">
                 {activePanel === 'queue' ? (
                   <PartyQueuePanel />
                 ) : (
