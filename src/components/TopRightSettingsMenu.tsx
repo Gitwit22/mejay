@@ -1,6 +1,6 @@
 import {useMemo, useState} from 'react'
 import {useNavigate} from 'react-router-dom'
-import {LogOut, Settings as SettingsIcon} from 'lucide-react'
+import {ChevronDown, LogOut, Settings as SettingsIcon} from 'lucide-react'
 
 import {Dialog, DialogContent, DialogHeader, DialogTitle} from '@/components/ui/dialog'
 import {
@@ -23,6 +23,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
+import {Collapsible, CollapsibleContent, CollapsibleTrigger} from '@/components/ui/collapsible'
 import {Separator} from '@/components/ui/separator'
 import {cn} from '@/lib/utils'
 import {useDJStore} from '@/stores/djStore'
@@ -102,151 +103,218 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
 
         <SheetContent
           side="right"
-          className="w-[92vw] sm:w-[420px] sm:max-w-md flex flex-col h-[100dvh] max-h-[100dvh] min-h-0 overflow-y-auto"
+          className="w-[92vw] sm:w-[420px] sm:max-w-md flex flex-col h-[100dvh] max-h-[100dvh] min-h-0 overflow-hidden"
         >
-          <SheetHeader className="shrink-0 sticky top-0 z-10 bg-background/80 backdrop-blur-md pb-4">
+          <SheetHeader className="shrink-0 bg-background/80 backdrop-blur-md pb-4">
             <SheetTitle>Setup</SheetTitle>
             <SheetDescription>Account, device, and local settings</SheetDescription>
           </SheetHeader>
 
-          <div className="mt-4 space-y-6 pr-1 pb-6">
+          <div className="flex-1 min-h-0 overflow-y-scroll pr-1 pb-6 mt-4 space-y-7 scrollbar-thin">
             {/* A) Status header */}
-            <div className="space-y-3">
-              <div className="text-xs font-semibold tracking-wide uppercase text-muted-foreground">Status</div>
-              <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm">
-                <div className="flex items-center justify-between px-4 py-3">
-                  <div className="text-sm text-muted-foreground">Plan</div>
-                  <div className="text-sm font-medium">{appStatus.plan}</div>
-                </div>
-                <Separator />
-                <div className="flex items-center justify-between px-4 py-3">
-                  <div className="text-sm text-muted-foreground">Device</div>
-                  <div className="text-sm font-medium">{getDeviceStatusLabel()}</div>
-                </div>
-                <Separator />
-                <div className="flex items-center justify-between px-4 py-3">
-                  <div className="text-sm text-muted-foreground">Version</div>
-                  <div className="text-sm font-medium">{appStatus.version}</div>
-                </div>
+            <Collapsible defaultOpen>
+              <div className="space-y-3">
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="group flex w-full items-center justify-between text-left text-xs font-semibold tracking-wide uppercase text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <span>Status</span>
+                    <ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]:rotate-180" />
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm">
+                    <div className="flex items-center justify-between px-4 py-3">
+                      <div className="text-sm text-muted-foreground">Plan</div>
+                      <div className="text-sm font-medium">{appStatus.plan}</div>
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between px-4 py-3">
+                      <div className="text-sm text-muted-foreground">Device</div>
+                      <div className="text-sm font-medium">{getDeviceStatusLabel()}</div>
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between px-4 py-3">
+                      <div className="text-sm text-muted-foreground">Version</div>
+                      <div className="text-sm font-medium">{appStatus.version}</div>
+                    </div>
+                  </div>
+                </CollapsibleContent>
               </div>
-            </div>
+            </Collapsible>
 
             {/* B) Account / License */}
-            <div className="space-y-3">
-              <div className="text-xs font-semibold tracking-wide uppercase text-muted-foreground">Account / License</div>
-              <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm">
-                <div className="flex items-center justify-between px-4 py-3">
-                  <div className="text-sm text-muted-foreground">License status</div>
-                  <div className="text-sm font-medium">{appStatus.licenseStatus}</div>
-                </div>
-                <Separator />
-                <div className="flex items-center justify-between px-4 py-3">
-                  <div className="text-sm text-muted-foreground">Device installs used</div>
-                  <div className="text-sm font-medium">
-                    {appStatus.installsUsed} of {appStatus.installsTotal}
+            <Collapsible defaultOpen>
+              <div className="space-y-3">
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="group flex w-full items-center justify-between text-left text-xs font-semibold tracking-wide uppercase text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <span>Account / License</span>
+                    <ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]:rotate-180" />
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm">
+                    <div className="flex items-center justify-between px-4 py-3">
+                      <div className="text-sm text-muted-foreground">License status</div>
+                      <div className="text-sm font-medium">{appStatus.licenseStatus}</div>
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between px-4 py-3">
+                      <div className="text-sm text-muted-foreground">Device installs used</div>
+                      <div className="text-sm font-medium">
+                        {appStatus.installsUsed} of {appStatus.installsTotal}
+                      </div>
+                    </div>
+                    <Separator />
+                    <div className="flex gap-2 p-4">
+                      <Button type="button" className="flex-1" onClick={() => setActivateOpen(true)}>
+                        Activate License
+                      </Button>
+                      <Button type="button" variant="outline" className="flex-1" onClick={() => setLicenseInfoOpen(true)}>
+                        License Info
+                      </Button>
+                    </div>
                   </div>
-                </div>
-                <Separator />
-                <div className="flex gap-2 p-4">
-                  <Button type="button" className="flex-1" onClick={() => setActivateOpen(true)}>
-                    Activate License
-                  </Button>
-                  <Button type="button" variant="outline" className="flex-1" onClick={() => setLicenseInfoOpen(true)}>
-                    License Info
-                  </Button>
-                </div>
+                </CollapsibleContent>
               </div>
-            </div>
+            </Collapsible>
 
             {/* C) Settings */}
-            <div className="space-y-3">
-              <div className="text-xs font-semibold tracking-wide uppercase text-muted-foreground">Settings</div>
-              <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm">
-                <div className="flex items-center justify-between px-4 py-3 opacity-60">
-                  <div>
-                    <div className="text-sm font-medium">Default Volume</div>
-                    <div className="text-xs text-muted-foreground">Coming soon</div>
-                  </div>
-                  <Button type="button" variant="outline" disabled>
-                    Edit
-                  </Button>
-                </div>
-                <Separator />
-                <div className="flex items-center justify-between px-4 py-3 opacity-60">
-                  <div>
-                    <div className="text-sm font-medium">Audio Output</div>
-                    <div className="text-xs text-muted-foreground">Coming soon</div>
-                  </div>
-                  <Button type="button" variant="outline" disabled>
-                    Select
-                  </Button>
-                </div>
-                <Separator />
-                <div className="p-4">
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button type="button" variant="outline" className="w-full text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive">
-                        Reset Local Data
+            <Collapsible defaultOpen>
+              <div className="space-y-3">
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="group flex w-full items-center justify-between text-left text-xs font-semibold tracking-wide uppercase text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <span>Settings</span>
+                    <ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]:rotate-180" />
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm">
+                    <div className="flex items-center justify-between px-4 py-3 opacity-60">
+                      <div>
+                        <div className="text-sm font-medium">Default Volume</div>
+                        <div className="text-xs text-muted-foreground">Coming soon</div>
+                      </div>
+                      <Button type="button" variant="outline" disabled>
+                        Edit
                       </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Reset local data?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          This clears your local library, playlists, and settings on this device. This can’t be undone.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={handleResetLocalData}>
-                          Reset
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                </div>
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between px-4 py-3 opacity-60">
+                      <div>
+                        <div className="text-sm font-medium">Audio Output</div>
+                        <div className="text-xs text-muted-foreground">Coming soon</div>
+                      </div>
+                      <Button type="button" variant="outline" disabled>
+                        Select
+                      </Button>
+                    </div>
+                    <Separator />
+                    <div className="p-4">
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="w-full text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+                          >
+                            Reset Local Data
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Reset local data?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              This clears your local library, playlists, and settings on this device. This can’t be undone.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction
+                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              onClick={handleResetLocalData}
+                            >
+                              Reset
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    </div>
+                  </div>
+                </CollapsibleContent>
               </div>
-            </div>
+            </Collapsible>
 
             {/* D) Device */}
-            <div className="space-y-3">
-              <div className="text-xs font-semibold tracking-wide uppercase text-muted-foreground">Device</div>
-              <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm">
-                <div className="flex items-center justify-between px-4 py-3">
-                  <div>
-                    <div className="text-sm font-medium">Install MEJay</div>
-                    <div className="text-xs text-muted-foreground">Desktop / PWA install</div>
+            <Collapsible defaultOpen>
+              <div className="space-y-3">
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="group flex w-full items-center justify-between text-left text-xs font-semibold tracking-wide uppercase text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <span>Device</span>
+                    <ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]:rotate-180" />
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm">
+                    <div className="flex items-center justify-between px-4 py-3">
+                      <div>
+                        <div className="text-sm font-medium">Install MEJay</div>
+                        <div className="text-xs text-muted-foreground">Desktop / PWA install</div>
+                      </div>
+                      <Button type="button" variant="outline" onClick={handleInstallStub}>
+                        Install
+                      </Button>
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between px-4 py-3">
+                      <div className="text-sm text-muted-foreground">Installed</div>
+                      <div className="text-sm font-medium">Not yet</div>
+                    </div>
                   </div>
-                  <Button type="button" variant="outline" onClick={handleInstallStub}>
-                    Install
-                  </Button>
-                </div>
-                <Separator />
-                <div className="flex items-center justify-between px-4 py-3">
-                  <div className="text-sm text-muted-foreground">Installed</div>
-                  <div className="text-sm font-medium">Not yet</div>
-                </div>
+                </CollapsibleContent>
               </div>
-            </div>
+            </Collapsible>
 
             {/* E) Support */}
-            <div className="space-y-3">
-              <div className="text-xs font-semibold tracking-wide uppercase text-muted-foreground">Support</div>
-              <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm p-4 space-y-2">
-                <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/about')}>
-                  About MEJay
-                </Button>
-                <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/pricing')}>
-                  Pricing
-                </Button>
-                <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/terms')}>
-                  Terms of Service
-                </Button>
-                <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/contact')}>
-                  Contact & Support
-                </Button>
+            <Collapsible defaultOpen>
+              <div className="space-y-3">
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="group flex w-full items-center justify-between text-left text-xs font-semibold tracking-wide uppercase text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <span>Support</span>
+                    <ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]:rotate-180" />
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm p-4 space-y-2">
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/about')}>
+                      About MEJay
+                    </Button>
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/pricing')}>
+                      Pricing
+                    </Button>
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/terms')}>
+                      Terms of Service
+                    </Button>
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/contact')}>
+                      Contact & Support
+                    </Button>
+                  </div>
+                </CollapsibleContent>
               </div>
-            </div>
+            </Collapsible>
 
             <div className="pt-1">
               <Separator className="my-2" />

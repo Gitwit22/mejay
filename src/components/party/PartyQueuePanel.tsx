@@ -55,7 +55,7 @@ export function PartyQueuePanel() {
   };
 
   return (
-    <div className="glass-card flex flex-col min-h-0 h-full">
+    <div className="glass-card flex flex-col min-h-0">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-semibold text-foreground">Playlist</h3>

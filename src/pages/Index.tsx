@@ -70,11 +70,11 @@ const Index = () => {
       {/* Main Content */}
       <div
         className={cn(
-          'relative z-10 flex flex-col flex-1 min-h-0 px-5 overflow-hidden',
-          // Party mode must never scroll on mobile; reserve space for the fixed tab bar.
+          'relative z-10 flex flex-col flex-1 min-h-0 px-5',
+          // Reserve space for the fixed tab bar.
           activeTab === 'party'
-            ? 'pt-3 pb-[calc(84px+env(safe-area-inset-bottom,0)+12px)]'
-            : 'pt-14'
+            ? 'pt-3 pb-[calc(84px+env(safe-area-inset-bottom,0)+12px)] overflow-y-auto lg:overflow-hidden'
+            : 'pt-14 overflow-hidden'
         )}
       >
         {/* Logo Header (hide in Party Mode to maximize usable viewport) */}
@@ -87,7 +87,12 @@ const Index = () => {
         )}
 
         {/* Tab Content */}
-        <div className="flex-1 min-h-0 overflow-hidden">
+        <div
+          className={cn(
+            'flex-1 min-h-0',
+            activeTab === 'party' ? 'overflow-visible lg:overflow-hidden' : 'overflow-hidden'
+          )}
+        >
           {activeTab === 'library' && <LibraryView />}
           {activeTab === 'party' && <PartyModeView />}
           {activeTab === 'playlists' && <PlaylistsView />}
