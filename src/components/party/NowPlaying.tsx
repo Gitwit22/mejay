@@ -4,6 +4,7 @@ import { useDJStore } from '@/stores/djStore';
 import { cn } from '@/lib/utils';
 import { formatDuration } from '@/lib/utils';
 import { Slider } from '@/components/ui/slider';
+import { toast } from '@/hooks/use-toast';
 import React from 'react';
 
 export function NowPlaying() {
@@ -43,6 +44,40 @@ export function NowPlaying() {
     : 0;
   const startPct = currentDeck.duration > 0 ? (startAt / currentDeck.duration) * 100 : 0;
 
+  const [skipLocked, setSkipLocked] = React.useState(false);
+  const skipLockTimerRef = React.useRef<number | null>(null);
+  const prevNowPlayingIndexRef = React.useRef(nowPlayingIndex);
+  const prevActiveDeckRef = React.useRef(activeDeck);
+
+  const clearSkipLock = () => {
+    if (skipLockTimerRef.current !== null) {
+      window.clearTimeout(skipLockTimerRef.current);
+      skipLockTimerRef.current = null;
+    }
+    setSkipLocked(false);
+  };
+
+  // Unlock Skip once the store advances to the next track/deck.
+  React.useEffect(() => {
+    const indexChanged = prevNowPlayingIndexRef.current !== nowPlayingIndex;
+    const deckChanged = prevActiveDeckRef.current !== activeDeck;
+
+    prevNowPlayingIndexRef.current = nowPlayingIndex;
+    prevActiveDeckRef.current = activeDeck;
+
+    if (skipLocked && (indexChanged || deckChanged)) clearSkipLock();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nowPlayingIndex, activeDeck]);
+
+  React.useEffect(() => {
+    return () => {
+      if (skipLockTimerRef.current !== null) {
+        window.clearTimeout(skipLockTimerRef.current);
+        skipLockTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const backPressTimerRef = React.useRef<number | null>(null);
   const backLongPressFiredRef = React.useRef(false);
   const clearBackTimer = () => {
@@ -65,6 +100,24 @@ export function NowPlaying() {
     const wasLongPress = backLongPressFiredRef.current;
     clearBackTimer();
     if (!wasLongPress) smartBack();
+  };
+
+  const handleSkip = () => {
+    if (!hasMoreTracks) return;
+    if (skipLocked) return;
+
+    setSkipLocked(true);
+    toast({
+      title: 'Switching songs…',
+      description: 'Please wait a moment.',
+    });
+
+    skip('user');
+
+    // Fallback unlock in case the store takes longer to update.
+    skipLockTimerRef.current = window.setTimeout(() => {
+      clearSkipLock();
+    }, 6000);
   };
 
   return (
@@ -205,10 +258,10 @@ export function NowPlaying() {
         </button>
 
         <button
-          onClick={() => skip('user')}
+          onClick={handleSkip}
           className="ctrl-btn ctrl-secondary"
-          disabled={!hasMoreTracks}
-          title="Skip"
+          disabled={!hasMoreTracks || skipLocked}
+          title={skipLocked ? 'Switching…' : 'Skip'}
           type="button"
         >
           <SkipForward className="w-4 h-4" />

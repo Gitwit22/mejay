@@ -20,7 +20,6 @@ import { MixControls } from './party/MixControls';
 import { TempoControls } from './party/TempoControls';
 import { VolumeControls } from './party/VolumeControls';
 import { PartySourceChooser } from './party/PartySourceChooser';
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 
 type PanelView = 'queue' | 'settings';
 
@@ -220,40 +219,55 @@ export function PartyModeView() {
             <NowPlaying />
 
             <div className="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm overflow-hidden">
-              <Accordion type="multiple" defaultValue={['queue']} className="w-full">
-                <AccordionItem value="queue" className="border-b border-white/10">
-                  <AccordionTrigger className="px-4 py-3 hover:no-underline">
-                    <div className="flex items-center gap-2 text-sm font-semibold">
-                      <ListMusic className="w-4 h-4 text-muted-foreground" />
-                      <span>Queue</span>
-                      {upcomingCount > 0 && (
-                        <span className="ml-1 px-1.5 py-0.5 rounded-full bg-white/10 text-[10px] text-muted-foreground">
-                          {upcomingCount}
-                        </span>
-                      )}
-                    </div>
-                  </AccordionTrigger>
-                  <AccordionContent className="px-4 pt-0 pb-4">
-                    <PartyQueuePanel />
-                  </AccordionContent>
-                </AccordionItem>
+              {/* Mobile panel switcher: Queue <-> Settings */}
+              <div className="p-2">
+                <div className="flex items-center gap-1 p-1 rounded-xl bg-white/5">
+                  <button
+                    onClick={() => setActivePanel('queue')}
+                    className={cn(
+                      'flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all',
+                      activePanel === 'queue'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                    type="button"
+                  >
+                    <ListMusic className="w-3.5 h-3.5" />
+                    Queue
+                    {upcomingCount > 0 && (
+                      <span className="ml-1 px-1.5 py-0.5 rounded-full bg-white/20 text-[10px]">
+                        {upcomingCount}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setActivePanel('settings')}
+                    className={cn(
+                      'flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all',
+                      activePanel === 'settings'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                    type="button"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                    Settings
+                  </button>
+                </div>
+              </div>
 
-                <AccordionItem value="settings" className="border-b-0">
-                  <AccordionTrigger className="px-4 py-3 hover:no-underline">
-                    <div className="flex items-center gap-2 text-sm font-semibold">
-                      <Settings className="w-4 h-4 text-muted-foreground" />
-                      <span>Settings</span>
-                    </div>
-                  </AccordionTrigger>
-                  <AccordionContent className="px-4 pt-0 pb-4">
-                    <div className="space-y-4">
-                      <VolumeControls />
-                      <MixControls />
-                      <TempoControls />
-                    </div>
-                  </AccordionContent>
-                </AccordionItem>
-              </Accordion>
+              {/* Fixed-height scroll area so the layout stays stable */}
+              <div className="h-[38dvh] min-h-[260px] max-h-[420px] overflow-y-auto scrollbar-thin px-4 pb-[calc(env(safe-area-inset-bottom,0)+16px)]">
+                {activePanel === 'queue' ? (
+                  <PartyQueuePanel />
+                ) : (
+                  <div className="space-y-4 pt-2">
+                    <VolumeControls />
+                    <MixControls />
+                    <TempoControls />
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 

@@ -13,6 +13,10 @@ export default defineConfig(({ mode }) => ({
     },
   },
   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
+  optimizeDeps: {
+    // Prevent occasional Windows dep-optimizer cache issues causing missing chunk files and reload loops.
+    exclude: ["@radix-ui/react-accordion"],
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
