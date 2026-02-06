@@ -12,10 +12,20 @@ interface DeckState {
   baseBpm: number; // Original detected BPM
   isPlaying: boolean;
   currentTime: number;
-  startedAt: number;
+  // Track-time bookkeeping (seconds in the audio buffer timeline)
+  trackAtLastCtx: number;
+  lastCtx: number;
   pausedAt: number;
   duration: number;
   trackGainDb: number; // Applied gain adjustment
+  scheduledStartAt: number | null;
+  scheduledStartTimeoutId: number | null;
+  tempoRamp: {
+    startTime: number;
+    endTime: number;
+    startRate: number;
+    endRate: number;
+  } | null;
 }
 
 class AudioEngine {
@@ -48,10 +58,207 @@ class AudioEngine {
       baseBpm: 120,
       isPlaying: false,
       currentTime: 0,
-      startedAt: 0,
+      trackAtLastCtx: 0,
+      lastCtx: 0,
       pausedAt: 0,
       duration: 0,
       trackGainDb: 0,
+      scheduledStartAt: null,
+      scheduledStartTimeoutId: null,
+      tempoRamp: null,
+    };
+  }
+
+  getAudioContextTime(): number | null {
+    return this.audioContext?.currentTime ?? null;
+  }
+
+  private getEffectivePlaybackRateAt(deck: DeckId, ctxTime: number): number {
+    const deckState = this.decks[deck];
+    const ramp = deckState.tempoRamp;
+    if (!ramp) return deckState.playbackRate;
+
+    if (ctxTime <= ramp.startTime) return deckState.playbackRate;
+    if (ctxTime >= ramp.endTime) return ramp.endRate;
+
+    const duration = Math.max(0.001, ramp.endTime - ramp.startTime);
+    const t = (ctxTime - ramp.startTime) / duration;
+    return ramp.startRate + (ramp.endRate - ramp.startRate) * t;
+  }
+
+  private updateTrackPositionTo(deck: DeckId, ctxTime: number): void {
+    if (!this.audioContext) return;
+    const deckState = this.decks[deck];
+
+    // If not playing, keep bookkeeping aligned to pausedAt.
+    if (!deckState.isPlaying) {
+      deckState.trackAtLastCtx = deckState.pausedAt;
+      deckState.lastCtx = ctxTime;
+      return;
+    }
+
+    if (ctxTime <= deckState.lastCtx) return;
+
+    const ramp = deckState.tempoRamp;
+    if (!ramp) {
+      const elapsed = ctxTime - deckState.lastCtx;
+      deckState.trackAtLastCtx += elapsed * deckState.playbackRate;
+      deckState.lastCtx = ctxTime;
+      return;
+    }
+
+    // Segment 1: before ramp start
+    if (deckState.lastCtx < ramp.startTime) {
+      const t1 = Math.min(ctxTime, ramp.startTime);
+      const elapsed = t1 - deckState.lastCtx;
+      if (elapsed > 0) {
+        deckState.trackAtLastCtx += elapsed * deckState.playbackRate;
+        deckState.lastCtx = t1;
+      }
+    }
+
+    // Segment 2: during ramp
+    if (deckState.lastCtx < ctxTime && deckState.lastCtx < ramp.endTime && ctxTime > ramp.startTime) {
+      const segStart = Math.max(deckState.lastCtx, ramp.startTime);
+      const segEnd = Math.min(ctxTime, ramp.endTime);
+
+      if (segEnd > segStart) {
+        const dur = Math.max(0.001, ramp.endTime - ramp.startTime);
+        const k = (ramp.endRate - ramp.startRate) / dur;
+
+        const a = segStart - ramp.startTime;
+        const b = segEnd - ramp.startTime;
+
+        // Integral of (startRate + k*(t - startTime)) dt from segStart..segEnd
+        const integral = ramp.startRate * (segEnd - segStart) + 0.5 * k * (b * b - a * a);
+        deckState.trackAtLastCtx += integral;
+        deckState.lastCtx = segEnd;
+      }
+    }
+
+    // Segment 3: after ramp end
+    if (ctxTime >= ramp.endTime && deckState.lastCtx >= ramp.endTime) {
+      // Ramp is completed; adopt the end rate.
+      deckState.playbackRate = ramp.endRate;
+      deckState.tempoRamp = null;
+    }
+
+    if (!deckState.tempoRamp && deckState.lastCtx < ctxTime) {
+      const elapsed = ctxTime - deckState.lastCtx;
+      deckState.trackAtLastCtx += elapsed * deckState.playbackRate;
+      deckState.lastCtx = ctxTime;
+    }
+  }
+
+  /**
+   * Returns the next beat-aligned AudioContext time for the given deck.
+   *
+   * Beat alignment is computed against the deck's base BPM (beat grid in buffer time),
+   * and then converted to AudioContext time using the deck's current playbackRate.
+   */
+  getNextBeatTime(deck: DeckId, beatMultiple: number = 1): number | null {
+    if (!this.audioContext) return null;
+
+    const deckState = this.decks[deck];
+    const bpm = deckState.baseBpm || 120;
+    const rate = this.getEffectivePlaybackRateAt(deck, this.audioContext.currentTime) || 1;
+
+    if (!bpm || bpm <= 0 || rate <= 0) return this.audioContext.currentTime;
+
+    const beatIntervalTrack = (60 / bpm) * Math.max(1, Math.floor(beatMultiple));
+    const trackTime = this.getCurrentTime(deck);
+    const phase = trackTime % beatIntervalTrack;
+    const remainingTrack = phase === 0 ? beatIntervalTrack : beatIntervalTrack - phase;
+    const remainingReal = remainingTrack / rate;
+
+    return this.audioContext.currentTime + remainingReal;
+  }
+
+  /**
+   * Returns the next beat-aligned time at or after `fromTime`.
+   * Uses `playbackRateOverride` when provided (useful when tempo is being ramped).
+   */
+  getNextBeatTimeFrom(deck: DeckId, fromTime: number, beatMultiple: number = 1, playbackRateOverride?: number): number | null {
+    if (!this.audioContext) return null;
+    const deckState = this.decks[deck];
+    const bpm = deckState.baseBpm || 120;
+    const rate = (playbackRateOverride ?? this.getEffectivePlaybackRateAt(deck, fromTime)) || 1;
+    if (!bpm || bpm <= 0 || rate <= 0) return fromTime;
+
+    const intervalTrack = (60 / bpm) * Math.max(1, Math.floor(beatMultiple));
+    // Compute track position at `fromTime` using the current piecewise model.
+    const baseTrackAtLast = deckState.isPlaying ? deckState.trackAtLastCtx : deckState.pausedAt;
+    const baseLastCtx = deckState.isPlaying ? deckState.lastCtx : fromTime;
+    const clampedFrom = Math.max(fromTime, baseLastCtx);
+    const trackTimeAtFrom = baseTrackAtLast + (clampedFrom - baseLastCtx) * rate;
+    const nextBoundaryTrack = Math.ceil(trackTimeAtFrom / intervalTrack) * intervalTrack;
+    const remainingTrack = nextBoundaryTrack - trackTimeAtFrom;
+    const remainingReal = remainingTrack / rate;
+    return clampedFrom + remainingReal;
+  }
+
+  private clearScheduledStart(deck: DeckId): void {
+    const deckState = this.decks[deck];
+    if (deckState.scheduledStartTimeoutId !== null) {
+      clearTimeout(deckState.scheduledStartTimeoutId);
+      deckState.scheduledStartTimeoutId = null;
+    }
+    deckState.scheduledStartAt = null;
+  }
+
+  /**
+   * Start playback at a specific AudioContext time.
+   *
+   * Note: this schedules audio precisely, but deckState.isPlaying flips to true via setTimeout.
+   */
+  playAt(deck: DeckId, whenTime: number): void {
+    if (!this.audioContext || !this.decks[deck].audioBuffer) return;
+
+    // Resume audio context if suspended (mobile browsers)
+    if (this.audioContext.state === 'suspended') {
+      this.audioContext.resume();
+    }
+
+    const deckState = this.decks[deck];
+    if (deckState.isPlaying) return;
+
+    // Cancel any previous schedule
+    this.clearScheduledStart(deck);
+    // Preserve any pre-set offset (e.g. loadTrackWithOffset)
+    const preservedOffset = deckState.pausedAt;
+    this.stop(deck);
+    deckState.pausedAt = preservedOffset;
+    deckState.trackAtLastCtx = preservedOffset;
+    deckState.lastCtx = 0;
+
+    // Create new source node now and schedule its start
+    const source = this.audioContext.createBufferSource();
+    source.buffer = deckState.audioBuffer;
+    source.playbackRate.value = deckState.playbackRate;
+    source.connect(deckState.trackGainNode!);
+
+    const offset = deckState.pausedAt;
+    const safeWhen = Math.max(this.audioContext.currentTime, whenTime);
+
+    source.start(safeWhen, offset);
+    deckState.sourceNode = source;
+    deckState.trackAtLastCtx = offset;
+    deckState.lastCtx = safeWhen;
+    deckState.scheduledStartAt = safeWhen;
+
+    const delayMs = Math.max(0, (safeWhen - this.audioContext.currentTime) * 1000);
+    deckState.scheduledStartTimeoutId = window.setTimeout(() => {
+      deckState.isPlaying = true;
+      deckState.scheduledStartTimeoutId = null;
+      deckState.scheduledStartAt = null;
+    }, delayMs);
+
+    source.onended = () => {
+      if (deckState.isPlaying) {
+        deckState.isPlaying = false;
+        deckState.pausedAt = 0;
+        this.onTrackEnd?.(deck);
+      }
     };
   }
 
@@ -260,6 +467,9 @@ class AudioEngine {
     this.decks[deck].currentTime = 0;
     this.decks[deck].pausedAt = 0;
     this.decks[deck].baseBpm = bpm || 120;
+    // Ensure each new load starts from a known tempo baseline.
+    this.decks[deck].playbackRate = 1;
+    this.decks[deck].tempoRamp = null;
     
     // Apply track gain if provided
     if (gainDb !== undefined) {
@@ -343,7 +553,8 @@ class AudioEngine {
     
     source.start(0, offset);
     deckState.sourceNode = source;
-    deckState.startedAt = this.audioContext.currentTime - offset;
+    deckState.trackAtLastCtx = offset;
+    deckState.lastCtx = this.audioContext.currentTime;
     deckState.isPlaying = true;
 
     // Handle track end
@@ -361,6 +572,8 @@ class AudioEngine {
     if (!deckState.isPlaying || !deckState.sourceNode) return;
 
     deckState.pausedAt = this.getCurrentTime(deck);
+    deckState.trackAtLastCtx = deckState.pausedAt;
+    deckState.lastCtx = this.audioContext?.currentTime ?? deckState.lastCtx;
     deckState.sourceNode.stop();
     deckState.sourceNode.disconnect();
     deckState.sourceNode = null;
@@ -369,6 +582,7 @@ class AudioEngine {
 
   stop(deck: DeckId): void {
     const deckState = this.decks[deck];
+    this.clearScheduledStart(deck);
     if (deckState.sourceNode) {
       try {
         deckState.sourceNode.stop();
@@ -380,7 +594,10 @@ class AudioEngine {
     deckState.sourceNode = null;
     deckState.isPlaying = false;
     deckState.pausedAt = 0;
+    deckState.trackAtLastCtx = 0;
+    deckState.lastCtx = 0;
     deckState.currentTime = 0;
+    deckState.tempoRamp = null;
   }
 
   getCurrentTime(deck: DeckId): number {
@@ -388,8 +605,9 @@ class AudioEngine {
     if (!this.audioContext || !deckState.isPlaying) {
       return deckState.pausedAt;
     }
-    const elapsed = (this.audioContext.currentTime - deckState.startedAt) * deckState.playbackRate;
-    return Math.min(elapsed, deckState.duration);
+
+    this.updateTrackPositionTo(deck, this.audioContext.currentTime);
+    return Math.min(deckState.trackAtLastCtx, deckState.duration);
   }
 
   getDuration(deck: DeckId): number {
@@ -402,11 +620,98 @@ class AudioEngine {
 
   setTempo(deck: DeckId, ratio: number): void {
     const deckState = this.decks[deck];
+
+    if (this.audioContext && deckState.isPlaying) {
+      this.updateTrackPositionTo(deck, this.audioContext.currentTime);
+    }
+
+    deckState.tempoRamp = null;
     deckState.playbackRate = ratio;
+    if (this.audioContext) {
+      deckState.lastCtx = this.audioContext.currentTime;
+    }
     
     if (deckState.sourceNode) {
-      deckState.sourceNode.playbackRate.value = ratio;
+      const rateParam = deckState.sourceNode.playbackRate;
+      const now = this.audioContext?.currentTime ?? 0;
+      // Ensure any previously scheduled ramp/automation is cancelled so this change is immediate.
+      rateParam.cancelScheduledValues(now);
+      rateParam.setValueAtTime(ratio, now);
     }
+  }
+
+  /**
+   * Ramps playbackRate smoothly. Uses AudioParam scheduling when a source node exists.
+   */
+  rampTempo(deck: DeckId, targetRatio: number, startAtTime: number, durationMs: number): void {
+    if (!this.audioContext) return;
+    const deckState = this.decks[deck];
+
+    const clampedDurationMs = Math.max(300, Math.min(800, durationMs));
+    const startTime = Math.max(this.audioContext.currentTime, startAtTime);
+    const endTime = startTime + clampedDurationMs / 1000;
+
+    // If playing, bring bookkeeping up to ramp start.
+    if (deckState.isPlaying) {
+      this.updateTrackPositionTo(deck, startTime);
+    }
+
+    // Cancel any previous ramp.
+    deckState.tempoRamp = null;
+
+    const startRate = deckState.playbackRate;
+    deckState.tempoRamp = {
+      startTime,
+      endTime,
+      startRate,
+      endRate: targetRatio,
+    };
+
+    if (!deckState.sourceNode) return;
+
+    const rateParam = deckState.sourceNode.playbackRate;
+    rateParam.cancelScheduledValues(startTime);
+    rateParam.setValueAtTime(startRate, startTime);
+    rateParam.linearRampToValueAtTime(targetRatio, endTime);
+  }
+
+  scheduleStop(deck: DeckId, whenTime: number): void {
+    if (!this.audioContext) return;
+    const deckState = this.decks[deck];
+    if (!deckState.sourceNode) return;
+    const safeWhen = Math.max(this.audioContext.currentTime, whenTime);
+    try {
+      deckState.sourceNode.stop(safeWhen);
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * Schedules an equal-power crossfade starting at `startAtTime`.
+   */
+  scheduleCrossfade(seconds: number, startAtTime: number): void {
+    if (!this.audioContext || !this.decks.A.gainNode || !this.decks.B.gainNode) return;
+
+    const startTime = Math.max(this.audioContext.currentTime, startAtTime);
+    const endTime = startTime + seconds;
+
+    const startValue = this.crossfadeValue;
+    const endValue = startValue < 0.5 ? 1 : 0;
+
+    const gainA = this.decks.A.gainNode.gain;
+    const gainB = this.decks.B.gainNode.gain;
+
+    gainA.cancelScheduledValues(startTime);
+    gainB.cancelScheduledValues(startTime);
+
+    gainA.setValueAtTime(Math.cos(startValue * Math.PI * 0.5), startTime);
+    gainB.setValueAtTime(Math.sin(startValue * Math.PI * 0.5), startTime);
+
+    gainA.linearRampToValueAtTime(Math.cos(endValue * Math.PI * 0.5), endTime);
+    gainB.linearRampToValueAtTime(Math.sin(endValue * Math.PI * 0.5), endTime);
+
+    this.crossfadeValue = endValue;
   }
 
   getTempo(deck: DeckId): number {

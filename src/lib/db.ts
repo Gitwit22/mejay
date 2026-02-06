@@ -34,8 +34,11 @@ export interface Settings {
   maxTempoPercent: number;
   energyMode: 'chill' | 'normal' | 'hype';
   shuffleEnabled: boolean;
+  // Master output
+  masterVolume: number; // 0..1
   // Mix timing controls
   nextSongStartOffset: number; // seconds into next song to start
+  endEarlySeconds?: number; // fade out this many seconds before current track ends
   mixTriggerMode: 'remaining' | 'elapsed' | 'manual';
   mixTriggerSeconds: number; // when to start bringing in next track
   // Tempo controls
@@ -182,12 +185,14 @@ export async function deletePlaylist(id: string): Promise<void> {
 export async function getSettings(): Promise<Settings> {
   const db = await getDB();
   const settings = await db.get('settings', 'default');
-  return settings || {
+  const defaults: Settings = {
     crossfadeSeconds: 8,
     maxTempoPercent: 6,
     energyMode: 'normal',
     shuffleEnabled: false,
-    nextSongStartOffset: 0,
+    masterVolume: 0.9,
+    nextSongStartOffset: 15,
+    endEarlySeconds: 5,
     mixTriggerMode: 'remaining',
     mixTriggerSeconds: 20,
     tempoMode: 'auto',
@@ -198,6 +203,9 @@ export async function getSettings(): Promise<Settings> {
     limiterStrength: 'medium',
     loopPlaylist: true,
   };
+
+  // Merge to backfill new fields for existing users.
+  return settings ? { ...defaults, ...settings } : defaults;
 }
 
 export async function updateSettings(updates: Partial<Settings>): Promise<void> {

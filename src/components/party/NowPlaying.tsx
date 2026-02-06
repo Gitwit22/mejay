@@ -1,8 +1,9 @@
-import { Play, Pause, SkipForward, Music, Shuffle, Repeat } from 'lucide-react';
+import { Play, Pause, SkipForward, Music, Shuffle, Repeat, Volume2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useDJStore } from '@/stores/djStore';
 import { cn } from '@/lib/utils';
 import { formatDuration } from '@/lib/utils';
+import { Slider } from '@/components/ui/slider';
 
 export function NowPlaying() {
   const {
@@ -17,6 +18,7 @@ export function NowPlaying() {
     togglePlayPause,
     skip,
     updateUserSettings,
+    setMasterVolume,
   } = useDJStore();
 
   const currentDeck = activeDeck === 'A' ? deckA : deckB;
@@ -138,7 +140,7 @@ export function NowPlaying() {
         </button>
 
         <button
-          onClick={skip}
+          onClick={() => skip('user')}
           className="ctrl-btn ctrl-secondary"
           disabled={!hasMoreTracks}
           title="Skip"
@@ -156,6 +158,27 @@ export function NowPlaying() {
         >
           <Repeat className="w-4 h-4" />
         </button>
+      </div>
+
+      {/* Master Volume */}
+      <div className="mt-4 px-2">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <Volume2 className="w-4 h-4 text-muted-foreground" />
+            <span className="text-xs text-muted-foreground">Volume</span>
+          </div>
+          <span className="text-xs font-semibold text-accent">
+            {Math.round((settings.masterVolume ?? 0.9) * 100)}%
+          </span>
+        </div>
+        <Slider
+          value={[settings.masterVolume ?? 0.9]}
+          onValueChange={([v]) => setMasterVolume(v)}
+          min={0}
+          max={1}
+          step={0.01}
+          className="w-full"
+        />
       </div>
 
       {/* Next Up Preview */}

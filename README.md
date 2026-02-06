@@ -1,73 +1,151 @@
-# Welcome to your Lovable project
+# ME Jay (MEJay)
 
-## Project info
+ME Jay is a browser-based “Auto DJ” web app built with React + Vite. It lets you import audio files, analyze BPM, build playlists (“Party Sets”), and run a Party Mode that auto-advances tracks with crossfading, tempo controls, and optional auto-volume/limiter features.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+This repo is set up to use Bun (not npm) as the package manager/runtime.
 
-## How can I edit this code?
+## Quick start (Bun)
 
-There are several ways of editing your application.
+### 1) Install Bun
 
-**Use Lovable**
-
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
-
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
+Verify Bun is installed:
 
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
+bun --version
 ```
 
-**Edit a file directly in GitHub**
+If that command is not found on Windows, install Bun and then restart your terminal so PATH updates take effect.
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+Official installer:
 
-**Use GitHub Codespaces**
+```sh
+powershell -c "irm https://bun.sh/install.ps1 | iex"
+```
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+### 2) Install dependencies
 
-## What technologies are used for this project?
+```sh
+bun install
+```
 
-This project is built with:
+### 3) Run the dev server
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+```sh
+bun dev
+```
 
-## How can I deploy this project?
+By default Vite runs on port `8080` in this project.
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+## Scripts
 
-## Can I connect a custom domain to my Lovable project?
+All scripts below are run with Bun:
 
-Yes, you can!
+```sh
+# Dev
+bun dev
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+# Production build
+bun run build
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+# Development-mode build (Vite mode=development)
+bun run build:dev
+
+# Preview production build
+bun run preview
+
+# Lint
+bun run lint
+
+# Tests
+bun run test
+bun run test:watch
+```
+
+## Program rundown
+
+### What the app does
+
+- Library
+	- Import audio files from your computer.
+	- Tracks are stored in IndexedDB (metadata + the imported Blob while the browser keeps it).
+	- Background BPM detection runs after import and labels tracks as `Analyzing`, `Ready`, or `Basic`.
+	- Clicking a track loads it onto Deck A.
+
+- Playlists (“Party Sets”)
+	- Create playlists and add tracks from the Library.
+	- Reorder playlist tracks via drag-and-drop.
+	- Start Party Mode from a playlist and jump to the Party tab.
+
+- Party Mode (Auto DJ)
+	- Choose a source to play from:
+		- Import List (all imported tracks)
+		- Playlist
+	- Shows Now Playing, Next Up, and a queue panel.
+	- Auto-advances through the list and can loop the playlist.
+	- Queue tools:
+		- Shuffle (toggle + “Shuffle Now”)
+		- Drag reorder
+		- “Play Now” / “Play Next” actions
+
+- Mixing features
+	- Crossfade + mix timing controls (including “Mix Now” when in manual mode).
+	- Tempo controls (auto-match / locked BPM, max tempo stretch, energy mode).
+	- Auto volume matching + limiter controls.
+
+### Important behavior/limitations (browser constraints)
+
+- Imported audio files are user-provided local Blobs. Browsers do not give persistent file paths, and Blob availability can vary after refresh/restore depending on browser behavior.
+- If you refresh and the app says tracks are “not playable”, re-import the files.
+
+### How it’s built (high-level architecture)
+
+- UI + routing
+	- Single-page app with React Router.
+	- Main screen is tab-based: Library / Party Mode / Playlists.
+
+- State management
+	- Zustand store drives the app state (tracks, playlists, party queue, deck state, settings).
+
+- Persistence
+	- IndexedDB via the `idb` package stores tracks/playlists/settings.
+
+- Audio engine
+	- Web Audio API dual-deck engine with:
+		- Two decks (A/B)
+		- Crossfade
+		- Tempo via playbackRate
+		- Loudness analysis and per-track gain
+		- Limiter (DynamicsCompressorNode) with multiple strength presets
+
+- BPM detection
+	- Web Audio based BPM detection analyzes a mid-section of the track, finds peaks, and estimates tempo with a confidence score.
+
+### “Free vs Plus” gating (dev)
+
+The UI contains a simple plan feature gate (Free/Plus) used to lock some controls:
+
+- Free: core playback, importing, playlists, basic party mode.
+- Plus (dev toggle): enables advanced mix timing modes, tempo controls, and auto volume matching.
+
+In development builds, a “Dev Plan Switcher” appears in the top-right to toggle Free/Plus.
+
+## Tech stack
+
+- Vite + React + TypeScript
+- Tailwind CSS + shadcn/ui components
+- Zustand (state)
+- IndexedDB via `idb`
+- Vitest (tests)
+
+## Troubleshooting
+
+### `bun` is not recognized (Windows)
+
+- Install Bun and restart your terminal.
+- If it still fails, make sure Bun’s install directory is on PATH.
+
+### `bun dev` exits immediately
+
+- Run `bun install` first.
+- Then try `bun dev` again.
+- If it still fails, paste the terminal output and we’ll chase the exact error.

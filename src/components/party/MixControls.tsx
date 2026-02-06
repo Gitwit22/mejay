@@ -1,30 +1,57 @@
 import { Timer } from 'lucide-react';
 import { useDJStore } from '@/stores/djStore';
-import { cn } from '@/lib/utils';
 import { Slider } from '@/components/ui/slider';
-import { GatedControl } from '@/components/ui/GatedControl';
+
+const DEFAULT_START_OFFSET_SECONDS = 15;
+const DEFAULT_END_EARLY_SECONDS = 5;
+const DEFAULT_CROSSFADE_SECONDS = 8;
 
 export function MixControls() {
-  const { settings, updateUserSettings, triggerMixNow, isPartyMode } = useDJStore();
+  const { settings, updateUserSettings, tracks, partyTrackIds, nowPlayingIndex } = useDJStore();
+
+  const nextIndex = nowPlayingIndex + 1;
+  const nextTrackId = nextIndex < partyTrackIds.length ? partyTrackIds[nextIndex] : settings.loopPlaylist ? partyTrackIds[0] : null;
+  const nextTrack = nextTrackId ? tracks.find(t => t.id === nextTrackId) : null;
+
+  // 0s → 60–120s depending on track length
+  const startOffsetMax = nextTrack?.duration
+    ? Math.min(120, Math.max(60, Math.floor(nextTrack.duration / 4)))
+    : 120;
 
   return (
     <div className="glass-card space-y-4">
-      <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-        <Timer className="w-4 h-4 text-primary" />
-        Mix Timing
-      </h3>
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+          <Timer className="w-4 h-4 text-primary" />
+          Mix Timing
+        </h3>
+        <button
+          onClick={() =>
+            updateUserSettings({
+              nextSongStartOffset: DEFAULT_START_OFFSET_SECONDS,
+              endEarlySeconds: DEFAULT_END_EARLY_SECONDS,
+              crossfadeSeconds: DEFAULT_CROSSFADE_SECONDS,
+            })
+          }
+          className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+          title="Reset mix timing to defaults"
+          type="button"
+        >
+          Reset to Defaults
+        </button>
+      </div>
 
-      {/* Next Song Start Offset - FREE */}
+      {/* A) Incoming Track */}
       <div>
         <div className="flex justify-between mb-2">
-          <span className="text-xs text-muted-foreground">Next Song Start At</span>
-          <span className="text-xs font-semibold text-accent">{settings.nextSongStartOffset}s</span>
+          <span className="text-xs text-muted-foreground">Start Offset</span>
+          <span className="text-xs font-semibold text-accent">{Math.round(settings.nextSongStartOffset)}s</span>
         </div>
         <Slider
           value={[settings.nextSongStartOffset]}
           onValueChange={([v]) => updateUserSettings({ nextSongStartOffset: v })}
           min={0}
-          max={60}
+          max={startOffsetMax}
           step={1}
           className="w-full"
         />
@@ -33,98 +60,48 @@ export function MixControls() {
         </p>
       </div>
 
-      {/* Mix Trigger Mode - GATED (Time Left / Time In only) */}
+      {/* B) Outgoing Track */}
       <div>
-        <span className="text-xs text-muted-foreground block mb-2">Bring In When</span>
-        <div className="grid grid-cols-3 gap-1.5">
-          {(['remaining', 'elapsed', 'manual'] as const).map((mode) => {
-            const isGated = mode !== 'manual';
-            const isActive = settings.mixTriggerMode === mode;
-
-            if (isGated) {
-              return (
-                <GatedControl key={mode} feature="advancedMixTiming">
-                  <button
-                    className={cn(
-                      'w-full px-2 py-1.5 rounded-lg text-[10px] font-medium capitalize transition-all',
-                      isActive
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-white/5 text-muted-foreground hover:bg-white/10'
-                    )}
-                  >
-                    {mode === 'remaining' ? 'Time Left' : 'Time In'}
-                  </button>
-                </GatedControl>
-              );
-            }
-
-            return (
-              <button
-                key={mode}
-                onClick={() => updateUserSettings({ mixTriggerMode: mode })}
-                className={cn(
-                  'px-2 py-1.5 rounded-lg text-[10px] font-medium capitalize transition-all',
-                  isActive
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-white/5 text-muted-foreground hover:bg-white/10'
-                )}
-              >
-                Manual
-              </button>
-            );
-          })}
+        <div className="flex justify-between mb-2">
+          <span className="text-xs text-muted-foreground">End Early</span>
+          <span className="text-xs font-semibold text-accent">{Math.round(settings.endEarlySeconds ?? 0)}s</span>
         </div>
+        <Slider
+          value={[settings.endEarlySeconds ?? 0]}
+          onValueChange={([v]) => updateUserSettings({ endEarlySeconds: v })}
+          min={0}
+          max={60}
+          step={1}
+          className="w-full"
+        />
+        <p className="text-[9px] text-muted-foreground mt-1">
+          Fade out this many seconds before the track ends
+        </p>
       </div>
 
-      {/* Mix Trigger Seconds - GATED */}
-      {settings.mixTriggerMode !== 'manual' && (
-        <GatedControl feature="advancedMixTiming">
-          <div>
-            <div className="flex justify-between mb-2">
-              <span className="text-xs text-muted-foreground">
-                {settings.mixTriggerMode === 'remaining' ? 'Seconds Remaining' : 'Seconds Into Track'}
-              </span>
-              <span className="text-xs font-semibold text-accent">{settings.mixTriggerSeconds}s</span>
-            </div>
-            <Slider
-              value={[settings.mixTriggerSeconds]}
-              onValueChange={([v]) => updateUserSettings({ mixTriggerSeconds: v })}
-              min={5}
-              max={60}
-              step={1}
-              className="w-full"
-            />
-          </div>
-        </GatedControl>
-      )}
-
-      {/* Manual Mix Button - FREE */}
-      {settings.mixTriggerMode === 'manual' && isPartyMode && (
-        <button
-          onClick={triggerMixNow}
-          className="w-full py-3 rounded-xl bg-gradient-to-r from-primary to-accent text-white font-semibold text-sm hover:opacity-90 transition-opacity"
-        >
-          Mix Now
-        </button>
-      )}
-
-      {/* Crossfade Duration - GATED */}
-      <GatedControl feature="advancedMixTiming">
-        <div>
-          <div className="flex justify-between mb-2">
-            <span className="text-xs text-muted-foreground">Crossfade Duration</span>
-            <span className="text-xs font-semibold text-accent">{settings.crossfadeSeconds}s</span>
-          </div>
-          <Slider
-            value={[settings.crossfadeSeconds]}
-            onValueChange={([v]) => updateUserSettings({ crossfadeSeconds: v })}
-            min={2}
-            max={16}
-            step={1}
-            className="w-full"
-          />
+      {/* C) Crossfade */}
+      <div>
+        <div className="flex justify-between mb-2">
+          <span className="text-xs text-muted-foreground">Crossfade Duration</span>
+          <span className="text-xs font-semibold text-accent">{Math.round(settings.crossfadeSeconds)}s</span>
         </div>
-      </GatedControl>
+        <Slider
+          value={[settings.crossfadeSeconds]}
+          onValueChange={([v]) => updateUserSettings({ crossfadeSeconds: v })}
+          min={1}
+          max={20}
+          step={1}
+          className="w-full"
+        />
+        <p className="text-[9px] text-muted-foreground mt-1">How long the transition lasts</p>
+      </div>
+
+      {/* Tiny summary */}
+      <div className="pt-1 space-y-0.5">
+        <p className="text-[9px] text-muted-foreground">Incoming starts at {Math.round(settings.nextSongStartOffset)}s</p>
+        <p className="text-[9px] text-muted-foreground">Outgoing fades {Math.round(settings.endEarlySeconds ?? 0)}s early</p>
+        <p className="text-[9px] text-muted-foreground">Crossfade {Math.round(settings.crossfadeSeconds)}s</p>
+      </div>
     </div>
   );
 }
