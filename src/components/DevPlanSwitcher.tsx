@@ -5,8 +5,7 @@ import { Crown, User } from 'lucide-react';
 export function DevPlanSwitcher() {
   const { plan, setPlan } = usePlanStore();
 
-  // Only show in development
-  if (import.meta.env.PROD) return null;
+  // Show in development and preview (for testing)
 
   return (
     <div className="fixed top-3 right-3 z-[100] flex items-center gap-2 px-3 py-2 rounded-xl bg-background/90 backdrop-blur-md border border-border shadow-lg">
