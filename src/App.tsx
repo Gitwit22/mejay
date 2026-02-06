@@ -65,13 +65,20 @@ const shouldRedirectToWelcomeOnMount = () => {
   }
 };
 
+// Guard against redirect loops:
+// If the app hard-reloads on /app, we bounce to /. After that bounce, the user
+// should still be able to navigate to /app in-app without being sent back again.
+// This flag resets on the next full document load.
+let didRedirectFromAppReloadThisDocument = false;
+
 const AppShellLayout = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
     // User request: refresh should land on the Welcome page.
     // We only do this on *hard reload* of /app, not normal in-app navigation.
-    if (shouldRedirectToWelcomeOnMount()) {
+    if (!didRedirectFromAppReloadThisDocument && shouldRedirectToWelcomeOnMount()) {
+      didRedirectFromAppReloadThisDocument = true;
       navigate("/", { replace: true });
     }
   }, [navigate]);

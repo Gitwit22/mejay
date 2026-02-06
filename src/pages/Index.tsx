@@ -54,14 +54,10 @@ const Index = () => {
   return (
     <div className="mejay-screen relative mejay-viewport flex flex-col">
       {/* Dev Plan Switcher */}
-      <div className={cn(activeTab === 'party' && 'hidden lg:block')}>
-        <DevPlanSwitcher />
-      </div>
+      <DevPlanSwitcher />
 
       {/* Settings Menu */}
-      <div className={cn(activeTab === 'party' && 'hidden lg:block')}>
-        <TopRightSettingsMenu className="mejay-fixed-right" />
-      </div>
+      <TopRightSettingsMenu className="mejay-fixed-right" />
 
       {/* Upgrade Modal */}
       <UpgradeModal />
@@ -74,10 +70,11 @@ const Index = () => {
       {/* Main Content */}
       <div
         className={cn(
-          'relative z-10 flex flex-col flex-1 min-h-0 overflow-hidden',
+          'relative z-10 flex flex-col flex-1 min-h-0 px-5 overflow-hidden',
+          // Party mode must never scroll on mobile; reserve space for the fixed tab bar.
           activeTab === 'party'
-            ? 'p-0 lg:px-5 lg:pt-3 lg:pb-[calc(84px+env(safe-area-inset-bottom,0)+12px)]'
-            : 'px-5 pt-14'
+            ? 'pt-3 pb-[calc(84px+env(safe-area-inset-bottom,0)+12px)]'
+            : 'pt-14'
         )}
       >
         {/* Logo Header (hide in Party Mode to maximize usable viewport) */}
@@ -92,15 +89,13 @@ const Index = () => {
         {/* Tab Content */}
         <div className="flex-1 min-h-0 overflow-hidden">
           {activeTab === 'library' && <LibraryView />}
-          {activeTab === 'party' && <PartyModeView onExit={() => setActiveTab('library')} />}
+          {activeTab === 'party' && <PartyModeView />}
           {activeTab === 'playlists' && <PlaylistsView />}
         </div>
       </div>
 
       {/* Tab Bar */}
-      <div className={cn(activeTab === 'party' && 'hidden lg:block')}>
-        <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
-      </div>
+      <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
     </div>
   );
 };

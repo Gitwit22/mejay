@@ -1,1 +1,3 @@
-/*  /index.html  200
+# Intentionally empty.
+# Cloudflare Pages already defaults to SPA rendering when no top-level 404.html exists.
+# Routing config (if needed later): see /_routes.json

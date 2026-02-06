@@ -20,8 +20,6 @@ import { MixControls } from './party/MixControls';
 import { TempoControls } from './party/TempoControls';
 import { VolumeControls } from './party/VolumeControls';
 import { PartySourceChooser } from './party/PartySourceChooser';
-import { PartyDeck } from './party/PartyDeck';
-import { PartyTransportControls } from './party/PartyTransportControls';
 import {
   Drawer,
   DrawerContent,
@@ -31,11 +29,7 @@ import {
 
 type PanelView = 'queue' | 'settings';
 
-type PartyModeViewProps = {
-  onExit?: () => void;
-};
-
-export function PartyModeView({ onExit }: PartyModeViewProps) {
+export function PartyModeView() {
   const [activePanel, setActivePanel] = useState<PanelView>('queue');
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<PanelView>('queue');
@@ -72,13 +66,7 @@ export function PartyModeView({ onExit }: PartyModeViewProps) {
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
       {/* Header */}
-      <div
-        className={cn(
-          'flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3 flex-shrink-0',
-          // Mobile Play screen contract: nothing above the decks.
-          isPartyMode && 'hidden lg:flex'
-        )}
-      >
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3 flex-shrink-0">
         <div>
           <span className="text-[11px] text-muted-foreground uppercase tracking-[2px]">Auto DJ</span>
           <h2 className="text-[22px] sm:text-[24px] font-bold text-gradient-accent">Party Mode</h2>
@@ -95,7 +83,6 @@ export function PartyModeView({ onExit }: PartyModeViewProps) {
             </div>
           )}
         </div>
-        
         {/* Panel Toggle */}
         {isPartyMode && (
           <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
@@ -154,11 +141,7 @@ export function PartyModeView({ onExit }: PartyModeViewProps) {
                     </div>
 
                     <DialogFooter>
-                      <Button
-                        variant="secondary"
-                        onClick={() => setSaveOpen(false)}
-                        type="button"
-                      >
+                      <Button variant="secondary" onClick={() => setSaveOpen(false)} type="button">
                         Cancel
                       </Button>
                       <Button
@@ -277,48 +260,26 @@ export function PartyModeView({ onExit }: PartyModeViewProps) {
         <PartySourceChooser />
       ) : (
         <div className="flex-1 min-h-0 overflow-hidden">
-          {/* Mobile: 2 decks with good minimum size; allow scroll if a phone is too short. */}
-          <div className="lg:hidden h-[100dvh] overflow-y-auto overscroll-contain">
-            <div className="min-h-[100dvh] flex flex-col">
-              <PartyDeck deck="A" className="flex-1 min-h-[50dvh] border-b border-white/10" />
-              <PartyDeck
-                deck="B"
-                className="flex-1 min-h-[50dvh]"
-                footer={
-                  <PartyTransportControls
-                    onExit={onExit}
-                    onOpenQueue={() => {
-                      setMobilePanel('queue');
-                      setMobilePanelOpen(true);
-                    }}
-                    onOpenSettings={() => {
-                      setMobilePanel('settings');
-                      setMobilePanelOpen(true);
-                    }}
-                  />
-                }
-              />
-            </div>
+          {/* Mobile: play area only (no inline scroll). */}
+          <div className="lg:hidden h-full overflow-hidden">
+            <NowPlaying />
           </div>
 
           {/* Desktop: split layout with internal scrolling columns. */}
-          <div className="hidden lg:grid flex-1 h-full grid-cols-2 grid-rows-1 gap-4 min-h-0 overflow-hidden">
+          <div className="hidden lg:grid flex-1 grid-cols-2 gap-4 min-h-0 overflow-hidden">
             <div className="flex flex-col gap-4 overflow-y-auto scrollbar-thin pr-1 min-h-0">
               <NowPlaying />
             </div>
 
-            {/* Right-side panel: make the panel itself the scroll container (avoid nested scroll). */}
-            <div className="flex flex-col min-h-0 h-full overflow-hidden">
+            <div className="flex flex-col gap-4 overflow-y-auto scrollbar-thin pr-1 min-h-0">
               {activePanel === 'queue' ? (
-                <div className="flex-1 min-h-0 overflow-hidden">
-                  <PartyQueuePanel />
-                </div>
+                <PartyQueuePanel />
               ) : (
-                <div className="flex-1 min-h-0 overflow-y-auto space-y-4 scrollbar-thin pr-1">
+                <>
                   <VolumeControls />
                   <MixControls />
                   <TempoControls />
-                </div>
+                </>
               )}
             </div>
           </div>
