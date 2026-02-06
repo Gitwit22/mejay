@@ -89,7 +89,7 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   }
 
   return (
-    <div className={cn('fixed top-16 right-3 z-[120]', className)}>
+    <div className={cn('fixed top-3 sm:top-16 right-3 z-[120]', className)}>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetTrigger asChild>
           <button

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ListMusic, Music, Library, Settings, X } from 'lucide-react';
+import { ListMusic, Music, Library, Settings } from 'lucide-react';
 import { useDJStore } from '@/stores/djStore';
 import { cn } from '@/lib/utils';
 import { Switch } from '@/components/ui/switch';
@@ -20,13 +20,12 @@ import { MixControls } from './party/MixControls';
 import { TempoControls } from './party/TempoControls';
 import { VolumeControls } from './party/VolumeControls';
 import { PartySourceChooser } from './party/PartySourceChooser';
-import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 
 type PanelView = 'queue' | 'settings';
 
 export function PartyModeView() {
   const [activePanel, setActivePanel] = useState<PanelView>('queue');
-  const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [playlistName, setPlaylistName] = useState('');
 
@@ -216,77 +215,46 @@ export function PartyModeView() {
         <PartySourceChooser />
       ) : (
         <div className="flex-1 min-h-0">
-          {/* Mobile: one-plane scroll with a simple panel switcher (no drawers). */}
+          {/* Mobile: single-column scroll with collapsible sections. */}
           <div className="lg:hidden space-y-4">
             <NowPlaying />
 
-            <div className="flex items-center gap-1 p-1 rounded-xl bg-white/5">
-              <button
-                onClick={() => {
-                  setActivePanel('queue');
-                  setMobilePanelOpen(true);
-                }}
-                className={cn(
-                  'flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all',
-                  activePanel === 'queue'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-                type="button"
-              >
-                <ListMusic className="w-3.5 h-3.5" />
-                Queue
-                {upcomingCount > 0 && (
-                  <span className="ml-1 px-1.5 py-0.5 rounded-full bg-white/20 text-[10px]">
-                    {upcomingCount}
-                  </span>
-                )}
-              </button>
-              <button
-                onClick={() => {
-                  setActivePanel('settings');
-                  setMobilePanelOpen(true);
-                }}
-                className={cn(
-                  'flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all',
-                  activePanel === 'settings'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-                type="button"
-              >
-                <Settings className="w-3.5 h-3.5" />
-                Settings
-              </button>
-            </div>
-
-            <Drawer open={mobilePanelOpen} onOpenChange={setMobilePanelOpen} dismissible={false}>
-              <DrawerContent className="mejay-drawer">
-                <DrawerHeader className="pb-2 flex items-center justify-between">
-                  <DrawerTitle>{activePanel === 'queue' ? 'Queue' : 'Settings'}</DrawerTitle>
-                  <button
-                    type="button"
-                    className="h-9 w-9 rounded-lg flex items-center justify-center hover:bg-white/10"
-                    aria-label="Close"
-                    onClick={() => setMobilePanelOpen(false)}
-                  >
-                    <X className="h-5 w-5" />
-                  </button>
-                </DrawerHeader>
-
-                <div className="flex-1 min-h-0 overflow-y-scroll scrollbar-thin space-y-4 px-4 pb-[calc(env(safe-area-inset-bottom,0)+16px)]">
-                  {activePanel === 'queue' ? (
+            <div className="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm overflow-hidden">
+              <Accordion type="multiple" defaultValue={['queue']} className="w-full">
+                <AccordionItem value="queue" className="border-b border-white/10">
+                  <AccordionTrigger className="px-4 py-3 hover:no-underline">
+                    <div className="flex items-center gap-2 text-sm font-semibold">
+                      <ListMusic className="w-4 h-4 text-muted-foreground" />
+                      <span>Queue</span>
+                      {upcomingCount > 0 && (
+                        <span className="ml-1 px-1.5 py-0.5 rounded-full bg-white/10 text-[10px] text-muted-foreground">
+                          {upcomingCount}
+                        </span>
+                      )}
+                    </div>
+                  </AccordionTrigger>
+                  <AccordionContent className="px-4 pt-0 pb-4">
                     <PartyQueuePanel />
-                  ) : (
-                    <>
+                  </AccordionContent>
+                </AccordionItem>
+
+                <AccordionItem value="settings" className="border-b-0">
+                  <AccordionTrigger className="px-4 py-3 hover:no-underline">
+                    <div className="flex items-center gap-2 text-sm font-semibold">
+                      <Settings className="w-4 h-4 text-muted-foreground" />
+                      <span>Settings</span>
+                    </div>
+                  </AccordionTrigger>
+                  <AccordionContent className="px-4 pt-0 pb-4">
+                    <div className="space-y-4">
                       <VolumeControls />
                       <MixControls />
                       <TempoControls />
-                    </>
-                  )}
-                </div>
-              </DrawerContent>
-            </Drawer>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+            </div>
           </div>
 
           {/* Desktop: split layout with internal scrolling columns. */}
