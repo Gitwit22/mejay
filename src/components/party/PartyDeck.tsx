@@ -7,9 +7,10 @@ import {cn, formatDuration} from '@/lib/utils'
 type PartyDeckProps = {
   deck: 'A' | 'B'
   className?: string
+  footer?: React.ReactNode
 }
 
-export function PartyDeck({deck, className}: PartyDeckProps) {
+export function PartyDeck({deck, className, footer}: PartyDeckProps) {
   const {tracks, deckA, deckB, activeDeck, settings} = useDJStore()
 
   const deckState = deck === 'A' ? deckA : deckB
@@ -31,7 +32,7 @@ export function PartyDeck({deck, className}: PartyDeckProps) {
   return (
     <section
       className={cn(
-        'h-full min-h-0 overflow-hidden',
+        'min-h-0 overflow-x-hidden',
         // Deck internal layout contract
         'flex flex-col',
         // Visuals
@@ -90,15 +91,23 @@ export function PartyDeck({deck, className}: PartyDeckProps) {
       </div>
 
       {/* Deck controls (small + non-scrolling) */}
-      <div className="shrink-0 px-3 pb-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-[10px] text-muted-foreground">
-            Pitch: <span className="text-foreground font-medium">{((deckState.playbackRate - 1) * 100).toFixed(1)}%</span>
+      <div
+        className={cn(
+          'shrink-0 px-3',
+          footer ? 'pb-[calc(env(safe-area-inset-bottom,0)+12px)]' : 'pb-3'
+        )}
+      >
+        {footer ? (
+          <div className="pt-1 flex justify-center">{footer}</div>
+        ) : (
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-[10px] text-muted-foreground">
+              Pitch:{' '}
+              <span className="text-foreground font-medium">{((deckState.playbackRate - 1) * 100).toFixed(1)}%</span>
+            </div>
+            <div className="text-[10px] text-muted-foreground">{deckState.isPlaying ? 'Playing' : 'Paused'}</div>
           </div>
-          <div className="text-[10px] text-muted-foreground">
-            {deckState.isPlaying ? 'Playing' : 'Paused'}
-          </div>
-        </div>
+        )}
       </div>
     </section>
   )

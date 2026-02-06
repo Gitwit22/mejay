@@ -8,7 +8,7 @@ export function DevPlanSwitcher() {
   // Show in development and preview (for testing)
 
   return (
-    <div className="fixed top-3 right-3 mejay-fixed-right z-[100] flex items-center gap-2 px-3 py-2 rounded-xl bg-background/90 backdrop-blur-md border border-border shadow-lg">
+    <div className="fixed top-3 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-2 px-3 py-2 rounded-xl bg-background/90 backdrop-blur-md border border-border shadow-lg">
       <span className="text-[10px] text-muted-foreground uppercase tracking-wider mr-1">Dev</span>
       <button
         onClick={() => setPlan('free')}

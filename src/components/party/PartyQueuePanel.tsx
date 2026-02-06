@@ -55,7 +55,7 @@ export function PartyQueuePanel() {
   };
 
   return (
-    <div className="glass-card h-full flex flex-col">
+    <div className="glass-card flex flex-col min-h-0 h-full">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-semibold text-foreground">Playlist</h3>
@@ -94,7 +94,7 @@ export function PartyQueuePanel() {
       </div>
 
       {/* Track List */}
-      <div ref={listRef} className="flex-1 overflow-y-auto space-y-1 scrollbar-thin">
+      <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto space-y-1 scrollbar-thin">
         {partyTracks.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground text-sm">
             No tracks in playlist

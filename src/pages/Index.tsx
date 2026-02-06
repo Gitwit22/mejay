@@ -75,7 +75,9 @@ const Index = () => {
       <div
         className={cn(
           'relative z-10 flex flex-col flex-1 min-h-0 overflow-hidden',
-          activeTab === 'party' ? 'p-0' : 'px-5 pt-14'
+          activeTab === 'party'
+            ? 'p-0 lg:px-5 lg:pt-3 lg:pb-[calc(84px+env(safe-area-inset-bottom,0)+12px)]'
+            : 'px-5 pt-14'
         )}
       >
         {/* Logo Header (hide in Party Mode to maximize usable viewport) */}

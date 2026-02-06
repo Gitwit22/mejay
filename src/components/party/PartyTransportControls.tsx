@@ -60,19 +60,21 @@ export function PartyTransportControls({className, onExit, onOpenQueue, onOpenSe
       className={cn(
         'pointer-events-auto',
         'rounded-full border border-white/10 bg-background/70 backdrop-blur-xl shadow-[0_18px_60px_rgba(0,0,0,0.55)]',
-        'px-3 py-2',
+        // Ensure the transport never wraps into a "strip" that breaks layout.
+        'max-w-[calc(100vw-24px)] overflow-hidden',
+        'px-2 py-2',
         className,
       )}
       role="group"
       aria-label="Transport controls"
     >
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5 flex-nowrap">
         {/* Exit */}
         {onExit && (
           <button
             type="button"
             onClick={onExit}
-            className="h-11 w-11 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition-colors flex items-center justify-center"
+            className="h-10 w-10 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition-colors flex items-center justify-center"
             aria-label="Exit Party Mode"
             title="Exit"
           >
@@ -84,7 +86,7 @@ export function PartyTransportControls({className, onExit, onOpenQueue, onOpenSe
         <button
           type="button"
           onClick={onOpenQueue}
-          className="h-11 w-11 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition-colors flex items-center justify-center"
+          className="h-10 w-10 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition-colors flex items-center justify-center"
           aria-label="Open queue"
         >
           <ListMusic className="h-5 w-5" />
@@ -93,7 +95,7 @@ export function PartyTransportControls({className, onExit, onOpenQueue, onOpenSe
         <button
           type="button"
           onClick={onOpenSettings}
-          className="h-11 w-11 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition-colors flex items-center justify-center"
+          className="h-10 w-10 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition-colors flex items-center justify-center"
           aria-label="Open settings"
         >
           <Settings className="h-5 w-5" />
@@ -106,7 +108,7 @@ export function PartyTransportControls({className, onExit, onOpenQueue, onOpenSe
           onPointerCancel={clearBackTimer}
           onPointerLeave={clearBackTimer}
           onContextMenu={(e) => e.preventDefault()}
-          className={cn('ctrl-btn ctrl-secondary !w-11 !h-11')}
+          className={cn('ctrl-btn ctrl-secondary !w-10 !h-10')}
           title="Back (tap) / Restart (hold)"
           type="button"
         >
@@ -115,7 +117,10 @@ export function PartyTransportControls({className, onExit, onOpenQueue, onOpenSe
 
         <button
           onClick={() => updateUserSettings({shuffleEnabled: !settings.shuffleEnabled})}
-          className={cn('ctrl-btn ctrl-secondary !w-11 !h-11', settings.shuffleEnabled && 'ring-2 ring-primary')}
+          className={cn(
+            'ctrl-btn ctrl-secondary !w-10 !h-10 max-[380px]:hidden',
+            settings.shuffleEnabled && 'ring-2 ring-primary'
+          )}
           title={settings.shuffleEnabled ? 'Shuffle On' : 'Shuffle Off'}
           type="button"
         >
@@ -124,7 +129,7 @@ export function PartyTransportControls({className, onExit, onOpenQueue, onOpenSe
 
         <button
           onClick={() => togglePlayPause()}
-          className={cn('ctrl-btn ctrl-primary !w-14 !h-14')}
+          className={cn('ctrl-btn ctrl-primary !w-12 !h-12')}
           type="button"
         >
           {currentDeck.isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6 ml-0.5" />}
@@ -132,7 +137,7 @@ export function PartyTransportControls({className, onExit, onOpenQueue, onOpenSe
 
         <button
           onClick={() => skip('user')}
-          className={cn('ctrl-btn ctrl-secondary !w-11 !h-11')}
+          className={cn('ctrl-btn ctrl-secondary !w-10 !h-10')}
           disabled={!hasMoreTracks}
           title="Skip"
           type="button"
@@ -142,7 +147,10 @@ export function PartyTransportControls({className, onExit, onOpenQueue, onOpenSe
 
         <button
           onClick={() => updateUserSettings({loopPlaylist: !settings.loopPlaylist})}
-          className={cn('ctrl-btn ctrl-secondary !w-11 !h-11', settings.loopPlaylist && 'ring-2 ring-accent')}
+          className={cn(
+            'ctrl-btn ctrl-secondary !w-10 !h-10 max-[380px]:hidden',
+            settings.loopPlaylist && 'ring-2 ring-accent'
+          )}
           title={settings.loopPlaylist ? 'Loop On' : 'Loop Off'}
           type="button"
         >

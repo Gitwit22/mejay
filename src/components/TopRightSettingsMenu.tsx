@@ -100,13 +100,16 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
           </button>
         </SheetTrigger>
 
-        <SheetContent side="right" className="w-[92vw] sm:w-[420px] sm:max-w-md flex flex-col">
-          <SheetHeader>
+        <SheetContent
+          side="right"
+          className="w-[92vw] sm:w-[420px] sm:max-w-md flex flex-col h-[100dvh] max-h-[100dvh] min-h-0 overflow-hidden"
+        >
+          <SheetHeader className="shrink-0">
             <SheetTitle>Setup</SheetTitle>
             <SheetDescription>Account, device, and local settings</SheetDescription>
           </SheetHeader>
 
-          <div className="mt-5 flex-1 overflow-y-auto space-y-6 pr-1 pb-6">
+          <div className="mt-5 flex-1 min-h-0 overflow-y-auto space-y-6 pr-1 pb-6">
             {/* A) Status header */}
             <div className="space-y-3">
               <div className="text-xs font-semibold tracking-wide uppercase text-muted-foreground">Status</div>

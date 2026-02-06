@@ -277,42 +277,48 @@ export function PartyModeView({ onExit }: PartyModeViewProps) {
         <PartySourceChooser />
       ) : (
         <div className="flex-1 min-h-0 overflow-hidden">
-          {/* Mobile: Play screen contract (100dvh, 2 decks, floating transport, no scroll). */}
-          <div className="lg:hidden relative h-[100dvh] overflow-hidden flex flex-col">
-            <div className="flex-1 min-h-0 grid grid-rows-2">
-              <PartyDeck deck="A" className="h-full border-b border-white/10" />
-              <PartyDeck deck="B" className="h-full" />
-            </div>
-
-            <div className="fixed bottom-[calc(env(safe-area-inset-bottom,0)+16px)] left-1/2 -translate-x-1/2 z-50">
-              <PartyTransportControls
-                onExit={onExit}
-                onOpenQueue={() => {
-                  setMobilePanel('queue');
-                  setMobilePanelOpen(true);
-                }}
-                onOpenSettings={() => {
-                  setMobilePanel('settings');
-                  setMobilePanelOpen(true);
-                }}
+          {/* Mobile: 2 decks with good minimum size; allow scroll if a phone is too short. */}
+          <div className="lg:hidden h-[100dvh] overflow-y-auto overscroll-contain">
+            <div className="min-h-[100dvh] flex flex-col">
+              <PartyDeck deck="A" className="flex-1 min-h-[50dvh] border-b border-white/10" />
+              <PartyDeck
+                deck="B"
+                className="flex-1 min-h-[50dvh]"
+                footer={
+                  <PartyTransportControls
+                    onExit={onExit}
+                    onOpenQueue={() => {
+                      setMobilePanel('queue');
+                      setMobilePanelOpen(true);
+                    }}
+                    onOpenSettings={() => {
+                      setMobilePanel('settings');
+                      setMobilePanelOpen(true);
+                    }}
+                  />
+                }
               />
             </div>
           </div>
 
           {/* Desktop: split layout with internal scrolling columns. */}
-          <div className="hidden lg:grid flex-1 grid-cols-2 gap-4 min-h-0 overflow-hidden">
+          <div className="hidden lg:grid flex-1 h-full grid-cols-2 grid-rows-1 gap-4 min-h-0 overflow-hidden">
             <div className="flex flex-col gap-4 overflow-y-auto scrollbar-thin pr-1 min-h-0">
               <NowPlaying />
             </div>
-            <div className="flex flex-col gap-4 overflow-y-auto scrollbar-thin pr-1 min-h-0">
+
+            {/* Right-side panel: make the panel itself the scroll container (avoid nested scroll). */}
+            <div className="flex flex-col min-h-0 h-full overflow-hidden">
               {activePanel === 'queue' ? (
-                <PartyQueuePanel />
+                <div className="flex-1 min-h-0 overflow-hidden">
+                  <PartyQueuePanel />
+                </div>
               ) : (
-                <>
+                <div className="flex-1 min-h-0 overflow-y-auto space-y-4 scrollbar-thin pr-1">
                   <VolumeControls />
                   <MixControls />
                   <TempoControls />
-                </>
+                </div>
               )}
             </div>
           </div>

@@ -283,6 +283,11 @@
   .mejay-fixed-right {
     right: calc(var(--mejay-mobile-gutter) + 0.75rem) !important;
   }
+
+  /* Align fixed top-left controls to the same gutter */
+  .mejay-fixed-left {
+    left: calc(var(--mejay-mobile-gutter) + 0.75rem) !important;
+  }
   
   /* Energy Toggle */
   .energy-toggle {
