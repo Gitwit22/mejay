@@ -249,7 +249,7 @@
   
   /* Tab Bar */
   .tab-bar {
-    @apply fixed bottom-0 h-[84px] flex justify-around items-start pt-3 z-50;
+    @apply fixed bottom-0 h-[84px] flex justify-around items-start pt-3 z-40;
     background: hsl(248 12% 6% / 0.95);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
