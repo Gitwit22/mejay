@@ -70,14 +70,6 @@
   }
 }
 
-@media (max-width: 640px) {
-  :root {
-    /* Slight inset on mobile to avoid edge-to-edge overflow and to give a tiny
-       "grab" area for whole-screen scrolling. */
-    --mejay-mobile-gutter: 6px;
-  }
-}
-
 @layer base {
   * {
     @apply border-border;
