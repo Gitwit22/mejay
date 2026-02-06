@@ -3,6 +3,12 @@ import { useState, useRef } from 'react';
 import { useDJStore } from '@/stores/djStore';
 import { cn, formatDuration } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 export function LibraryView() {
   const { 
@@ -17,7 +23,6 @@ export function LibraryView() {
     createPlaylist,
   } = useDJStore();
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeMenuTrackId, setActiveMenuTrackId] = useState<string | null>(null);
   const [showAddToPlaylist, setShowAddToPlaylist] = useState<string | null>(null);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [playlistSearchQuery, setPlaylistSearchQuery] = useState('');
@@ -58,7 +63,6 @@ export function LibraryView() {
       description: `Track added to "${playlist?.name}"`,
     });
     setShowAddToPlaylist(null);
-    setActiveMenuTrackId(null);
   };
 
   const handleCreateAndAdd = async (trackId: string) => {
@@ -75,7 +79,6 @@ export function LibraryView() {
     }
     setNewPlaylistName('');
     setShowAddToPlaylist(null);
-    setActiveMenuTrackId(null);
   };
 
   return (
@@ -116,7 +119,7 @@ export function LibraryView() {
       </div>
 
       {/* Track List */}
-      <div className="flex flex-col gap-2 flex-1 overflow-y-auto pb-4">
+      <div className="flex flex-col gap-2 flex-1 overflow-y-auto pb-[calc(84px+env(safe-area-inset-bottom,0)+24px)]">
         {isLoadingTracks ? (
           <div className="flex items-center justify-center py-10">
             <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -171,42 +174,37 @@ export function LibraryView() {
                 ) : null}
                 
                 {/* 3-dot menu */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setActiveMenuTrackId(activeMenuTrackId === track.id ? null : track.id);
-                  }}
-                  className="p-2 rounded-lg transition-opacity hover:bg-white/10"
-                >
-                  <MoreVertical className="w-4 h-4 text-muted-foreground" />
-                </button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      onClick={(e) => e.stopPropagation()}
+                      className="p-2 rounded-lg transition-opacity hover:bg-white/10"
+                      aria-label="Track actions"
+                    >
+                      <MoreVertical className="w-4 h-4 text-muted-foreground" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                    <DropdownMenuItem onSelect={() => setShowAddToPlaylist(track.id)}>
+                      <span className="flex items-center gap-2">
+                        <ListPlus className="w-4 h-4" />
+                        Add to Playlist...
+                      </span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      className="text-destructive focus:text-destructive"
+                      onSelect={() => {
+                        deleteTrackById(track.id);
+                      }}
+                    >
+                      <span className="flex items-center gap-2">
+                        <X className="w-4 h-4" />
+                        Delete
+                      </span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
-
-              {/* Dropdown Menu */}
-              {activeMenuTrackId === track.id && (
-                <div 
-                  className="absolute right-2 top-full mt-1 z-50 glass-card !p-2 min-w-[180px] animate-fade-in"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <button
-                    onClick={() => setShowAddToPlaylist(track.id)}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm hover:bg-white/10 transition-colors"
-                  >
-                    <ListPlus className="w-4 h-4" />
-                    Add to Playlist...
-                  </button>
-                  <button
-                    onClick={() => {
-                      deleteTrackById(track.id);
-                      setActiveMenuTrackId(null);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-destructive hover:bg-destructive/10 transition-colors"
-                  >
-                    <X className="w-4 h-4" />
-                    Delete
-                  </button>
-                </div>
-              )}
             </div>
           ))
         )}
@@ -218,7 +216,6 @@ export function LibraryView() {
           className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50"
           onClick={() => {
             setShowAddToPlaylist(null);
-            setActiveMenuTrackId(null);
           }}
         >
           <div 
@@ -230,7 +227,6 @@ export function LibraryView() {
               <button
                 onClick={() => {
                   setShowAddToPlaylist(null);
-                  setActiveMenuTrackId(null);
                 }}
                 className="p-1 rounded-lg hover:bg-white/10"
               >
@@ -313,14 +309,6 @@ export function LibraryView() {
             </div>
           </div>
         </div>
-      )}
-
-      {/* Click outside to close menu */}
-      {activeMenuTrackId && !showAddToPlaylist && (
-        <div 
-          className="fixed inset-0 z-40"
-          onClick={() => setActiveMenuTrackId(null)}
-        />
       )}
     </div>
   );

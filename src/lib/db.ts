@@ -1,4 +1,6 @@
-import { openDB, DBSchema, IDBPDatabase } from 'idb';
+import { openDB, deleteDB, DBSchema, IDBPDatabase } from 'idb';
+
+export const MEJAY_DB_NAME = 'me-jay-db';
 
 export interface Track {
   id: string;
@@ -77,7 +79,7 @@ export async function getDB(): Promise<IDBPDatabase<MeJayDB>> {
 
   try {
     console.log('[DB] Opening IndexedDB...');
-    dbInstance = await openDB<MeJayDB>('me-jay-db', 2, {
+    dbInstance = await openDB<MeJayDB>(MEJAY_DB_NAME, 2, {
       upgrade(db, oldVersion, newVersion) {
         console.log('[DB] Upgrading from version', oldVersion, 'to', newVersion);
         
@@ -121,6 +123,22 @@ export async function getDB(): Promise<IDBPDatabase<MeJayDB>> {
     console.error('[DB] Failed to open database:', error);
     throw error;
   }
+}
+
+export async function resetLocalDatabase(): Promise<void> {
+  try {
+    dbInstance?.close();
+  } catch {
+    // ignore
+  }
+
+  dbInstance = null;
+
+  await deleteDB(MEJAY_DB_NAME, {
+    blocked() {
+      console.warn('[DB] Delete blocked - close other tabs');
+    },
+  });
 }
 
 // Track operations

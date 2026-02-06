@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Track, Settings, getAllTracks, getSettings, addTrack, updateTrack, deleteTrack, updateSettings, generateId, getAllPlaylists, Playlist, addPlaylist, updatePlaylist, deletePlaylist, PartySource } from '@/lib/db';
+import { Track, Settings, getAllTracks, getSettings, addTrack, updateTrack, deleteTrack, updateSettings, generateId, getAllPlaylists, Playlist, addPlaylist, updatePlaylist, deletePlaylist, PartySource, resetLocalDatabase } from '@/lib/db';
 import { audioEngine, DeckId } from '@/lib/audioEngine';
 import { analyzeBPM } from '@/lib/bpmDetector';
 import { usePlanStore } from '@/stores/planStore';
@@ -87,6 +87,9 @@ interface DJState {
   
   // Settings
   updateUserSettings: (updates: Partial<Settings>) => Promise<void>;
+
+  // Local data reset
+  resetLocalData: () => Promise<void>;
   
   // Playlists
   createPlaylist: (name: string) => Promise<void>;
@@ -125,6 +128,25 @@ export const useDJStore = create<DJState>((set, get) => {
   };
 
   const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+  const defaultSettings: Settings = {
+    crossfadeSeconds: 8,
+    maxTempoPercent: 6,
+    energyMode: 'normal',
+    shuffleEnabled: false,
+    masterVolume: 0.9,
+    nextSongStartOffset: 15,
+    endEarlySeconds: 5,
+    mixTriggerMode: 'remaining',
+    mixTriggerSeconds: 20,
+    tempoMode: 'auto',
+    lockedBpm: 128,
+    autoVolumeMatch: true,
+    targetLoudness: 0.7,
+    limiterEnabled: true,
+    limiterStrength: 'medium',
+    loopPlaylist: true,
+  };
 
   const getEnergyProfile = (energyMode: Settings['energyMode']) => {
     switch (energyMode) {
@@ -285,24 +307,7 @@ export const useDJStore = create<DJState>((set, get) => {
     pendingNextIndex: null,
     pendingSourceSwitch: null,
     queuedSourceSwitch: null,
-    settings: {
-      crossfadeSeconds: 8,
-      maxTempoPercent: 6,
-      energyMode: 'normal',
-      shuffleEnabled: false,
-      masterVolume: 0.9,
-      nextSongStartOffset: 15,
-      endEarlySeconds: 5,
-      mixTriggerMode: 'remaining',
-      mixTriggerSeconds: 20,
-      tempoMode: 'auto',
-      lockedBpm: 128,
-      autoVolumeMatch: true,
-      targetLoudness: 0.7,
-      limiterEnabled: true,
-      limiterStrength: 'medium',
-      loopPlaylist: true,
-    },
+    settings: defaultSettings,
     crossfadeValue: 0,
     mixInProgress: false,
 
@@ -331,6 +336,55 @@ export const useDJStore = create<DJState>((set, get) => {
       audioEngine.setLimiterEnabled(settings.limiterEnabled);
       audioEngine.setLimiterStrength(settings.limiterStrength);
       audioEngine.setMasterVolume(settings.masterVolume ?? 0.9);
+    },
+
+    resetLocalData: async () => {
+      // Stop playback + timers first.
+      try {
+        get().stopPartyMode();
+      } catch {
+        // ignore
+      }
+      clearScheduledTimeouts();
+
+      try {
+        audioEngine.destroy();
+      } catch {
+        // ignore
+      }
+
+      // Clear persistent storage.
+      try {
+        await resetLocalDatabase();
+      } catch (error) {
+        console.error('[DJ Store] Failed to reset local database:', error);
+      }
+
+      try {
+        localStorage.removeItem('mejay:lastTab');
+      } catch {
+        // ignore
+      }
+
+      // Reset in-memory app state to a clean slate.
+      set({
+        tracks: [],
+        isLoadingTracks: false,
+        playlists: [],
+        deckA: { ...initialDeckState },
+        deckB: { ...initialDeckState },
+        activeDeck: 'A',
+        isPartyMode: false,
+        partySource: null,
+        partyTrackIds: [],
+        nowPlayingIndex: 0,
+        pendingNextIndex: null,
+        pendingSourceSwitch: null,
+        queuedSourceSwitch: null,
+        crossfadeValue: 0,
+        mixInProgress: false,
+        settings: defaultSettings,
+      });
     },
 
     importTracks: async (files: FileList) => {

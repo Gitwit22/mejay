@@ -111,7 +111,7 @@ export function PlaylistsView() {
     if (playlist && playlist.trackIds.length > 0) {
       await startPartyMode({ type: 'playlist', playlistId });
       // Navigate to party mode tab
-      navigate('/?tab=party');
+      navigate('/app?tab=party');
     }
   };
 
@@ -163,7 +163,7 @@ export function PlaylistsView() {
         </div>
 
         {/* Track List */}
-        <div className="flex flex-col gap-2 flex-1 overflow-y-auto pb-4">
+        <div className="flex flex-col gap-2 flex-1 overflow-y-auto pb-[calc(84px+env(safe-area-inset-bottom,0)+24px)]">
           {playlistTracks.length === 0 ? (
             <div className="text-center py-10">
               <Music className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
@@ -194,26 +194,26 @@ export function PlaylistsView() {
       </div>
 
       {/* Playlist Grid */}
-      <div className="grid grid-cols-2 gap-3 flex-1 overflow-y-auto pb-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 flex-1 overflow-y-auto pb-[calc(84px+env(safe-area-inset-bottom,0)+24px)]">
         {/* Create Playlist Button */}
         <button
           onClick={() => setShowCreateDialog(true)}
-          className="create-playlist-btn"
+          className="create-playlist-btn !py-4 !gap-1.5"
         >
-          <Plus className="w-8 h-8" />
-          <span className="text-xs font-medium">Create Party Set</span>
+          <Plus className="w-6 h-6" />
+          <span className="text-[11px] font-medium">Create Party Set</span>
         </button>
 
         {/* Playlists */}
         {playlists.map((playlist) => (
           <div
             key={playlist.id}
-            className="playlist-card group relative"
+            className="playlist-card group relative !p-2"
           >
             {/* Cover Art Grid */}
             <div 
               onClick={() => setSelectedPlaylist(playlist.id)}
-              className="aspect-square rounded-xl mb-2.5 grid grid-cols-2 grid-rows-2 gap-0.5 overflow-hidden cursor-pointer"
+              className="aspect-square rounded-lg mb-2 grid grid-cols-2 grid-rows-2 gap-0.5 overflow-hidden cursor-pointer"
             >
               <div className="bg-gradient-to-br from-primary to-secondary" />
               <div className="bg-gradient-to-br from-secondary to-accent" />
@@ -221,8 +221,8 @@ export function PlaylistsView() {
               <div className="bg-gradient-to-br from-secondary to-primary" />
             </div>
 
-            <h5 className="text-sm font-semibold mb-0.5 truncate">{playlist.name}</h5>
-            <p className="text-[11px] text-muted-foreground">
+            <h5 className="text-[13px] font-semibold mb-0.5 truncate">{playlist.name}</h5>
+            <p className="text-[10px] text-muted-foreground">
               {playlist.trackIds.length} tracks
             </p>
 

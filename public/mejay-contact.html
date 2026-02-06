@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contact & Support - MEJay</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+            background: #0a0a0f;
+            color: #ffffff;
+            min-height: 100vh;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        /* Animated background gradients */
+        .bg-gradient {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(120px);
+            opacity: 0.3;
+            animation: float 25s infinite ease-in-out;
+            pointer-events: none;
+        }
+
+        .gradient-1 {
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, #ff006e 0%, transparent 70%);
+            top: -200px;
+            left: -100px;
+        }
+
+        .gradient-2 {
+            width: 500px;
+            height: 500px;
+            background: radial-gradient(circle, #8338ec 0%, transparent 70%);
+            bottom: -150px;
+            right: -100px;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33% { transform: translate(50px, -50px) scale(1.1); }
+            66% { transform: translate(-30px, 30px) scale(0.9); }
+        }
+
+        /* Header */
+        .header {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(10, 10, 15, 0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 1.5rem 0;
+        }
+
+        .header-content {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 0 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo-link {
+            display: flex;
+            align-items: center;
+            text-decoration: none;
+            gap: 0.75rem;
+        }
+
+        .logo-small {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #ff006e 0%, #8338ec 100%);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .logo-small svg {
+            width: 20px;
+            height: 20px;
+            fill: white;
+        }
+
+        .logo-text {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #ff006e 0%, #8338ec 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .back-link {
+            color: #8338ec;
+            text-decoration: none;
+            font-size: 0.95rem;
+            transition: color 0.3s ease;
+        }
+
+        .back-link:hover {
+            color: #ff006e;
+        }
+
+        /* Main content */
+        .main-content {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 4rem 2rem 6rem;
+            position: relative;
+            z-index: 10;
+        }
+
+        .hero {
+            text-align: center;
+            margin-bottom: 4rem;
+        }
+
+        .hero h1 {
+            font-size: 3rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #ff006e 0%, #8338ec 50%, #3a86ff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 1rem;
+        }
+
+        .hero-subtitle {
+            font-size: 1.25rem;
+            color: #b8b8d1;
+            line-height: 1.6;
+        }
+
+        /* Contact cards */
+        .contact-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .contact-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 20px;
+            padding: 2.5rem;
+            transition: all 0.3s ease;
+            text-align: center;
+        }
+
+        .contact-card:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 0, 110, 0.3);
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(255, 0, 110, 0.2);
+        }
+
+        .contact-icon {
+            width: 60px;
+            height: 60px;
+            margin: 0 auto 1.5rem;
+            background: linear-gradient(135deg, #ff006e 0%, #8338ec 100%);
+            border-radius: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.75rem;
+        }
+
+        .contact-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #ffffff;
+            margin-bottom: 0.75rem;
+        }
+
+        .contact-info {
+            font-size: 1.125rem;
+            color: #b8b8d1;
+            word-break: break-word;
+        }
+
+        .contact-info a {
+            color: #ff006e;
+            text-decoration: none;
+            transition: color 0.3s ease;
+        }
+
+        .contact-info a:hover {
+            color: #8338ec;
+        }
+
+        /* Support info boxes */
+        .support-section {
+            margin-bottom: 3rem;
+        }
+
+        .section-title {
+            font-size: 2rem;
+            font-weight: 600;
+            color: #ffffff;
+            margin-bottom: 1.5rem;
+            position: relative;
+            display: inline-block;
+        }
+
+        .section-title::after {
+            content: '';
+            position: absolute;
+            bottom: -6px;
+            left: 0;
+            width: 60%;
+            height: 3px;
+            background: linear-gradient(90deg, #ff006e, #8338ec);
+            border-radius: 2px;
+        }
+
+        .info-box {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 2rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .info-box-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #ffffff;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .info-box-content {
+            color: #b8b8d1;
+            font-size: 1.05rem;
+            line-height: 1.7;
+        }
+
+        .info-box-content p {
+            margin-bottom: 1rem;
+        }
+
+        .info-box-content ul {
+            padding-left: 1.5rem;
+            margin: 1rem 0;
+        }
+
+        .info-box-content li {
+            margin-bottom: 0.75rem;
+        }
+
+        .info-box-content strong {
+            color: #ffffff;
+        }
+
+        /* Checklist */
+        .checklist {
+            list-style: none;
+            padding: 0;
+        }
+
+        .checklist li {
+            padding: 0.875rem 0;
+            display: flex;
+            align-items: flex-start;
+            gap: 1rem;
+        }
+
+        .checklist li::before {
+            content: '✓';
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            background: rgba(255, 0, 110, 0.15);
+            color: #ff006e;
+            border-radius: 50%;
+            font-weight: bold;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+
+        /* Highlight box */
+        .highlight-box {
+            background: linear-gradient(135deg, rgba(255, 0, 110, 0.1) 0%, rgba(131, 56, 236, 0.1) 100%);
+            border: 1px solid rgba(255, 0, 110, 0.3);
+            border-radius: 16px;
+            padding: 2rem;
+            text-align: center;
+        }
+
+        .highlight-box-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #ffffff;
+            margin-bottom: 0.75rem;
+        }
+
+        .highlight-box-text {
+            font-size: 1.125rem;
+            color: #b8b8d1;
+            line-height: 1.6;
+        }
+
+        .email-button {
+            display: inline-block;
+            margin-top: 1.5rem;
+            padding: 1rem 2.5rem;
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: #ffffff;
+            background: linear-gradient(135deg, #ff006e 0%, #8338ec 100%);
+            border: none;
+            border-radius: 12px;
+            text-decoration: none;
+            transition: all 0.3s ease;
+        }
+
+        .email-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(255, 0, 110, 0.4);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 2.25rem;
+            }
+
+            .contact-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .main-content {
+                padding: 3rem 1.5rem 4rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Background gradients -->
+    <div class="bg-gradient gradient-1"></div>
+    <div class="bg-gradient gradient-2"></div>
+
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <a href="/" class="logo-link">
+                <div class="logo-small">
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+                    </svg>
+                </div>
+                <span class="logo-text">MEJay</span>
+            </a>
+            <a href="/" class="back-link">Back to Home</a>
+        </div>
+    </header>
+
+    <!-- Main content -->
+    <main class="main-content">
+        <div class="hero">
+            <h1>Contact & Support</h1>
+            <p class="hero-subtitle">
+                We're here to help. Reach out with questions, issues, or feedback.
+            </p>
+        </div>
+
+        <!-- Contact cards -->
+        <div class="contact-grid">
+            <div class="contact-card">
+                <div class="contact-icon">📧</div>
+                <div class="contact-title">Email Support</div>
+                <div class="contact-info">
+                    <a href="mailto:nxtlvltechllc@gmail.com">nxtlvltechllc@gmail.com</a>
+                </div>
+            </div>
+
+            <div class="contact-card">
+                <div class="contact-icon">🌐</div>
+                <div class="contact-title">Website</div>
+                <div class="contact-info">
+                    <a href="https://nxtlvlts.com" target="_blank" rel="noopener noreferrer">nxtlvlts.com</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Response time info -->
+        <div class="support-section">
+            <h2 class="section-title">What to Expect</h2>
+            <div class="info-box">
+                <div class="info-box-title">⏱️ Response Times</div>
+                <div class="info-box-content">
+                    <p>
+                        We aim to respond to all support inquiries as quickly as possible. Most emails receive a 
+                        response within <strong>1-2 business days</strong>.
+                    </p>
+                    <p>
+                        For urgent issues (license problems, payment issues, critical bugs), we prioritize those 
+                        and typically respond within 24 hours.
+                    </p>
+                    <p style="margin-bottom: 0;">
+                        <strong>Note:</strong> Response times may be longer during weekends and holidays.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Help us help you -->
+        <div class="support-section">
+            <h2 class="section-title">Help Us Help You</h2>
+            <div class="info-box">
+                <div class="info-box-title">📋 Include This Information</div>
+                <div class="info-box-content">
+                    <p>
+                        To help us resolve your issue quickly, please include the following in your support email:
+                    </p>
+                    <ul class="checklist">
+                        <li><strong>Browser and version</strong> (e.g., Chrome 120, Safari 17, Firefox 121)</li>
+                        <li><strong>Device type</strong> (e.g., Windows 11 laptop, iPhone 15, MacBook Pro)</li>
+                        <li><strong>What page or feature</strong> you were using when the issue occurred</li>
+                        <li><strong>Screenshot or screen recording</strong> if applicable</li>
+                        <li><strong>Steps to reproduce</strong> the problem (what did you click/do?)</li>
+                    </ul>
+                    <div style="margin-top: 1.5rem; padding: 1.25rem; background: rgba(255, 0, 110, 0.05); border-radius: 12px; border-left: 4px solid #ff006e;">
+                        <strong>For licensing issues:</strong> Include the last 4 characters of your license key 
+                        (never share the full key publicly).
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Common topics -->
+        <div class="support-section">
+            <h2 class="section-title">Common Support Topics</h2>
+            <div class="info-box">
+                <div class="info-box-title">💡 Quick Help</div>
+                <div class="info-box-content">
+                    <ul>
+                        <li><strong>License activation:</strong> Need to move MEJay to a new device or having 
+                        trouble activating? We can help transfer your license.</li>
+                        <li><strong>Payment issues:</strong> Didn't receive your license key? Contact us with 
+                        your transaction details.</li>
+                        <li><strong>Technical problems:</strong> App not loading, features not working, or 
+                        experiencing bugs? Let us know the details.</li>
+                        <li><strong>Feature requests:</strong> Have an idea for MEJay? We'd love to hear it!</li>
+                        <li><strong>Business inquiries:</strong> Interested in venue licensing or custom 
+                        solutions? Reach out to discuss.</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- CTA -->
+        <div class="highlight-box">
+            <div class="highlight-box-title">Ready to Get in Touch?</div>
+            <div class="highlight-box-text">
+                Send us an email with your question or issue. Include the information above to help us 
+                respond quickly and effectively.
+            </div>
+            <a href="mailto:nxtlvltechllc@gmail.com?subject=MEJay Support Request" class="email-button">
+                Email Support
+            </a>
+        </div>
+
+        <!-- Additional info -->
+        <div style="margin-top: 3rem; text-align: center; color: #6b6b8a; font-size: 0.95rem;">
+            <p>
+                Next Level Tech LLC<br>
+                Building tools that keep the music going.
+            </p>
+        </div>
+    </main>
+</body>
+</html>

@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terms of Service - MEJay</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+            background: #0a0a0f;
+            color: #ffffff;
+            min-height: 100vh;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        /* Animated background gradients */
+        .bg-gradient {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(120px);
+            opacity: 0.3;
+            animation: float 25s infinite ease-in-out;
+            pointer-events: none;
+        }
+
+        .gradient-1 {
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, #ff006e 0%, transparent 70%);
+            top: -200px;
+            left: -100px;
+        }
+
+        .gradient-2 {
+            width: 500px;
+            height: 500px;
+            background: radial-gradient(circle, #8338ec 0%, transparent 70%);
+            bottom: -150px;
+            right: -100px;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33% { transform: translate(50px, -50px) scale(1.1); }
+            66% { transform: translate(-30px, 30px) scale(0.9); }
+        }
+
+        /* Header */
+        .header {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(10, 10, 15, 0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 1.5rem 0;
+        }
+
+        .header-content {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 0 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo-link {
+            display: flex;
+            align-items: center;
+            text-decoration: none;
+            gap: 0.75rem;
+        }
+
+        .logo-small {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #ff006e 0%, #8338ec 100%);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .logo-small svg {
+            width: 20px;
+            height: 20px;
+            fill: white;
+        }
+
+        .logo-text {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #ff006e 0%, #8338ec 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .back-link {
+            color: #8338ec;
+            text-decoration: none;
+            font-size: 0.95rem;
+            transition: color 0.3s ease;
+        }
+
+        .back-link:hover {
+            color: #ff006e;
+        }
+
+        /* Main content */
+        .main-content {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 4rem 2rem 6rem;
+            position: relative;
+            z-index: 10;
+        }
+
+        .hero {
+            text-align: center;
+            margin-bottom: 4rem;
+        }
+
+        .hero h1 {
+            font-size: 3rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #ff006e 0%, #8338ec 50%, #3a86ff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 1rem;
+        }
+
+        .hero-subtitle {
+            font-size: 1.125rem;
+            color: #9090a8;
+        }
+
+        .last-updated {
+            text-align: center;
+            color: #6b6b8a;
+            font-size: 0.95rem;
+            margin-bottom: 3rem;
+        }
+
+        /* Sections */
+        .section {
+            margin-bottom: 3.5rem;
+        }
+
+        .section-title {
+            font-size: 1.75rem;
+            font-weight: 600;
+            color: #ffffff;
+            margin-bottom: 1rem;
+            position: relative;
+            display: inline-block;
+        }
+
+        .section-title::after {
+            content: '';
+            position: absolute;
+            bottom: -6px;
+            left: 0;
+            width: 50%;
+            height: 3px;
+            background: linear-gradient(90deg, #ff006e, #8338ec);
+            border-radius: 2px;
+        }
+
+        .section-content {
+            color: #b8b8d1;
+            font-size: 1.05rem;
+            line-height: 1.8;
+            margin-top: 1.5rem;
+        }
+
+        .section-content p {
+            margin-bottom: 1.25rem;
+        }
+
+        .section-content ul {
+            margin: 1.25rem 0;
+            padding-left: 1.5rem;
+        }
+
+        .section-content li {
+            margin-bottom: 0.75rem;
+        }
+
+        .section-content strong {
+            color: #ffffff;
+            font-weight: 600;
+        }
+
+        .section-content a {
+            color: #ff006e;
+            text-decoration: none;
+            transition: color 0.3s ease;
+        }
+
+        .section-content a:hover {
+            color: #8338ec;
+        }
+
+        /* Highlight box */
+        .highlight-box {
+            background: rgba(255, 0, 110, 0.05);
+            border: 1px solid rgba(255, 0, 110, 0.2);
+            border-left: 4px solid #ff006e;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin: 1.5rem 0;
+        }
+
+        .highlight-box p {
+            margin-bottom: 0;
+            color: #ffffff;
+            font-weight: 500;
+        }
+
+        /* Info box */
+        .info-box {
+            background: rgba(131, 56, 236, 0.05);
+            border: 1px solid rgba(131, 56, 236, 0.2);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin: 1.5rem 0;
+        }
+
+        /* TOC */
+        .toc {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .toc-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #ffffff;
+            margin-bottom: 1rem;
+        }
+
+        .toc-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .toc-list li {
+            padding: 0.5rem 0;
+        }
+
+        .toc-list a {
+            color: #8338ec;
+            text-decoration: none;
+            transition: color 0.3s ease;
+        }
+
+        .toc-list a:hover {
+            color: #ff006e;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 2.25rem;
+            }
+
+            .section-title {
+                font-size: 1.5rem;
+            }
+
+            .main-content {
+                padding: 3rem 1.5rem 4rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Background gradients -->
+    <div class="bg-gradient gradient-1"></div>
+    <div class="bg-gradient gradient-2"></div>
+
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <a href="/" class="logo-link">
+                <div class="logo-small">
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+                    </svg>
+                </div>
+                <span class="logo-text">MEJay</span>
+            </a>
+            <a href="/" class="back-link">Back to Home</a>
+        </div>
+    </header>
+
+    <!-- Main content -->
+    <main class="main-content">
+        <div class="hero">
+            <h1>Terms of Service</h1>
+            <p class="hero-subtitle">Clear, simple terms for using MEJay</p>
+        </div>
+
+        <div class="last-updated">
+            Last updated: February 2026
+        </div>
+
+        <!-- Table of Contents -->
+        <nav class="toc">
+            <div class="toc-title">Quick Navigation</div>
+            <ul class="toc-list">
+                <li><a href="#overview">1. Overview</a></li>
+                <li><a href="#license">2. License & Device Activations</a></li>
+                <li><a href="#music">3. Music Ownership & User Responsibility</a></li>
+                <li><a href="#privacy">4. Privacy & Data</a></li>
+                <li><a href="#availability">5. Service Availability & Changes</a></li>
+                <li><a href="#refunds">6. Refund Policy</a></li>
+                <li><a href="#liability">7. Limitation of Liability</a></li>
+                <li><a href="#contact">8. Contact</a></li>
+            </ul>
+        </nav>
+
+        <!-- 1. Overview -->
+        <section class="section" id="overview">
+            <h2 class="section-title">1. Overview</h2>
+            <div class="section-content">
+                <p>
+                    Welcome to MEJay. By using MEJay, you agree to these terms. MEJay is an audio playback platform 
+                    designed for DJs, parties, and venues. These terms govern your use of the software and services.
+                </p>
+                <p>
+                    <strong>Current Status:</strong> MEJay is actively evolving. You're using an early version focused 
+                    on core playback experience. Features, functionality, and availability may change as we continue 
+                    to develop the platform.
+                </p>
+                <div class="info-box">
+                    <p>
+                        MEJay is provided "as-is" during this beta phase. We're committed to building a reliable 
+                        platform, but we recommend backing up important playlists and configurations.
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- 2. License & Activations -->
+        <section class="section" id="license">
+            <h2 class="section-title">2. License & Device Activations</h2>
+            <div class="section-content">
+                <p>
+                    <strong>Free Demo:</strong> The free version of MEJay is available for testing and personal use 
+                    in your browser. Demo accounts may have limited sessions or feature restrictions.
+                </p>
+                <p>
+                    <strong>MEJay Lifetime:</strong> A one-time purchase that grants you:
+                </p>
+                <ul>
+                    <li>Installation and activation on up to <strong>3 devices</strong></li>
+                    <li>All core features unlocked</li>
+                    <li>Lifetime access to the software</li>
+                    <li>Priority updates when available</li>
+                </ul>
+                <div class="highlight-box">
+                    <p>
+                        <strong>Device Replacements:</strong> Need to move MEJay to a new device? 
+                        <a href="/contact">Contact us</a> and we'll help you transfer your activation. 
+                        We understand devices break or get upgraded.
+                    </p>
+                </div>
+                <p>
+                    <strong>License Restrictions:</strong>
+                </p>
+                <ul>
+                    <li>Your license is for personal or business use by you or your organization</li>
+                    <li>You may not resell, redistribute, or share your license</li>
+                    <li>Commercial venue use is permitted under your license</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- 3. Music Ownership -->
+        <section class="section" id="music">
+            <h2 class="section-title">3. Music Ownership & User Responsibility</h2>
+            <div class="section-content">
+                <div class="highlight-box">
+                    <p>
+                        <strong>Important:</strong> You are responsible for ensuring you have the rights to any audio 
+                        you upload, import, or play using MEJay.
+                    </p>
+                </div>
+                <p>
+                    MEJay is a playback tool. We do not:
+                </p>
+                <ul>
+                    <li>Provide, host, or distribute music content</li>
+                    <li>Verify copyright or licensing for your audio files</li>
+                    <li>Store your music on our servers (local playback only)</li>
+                </ul>
+                <p>
+                    <strong>Your Responsibilities:</strong>
+                </p>
+                <ul>
+                    <li>Ensure you own or have proper licenses for all music you use</li>
+                    <li>Obtain appropriate performance licenses for public/commercial use (e.g., BMI, ASCAP)</li>
+                    <li>Comply with all applicable copyright laws in your jurisdiction</li>
+                </ul>
+                <p>
+                    If you're using MEJay in a business or public venue, you may need separate performance rights 
+                    licenses from music licensing organizations. MEJay does not provide these licenses.
+                </p>
+            </div>
+        </section>
+
+        <!-- 4. Privacy -->
+        <section class="section" id="privacy">
+            <h2 class="section-title">4. Privacy & Data</h2>
+            <div class="section-content">
+                <p>
+                    We respect your privacy. Here's what you need to know:
+                </p>
+                <ul>
+                    <li><strong>Your music stays local:</strong> Audio files are not uploaded to our servers</li>
+                    <li><strong>Minimal data collection:</strong> We collect only what's necessary to provide the service</li>
+                    <li><strong>No selling of data:</strong> We will never sell your personal information</li>
+                    <li><strong>Account info:</strong> If you create an account, we store your email and license details</li>
+                </ul>
+                <p>
+                    For PWA/offline use, MEJay stores data locally on your device. You can clear this data at any time 
+                    through your browser settings.
+                </p>
+                <p>
+                    For more details, see our <a href="/privacy">Privacy Policy</a>.
+                </p>
+            </div>
+        </section>
+
+        <!-- 5. Availability -->
+        <section class="section" id="availability">
+            <h2 class="section-title">5. Service Availability & Changes</h2>
+            <div class="section-content">
+                <p>
+                    <strong>Beta Status:</strong> MEJay is actively evolving. We may:
+                </p>
+                <ul>
+                    <li>Make changes to features, functionality, or interface</li>
+                    <li>Experience occasional downtime for maintenance or updates</li>
+                    <li>Add new features or deprecate experimental ones</li>
+                </ul>
+                <p>
+                    We'll do our best to notify users of major changes, but we can't guarantee uninterrupted access 
+                    during this development phase.
+                </p>
+                <p>
+                    <strong>Offline Use:</strong> MEJay works offline via PWA installation where supported. 
+                    Your local data remains accessible even without an internet connection.
+                </p>
+            </div>
+        </section>
+
+        <!-- 6. Refunds -->
+        <section class="section" id="refunds">
+            <h2 class="section-title">6. Refund Policy</h2>
+            <div class="section-content">
+                <p>
+                    <strong>Free Demo:</strong> No refunds needed—it's free!
+                </p>
+                <p>
+                    <strong>MEJay Lifetime:</strong> We offer a <strong>14-day money-back guarantee</strong>. 
+                    If you're not satisfied within 14 days of purchase, <a href="/contact">contact us</a> for a full refund.
+                </p>
+                <p>
+                    After 14 days, all sales are final. However, if you experience technical issues that we can't 
+                    resolve, we'll work with you on a case-by-case basis.
+                </p>
+                <div class="info-box">
+                    <p>
+                        <strong>Try before you buy:</strong> Use the free demo to test MEJay before purchasing 
+                        the lifetime license.
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- 7. Liability -->
+        <section class="section" id="liability">
+            <h2 class="section-title">7. Limitation of Liability</h2>
+            <div class="section-content">
+                <p>
+                    MEJay is provided "as-is" without warranties of any kind. We're building the best product we can, 
+                    but we can't guarantee:
+                </p>
+                <ul>
+                    <li>Uninterrupted or error-free operation</li>
+                    <li>Compatibility with all devices or browsers</li>
+                    <li>That the software will meet your specific needs</li>
+                </ul>
+                <p>
+                    To the fullest extent permitted by law, Next Level Tech LLC is not liable for:
+                </p>
+                <ul>
+                    <li>Loss of data or playlists</li>
+                    <li>Business interruption or lost profits</li>
+                    <li>Indirect, incidental, or consequential damages</li>
+                    <li>Issues arising from copyright violations by users</li>
+                </ul>
+                <p>
+                    <strong>Maximum Liability:</strong> Our total liability shall not exceed the amount you paid 
+                    for your MEJay license.
+                </p>
+            </div>
+        </section>
+
+        <!-- 8. Contact -->
+        <section class="section" id="contact">
+            <h2 class="section-title">8. Contact</h2>
+            <div class="section-content">
+                <p>
+                    Questions about these terms? Need help with your license? We're here to help.
+                </p>
+                <ul>
+                    <li><strong>Email:</strong> <a href="mailto:nxtlvltechllc@gmail.com">nxtlvltechllc@gmail.com</a></li>
+                    <li><strong>Website:</strong> <a href="https://nxtlvlts.com">nxtlvlts.com</a></li>
+                    <li><strong>Support Page:</strong> <a href="/contact">MEJay Contact</a></li>
+                </ul>
+                <div class="info-box">
+                    <p>
+                        <strong>Business Inquiries:</strong> Interested in venue licensing or custom solutions? 
+                        Reach out—we'd love to discuss how MEJay can work for your business.
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <div class="section-content" style="margin-top: 4rem; text-align: center; color: #6b6b8a;">
+            <p>
+                By using MEJay, you acknowledge that you have read, understood, and agree to these Terms of Service.
+            </p>
+        </div>
+    </main>
+</body>
+</html>

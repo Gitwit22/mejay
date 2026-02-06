@@ -1,9 +1,16 @@
 import { usePlanStore } from '@/stores/planStore';
 import { X, Check, Sparkles, Volume2, Sliders, Gauge } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
 
 export function UpgradeModal() {
   const { upgradeModalOpen, closeUpgradeModal } = usePlanStore();
+  const navigate = useNavigate();
+
+  const goToPricing = () => {
+    closeUpgradeModal();
+    navigate('/pricing');
+  };
 
   const features = [
     { icon: Volume2, label: 'Auto volume matching' },
@@ -67,13 +74,13 @@ export function UpgradeModal() {
               {/* Pricing Buttons */}
               <div className="space-y-2">
                 <button
-                  onClick={closeUpgradeModal}
+                  onClick={goToPricing}
                   className="w-full py-3.5 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold text-sm hover:opacity-90 transition-opacity"
                 >
                   $4.99 / month
                 </button>
                 <button
-                  onClick={closeUpgradeModal}
+                  onClick={goToPricing}
                   className="w-full py-3.5 rounded-xl bg-white/10 text-foreground font-medium text-sm hover:bg-white/15 transition-colors"
                 >
                   $50 / year

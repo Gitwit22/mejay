@@ -149,3 +149,9 @@ In development builds, a “Dev Plan Switcher” appears in the top-right to tog
 - Run `bun install` first.
 - Then try `bun dev` again.
 - If it still fails, paste the terminal output and we’ll chase the exact error.
+
+## Deployment notes (SPA routing)
+
+This is a React Router single-page app.
+
+- For Cloudflare Pages / Netlify-style SPA refresh support on deep links like `/app/...`, this repo includes [public/_redirects](public/_redirects) so all routes serve `index.html`.

@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pricing - MEJay</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+            background: #0a0a0f;
+            color: #ffffff;
+            min-height: 100vh;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        /* Animated background gradients */
+        .bg-gradient {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(120px);
+            opacity: 0.3;
+            animation: float 25s infinite ease-in-out;
+            pointer-events: none;
+        }
+
+        .gradient-1 {
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, #ff006e 0%, transparent 70%);
+            top: -200px;
+            left: -100px;
+            animation-delay: 0s;
+        }
+
+        .gradient-2 {
+            width: 500px;
+            height: 500px;
+            background: radial-gradient(circle, #8338ec 0%, transparent 70%);
+            bottom: -150px;
+            right: -100px;
+            animation-delay: 8s;
+        }
+
+        @keyframes float {
+            0%, 100% {
+                transform: translate(0, 0) scale(1);
+            }
+            33% {
+                transform: translate(50px, -50px) scale(1.1);
+            }
+            66% {
+                transform: translate(-30px, 30px) scale(0.9);
+            }
+        }
+
+        /* Header */
+        .header {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(10, 10, 15, 0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 1.5rem 0;
+        }
+
+        .header-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo-link {
+            display: flex;
+            align-items: center;
+            text-decoration: none;
+            gap: 0.75rem;
+        }
+
+        .logo-small {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #ff006e 0%, #8338ec 100%);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .logo-small svg {
+            width: 20px;
+            height: 20px;
+            fill: white;
+        }
+
+        .logo-text {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #ff006e 0%, #8338ec 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .back-link {
+            color: #8338ec;
+            text-decoration: none;
+            font-size: 0.95rem;
+            transition: color 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .back-link:hover {
+            color: #ff006e;
+        }
+
+        /* Main content */
+        .main-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 4rem 2rem 6rem;
+            position: relative;
+            z-index: 10;
+        }
+
+        /* Hero */
+        .hero {
+            text-align: center;
+            margin-bottom: 4rem;
+            animation: fadeInUp 1s ease-out;
+        }
+
+        .hero h1 {
+            font-size: 3.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #ff006e 0%, #8338ec 50%, #3a86ff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 1rem;
+            line-height: 1.2;
+        }
+
+        .hero-subtitle {
+            font-size: 1.25rem;
+            color: #b8b8d1;
+            line-height: 1.6;
+        }
+
+        /* Pricing cards */
+        .pricing-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 2rem;
+            margin-bottom: 4rem;
+            animation: fadeInUp 1s ease-out 0.2s both;
+        }
+
+        .pricing-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 24px;
+            padding: 2.5rem;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .pricing-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #ff006e, #8338ec);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .pricing-card:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 0, 110, 0.3);
+            transform: translateY(-8px);
+            box-shadow: 0 20px 60px rgba(255, 0, 110, 0.2);
+        }
+
+        .pricing-card:hover::before {
+            opacity: 1;
+        }
+
+        .pricing-card.featured {
+            border: 2px solid;
+            border-image: linear-gradient(135deg, #ff006e, #8338ec) 1;
+            background: rgba(255, 0, 110, 0.05);
+        }
+
+        .pricing-card.featured::before {
+            opacity: 1;
+        }
+
+        .plan-badge {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            background: linear-gradient(135deg, #ff006e, #8338ec);
+            color: white;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            border-radius: 20px;
+            margin-bottom: 1.5rem;
+        }
+
+        .plan-name {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #ffffff;
+            margin-bottom: 0.5rem;
+        }
+
+        .plan-description {
+            font-size: 1rem;
+            color: #9090a8;
+            margin-bottom: 2rem;
+            line-height: 1.5;
+        }
+
+        .plan-price {
+            margin-bottom: 2rem;
+        }
+
+        .price-amount {
+            font-size: 3.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #ff006e 0%, #8338ec 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .price-period {
+            font-size: 1.125rem;
+            color: #6b6b8a;
+            font-weight: 500;
+        }
+
+        .plan-features {
+            list-style: none;
+            margin-bottom: 2rem;
+        }
+
+        .plan-features li {
+            padding: 0.75rem 0;
+            color: #b8b8d1;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 1rem;
+        }
+
+        .plan-features li::before {
+            content: '✓';
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            background: rgba(255, 0, 110, 0.15);
+            color: #ff006e;
+            border-radius: 50%;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+
+        .plan-cta {
+            display: block;
+            width: 100%;
+            padding: 1rem;
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: #ffffff;
+            background: linear-gradient(135deg, #ff006e 0%, #8338ec 100%);
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            text-decoration: none;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+
+        .plan-cta:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(255, 0, 110, 0.4);
+        }
+
+        .plan-cta.secondary {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .plan-cta.secondary:hover {
+            background: rgba(255, 255, 255, 0.08);
+            box-shadow: 0 10px 30px rgba(131, 56, 236, 0.2);
+        }
+
+        /* Coming soon card */
+        .coming-soon {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+
+        .coming-soon-badge {
+            position: absolute;
+            top: 1.5rem;
+            right: 1.5rem;
+            background: rgba(131, 56, 236, 0.3);
+            color: #8338ec;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* License note */
+        .license-note {
+            background: rgba(255, 0, 110, 0.05);
+            border: 1px solid rgba(255, 0, 110, 0.2);
+            border-left: 4px solid #ff006e;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 3rem;
+            animation: fadeInUp 1s ease-out 0.4s both;
+        }
+
+        .license-note-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: #ffffff;
+            margin-bottom: 0.5rem;
+        }
+
+        .license-note-text {
+            font-size: 1rem;
+            color: #b8b8d1;
+            line-height: 1.6;
+        }
+
+        /* Animations */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 2.5rem;
+            }
+
+            .hero-subtitle {
+                font-size: 1.125rem;
+            }
+
+            .pricing-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .main-content {
+                padding: 3rem 1.5rem 4rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Background gradients -->
+    <div class="bg-gradient gradient-1"></div>
+    <div class="bg-gradient gradient-2"></div>
+
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <a href="/" class="logo-link">
+                <div class="logo-small">
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+                    </svg>
+                </div>
+                <span class="logo-text">MEJay</span>
+            </a>
+            <a href="/" class="back-link">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M19 12H5M12 19l-7-7 7-7"/>
+                </svg>
+                Back to Home
+            </a>
+        </div>
+    </header>
+
+    <!-- Main content -->
+    <main class="main-content">
+        <!-- Hero -->
+        <section class="hero">
+            <h1>Choose Your Plan</h1>
+            <p class="hero-subtitle">
+                Start free, upgrade when you're ready. One-time payment, no subscriptions.
+            </p>
+        </section>
+
+        <!-- Pricing cards -->
+        <div class="pricing-grid">
+            <!-- Free Demo -->
+            <div class="pricing-card">
+                <div class="plan-name">Free (Demo)</div>
+                <div class="plan-description">
+                    Test MEJay in your browser
+                </div>
+                <div class="plan-price">
+                    <span class="price-amount">$0</span>
+                </div>
+                <ul class="plan-features">
+                    <li>Play and test MEJay in browser</li>
+                    <li>Limited sessions</li>
+                    <li>Import your own music</li>
+                    <li>Basic playback features</li>
+                </ul>
+                <a href="/app" class="plan-cta secondary">Try MEJay Free</a>
+            </div>
+
+            <!-- Lifetime -->
+            <div class="pricing-card featured">
+                <span class="plan-badge">Best Value</span>
+                <div class="plan-name">MEJay Lifetime</div>
+                <div class="plan-description">
+                    Own it forever, one-time payment
+                </div>
+                <div class="plan-price">
+                    <span class="price-amount">$199</span>
+                    <span class="price-period">one-time</span>
+                </div>
+                <ul class="plan-features">
+                    <li>Install on up to 3 devices</li>
+                    <li>All core features unlocked</li>
+                    <li>Priority updates</li>
+                    <li>Offline-ready via PWA install</li>
+                    <li>Lifetime access</li>
+                    <li>No recurring fees</li>
+                </ul>
+                <a href="#" class="plan-cta">Get Lifetime Access</a>
+            </div>
+
+            <!-- Pro (Coming Soon) -->
+            <div class="pricing-card coming-soon">
+                <span class="coming-soon-badge">Coming Soon</span>
+                <div class="plan-name">MEJay Pro</div>
+                <div class="plan-description">
+                    Advanced features for professionals
+                </div>
+                <div class="plan-price">
+                    <span class="price-amount">$5</span>
+                    <span class="price-period">/month</span>
+                </div>
+                <ul class="plan-features">
+                    <li>Everything in Lifetime</li>
+                    <li>Cloud sync across devices</li>
+                    <li>Advanced automation</li>
+                    <li>Business venue features</li>
+                    <li>Priority support</li>
+                </ul>
+                <a href="#" class="plan-cta secondary">Notify Me</a>
+            </div>
+        </div>
+
+        <!-- License note -->
+        <div class="license-note">
+            <div class="license-note-title">📋 License Information</div>
+            <div class="license-note-text">
+                Lifetime includes up to 3 device activations. Need more due to a device replacement? 
+                <a href="/contact" style="color: #ff006e; text-decoration: none;">Contact us</a> and we'll help.
+            </div>
+        </div>
+    </main>
+</body>
+</html>
