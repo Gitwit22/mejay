@@ -73,7 +73,7 @@ const Index = () => {
           'relative z-10 flex flex-col flex-1 min-h-0 px-5',
           // Reserve space for the fixed tab bar.
           activeTab === 'party'
-            ? 'pt-3 pb-[calc(84px+env(safe-area-inset-bottom,0)+12px)] overflow-y-auto lg:overflow-hidden'
+            ? 'pt-3 pb-[calc(84px+env(safe-area-inset-bottom,0)+28px)] overflow-y-auto lg:overflow-hidden'
             : 'pt-14 overflow-hidden'
         )}
       >

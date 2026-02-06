@@ -215,10 +215,10 @@ export function PartyModeView() {
       ) : (
         <div className="flex-1 min-h-0">
           {/* Mobile: single-column scroll with collapsible sections. */}
-          <div className="lg:hidden space-y-4 pb-[calc(env(safe-area-inset-bottom,0)+16px)]">
+          <div className="lg:hidden space-y-4 pb-[calc(env(safe-area-inset-bottom,0)+28px)]">
             <NowPlaying />
 
-            <div className="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm overflow-hidden">
+            <div className="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm overflow-hidden mb-4">
               {/* Mobile panel switcher: Queue <-> Settings */}
               <div className="p-2">
                 <div className="flex items-center gap-1 p-1 rounded-xl bg-white/5">
