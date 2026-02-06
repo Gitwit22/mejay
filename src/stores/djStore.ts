@@ -193,9 +193,55 @@ export const useDJStore = create<DJState>((set, get) => {
     return clamp(biased, energy.crossfadeSecMin, energy.crossfadeSecMax);
   };
 
-  const computeTargetBpm = (settings: Settings, currentTrackBpm?: number) => {
+  const normalizeBpmNear = (bpm: number, anchorBpm: number) => {
+    const candidates = [bpm / 2, bpm, bpm * 2].filter(v => Number.isFinite(v) && v > 0);
+    if (candidates.length === 0) return bpm;
+    return candidates.reduce((best, candidate) => {
+      return Math.abs(candidate - anchorBpm) < Math.abs(best - anchorBpm) ? candidate : best;
+    }, candidates[0]);
+  };
+
+  const computeAutoBlendBpm = (settings: Settings, currentBpm: number, nextBpm: number) => {
+    const safeCurrent = Math.max(1, currentBpm || 120);
+    const safeNext = Math.max(1, nextBpm || 120);
+
+    // Half/double normalize so 70 ↔ 140 doesn't cause silly stretches.
+    const normalizedNext = normalizeBpmNear(safeNext, safeCurrent);
+
+    // Bias toward the current track (don't warp what's playing too aggressively).
+    const biasToCurrent = settings.energyMode === 'hype' ? 0.6 : settings.energyMode === 'chill' ? 0.8 : 0.7;
+    let target = safeCurrent * biasToCurrent + normalizedNext * (1 - biasToCurrent);
+
+    // Clamp to what both tracks can reasonably stretch to given maxTempoPercent.
+    const maxPct = clamp(settings.maxTempoPercent ?? 6, 0, 30) / 100;
+    const currentMin = safeCurrent * (1 - maxPct);
+    const currentMax = safeCurrent * (1 + maxPct);
+    const nextMin = normalizedNext * (1 - maxPct);
+    const nextMax = normalizedNext * (1 + maxPct);
+
+    const intersectionMin = Math.max(currentMin, nextMin);
+    const intersectionMax = Math.min(currentMax, nextMax);
+
+    if (intersectionMin <= intersectionMax) {
+      target = clamp(target, intersectionMin, intersectionMax);
+    } else {
+      // If there's no overlap, prefer smallest change from current.
+      target = clamp(target, currentMin, currentMax);
+    }
+
+    return target;
+  };
+
+  const computeTargetBpm = (settings: Settings, currentTrackBpm?: number, nextTrackBpm?: number) => {
     if (settings.tempoMode === 'locked') return settings.lockedBpm;
-    return currentTrackBpm || 120;
+
+    const current = currentTrackBpm || 120;
+    // Auto Match is a two-track negotiation. If next isn't known yet, don't invent a master BPM.
+    if (settings.tempoMode === 'auto' && nextTrackBpm) {
+      return computeAutoBlendBpm(settings, current, nextTrackBpm);
+    }
+
+    return current;
   };
 
   const computeAutoMixTriggerSecondsTrack = (state: DJState) => {
@@ -203,11 +249,19 @@ export const useDJStore = create<DJState>((set, get) => {
     const outgoingDeckState = outgoingDeck === 'A' ? state.deckA : state.deckB;
     const outgoingTrack = state.tracks.find(t => t.id === outgoingDeckState.trackId);
 
+    let nextTrackBpm: number | undefined;
+    if (!state.settings.shuffleEnabled) {
+      const nextIndex = state.pendingNextIndex ?? state.nowPlayingIndex + 1;
+      const nextTrackId = state.partyTrackIds[nextIndex];
+      const nextTrack = nextTrackId ? state.tracks.find(t => t.id === nextTrackId) : undefined;
+      nextTrackBpm = nextTrack?.bpm;
+    }
+
     const endEarlySeconds = clamp(state.settings.endEarlySeconds ?? 0, 0, 60);
     const effectiveCrossfadeSeconds = getEffectiveCrossfadeSeconds(state.settings.crossfadeSeconds ?? 8, state.settings.energyMode);
     const energy = getEnergyProfile(state.settings.energyMode);
 
-    const targetBpm = computeTargetBpm(state.settings, outgoingTrack?.bpm);
+    const targetBpm = computeTargetBpm(state.settings, outgoingTrack?.bpm, nextTrackBpm);
     const beatSec = 60 / Math.max(1, targetBpm);
     const barSec = beatSec * 4;
 
@@ -232,6 +286,9 @@ export const useDJStore = create<DJState>((set, get) => {
   };
 
   const applyImmediateTempoToActiveDeck = (state: DJState) => {
+    // Auto Match should not change what you hear immediately.
+    if (state.settings.tempoMode === 'auto') return;
+
     const deck = state.activeDeck;
     const deckState = deck === 'A' ? state.deckA : state.deckB;
     if (!deckState.trackId) return;
@@ -465,7 +522,23 @@ export const useDJStore = create<DJState>((set, get) => {
         }
 
         await addTrack(track);
-        set(state => ({ tracks: [...state.tracks, track] }));
+        set(state => {
+          const nextTracks = [...state.tracks, track];
+
+          // If Party Mode is currently running on the Import List, auto-append newly imported
+          // tracks into the active party queue so they will play without restarting.
+          if (state.isPartyMode && state.partySource?.type === 'import') {
+            const alreadyQueued = state.partyTrackIds.includes(track.id);
+            if (!alreadyQueued) {
+              return {
+                tracks: nextTracks,
+                partyTrackIds: [...state.partyTrackIds, track.id],
+              };
+            }
+          }
+
+          return { tracks: nextTracks };
+        });
 
         if (isFree) {
           librarySeconds += (track.duration || 0);
@@ -657,7 +730,7 @@ export const useDJStore = create<DJState>((set, get) => {
       if (!nextTrack?.fileBlob) return;
 
       // Calculate target BPM
-      const targetBpm = computeTargetBpm(settings, currentTrack?.bpm);
+      const targetBpm = computeTargetBpm(settings, currentTrack?.bpm, nextTrack?.bpm);
 
       // Get track gain for volume matching
       const gainDb = settings.autoVolumeMatch ? nextTrack.gainDb : undefined;
@@ -716,6 +789,20 @@ export const useDJStore = create<DJState>((set, get) => {
         const fadeCandidate = incomingStartAt + preRollSec;
         const quantFade = audioEngine.getNextBeatTimeFrom(currentDeck, fadeCandidate, energy.fadeQuantBeats) ?? fadeCandidate;
         fadeAt = Math.min(quantFade, safeLatestCrossfadeStart);
+      }
+
+      // Auto Match: ramp the outgoing deck toward the blend BPM before the crossfade.
+      if (settings.tempoMode === 'auto' && currentTrack?.bpm && nextTrack?.bpm) {
+        const currentRateNow = Math.max(0.25, audioEngine.getTempo(currentDeck) || currentDeckState.playbackRate || 1);
+        const outgoingTargetRatio = audioEngine.calculateTempoRatio(currentDeck, targetBpm, settings.maxTempoPercent);
+        const delta = Math.abs(outgoingTargetRatio - currentRateNow);
+
+        // Avoid tiny adjustments.
+        if (delta > 0.002) {
+          const rampStart = Math.max(ctxNow + 0.05, fadeAt - 8);
+          const rampDurationMs = Math.max(600, Math.min(8000, (fadeAt - rampStart) * 1000));
+          audioEngine.rampTempo(currentDeck, outgoingTargetRatio, rampStart, rampDurationMs);
+        }
       }
 
       set({ mixInProgress: true });

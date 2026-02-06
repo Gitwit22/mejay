@@ -64,6 +64,17 @@
     --sidebar-accent-foreground: 0 0% 100%;
     --sidebar-border: 0 0% 100% / 0.1;
     --sidebar-ring: 336 100% 50%;
+
+    /* Layout */
+    --mejay-mobile-gutter: 0px;
+  }
+}
+
+@media (max-width: 640px) {
+  :root {
+    /* Slight inset on mobile to avoid edge-to-edge overflow and to give a tiny
+       "grab" area for whole-screen scrolling. */
+    --mejay-mobile-gutter: 6px;
   }
 }
 
@@ -238,12 +249,26 @@
   
   /* Tab Bar */
   .tab-bar {
-    @apply fixed bottom-0 left-0 right-0 h-[84px] flex justify-around items-start pt-3 z-50;
+    @apply fixed bottom-0 h-[84px] flex justify-around items-start pt-3 z-50;
     background: hsl(248 12% 6% / 0.95);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     border-top: 1px solid hsl(var(--glass-border));
     padding-bottom: env(safe-area-inset-bottom, 0);
+    left: var(--mejay-mobile-gutter);
+    right: var(--mejay-mobile-gutter);
+  }
+
+  /* Slightly inset "phone" viewport on small screens */
+  .mejay-viewport {
+    width: calc(100% - (var(--mejay-mobile-gutter) * 2));
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  /* Align fixed top-right controls to the same gutter */
+  .mejay-fixed-right {
+    right: calc(var(--mejay-mobile-gutter) + 0.75rem) !important;
   }
   
   /* Energy Toggle */

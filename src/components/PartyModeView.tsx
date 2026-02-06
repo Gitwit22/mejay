@@ -58,7 +58,7 @@ export function PartyModeView() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
         <div>
           <span className="text-[11px] text-muted-foreground uppercase tracking-[2px]">Auto DJ</span>
           <h2 className="text-[24px] font-bold text-gradient-accent">Party Mode</h2>
@@ -78,8 +78,8 @@ export function PartyModeView() {
         
         {/* Panel Toggle */}
         {isPartyMode && (
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+            <div className="flex flex-wrap items-center gap-2 px-3 py-2 rounded-xl bg-white/5 w-full sm:w-auto">
               <span className="text-[10px] text-muted-foreground">Source</span>
               <Select
                 value={selectedSourceValue}
@@ -92,7 +92,7 @@ export function PartyModeView() {
                   await switchPartySourceSmooth({ type: 'playlist', playlistId: value });
                 }}
               >
-                <SelectTrigger className="h-8 w-[190px] bg-white/5 border-white/10 text-xs">
+                <SelectTrigger className="h-8 w-full sm:w-[190px] bg-white/5 border-white/10 text-xs">
                   <SelectValue placeholder="Choose source" />
                 </SelectTrigger>
                 <SelectContent>
@@ -170,7 +170,7 @@ export function PartyModeView() {
               )}
             </div>
 
-            <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5">
+            <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-white/5 w-full sm:w-auto">
               <span className="text-[10px] text-muted-foreground">Auto Mix</span>
               <Switch
                 checked={settings.mixTriggerMode !== 'manual'}
@@ -178,7 +178,7 @@ export function PartyModeView() {
               />
             </div>
 
-            <div className="flex items-center gap-1 p-1 rounded-xl bg-white/5">
+            <div className="flex items-center gap-1 p-1 rounded-xl bg-white/5 w-full sm:w-auto">
             <button
               onClick={() => setActivePanel('queue')}
               className={cn(

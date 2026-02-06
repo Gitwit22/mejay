@@ -100,7 +100,7 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
           </button>
         </SheetTrigger>
 
-        <SheetContent side="right" className="w-[420px] sm:max-w-md flex flex-col">
+        <SheetContent side="right" className="w-[92vw] sm:w-[420px] sm:max-w-md flex flex-col">
           <SheetHeader>
             <SheetTitle>Setup</SheetTitle>
             <SheetDescription>Account, device, and local settings</SheetDescription>

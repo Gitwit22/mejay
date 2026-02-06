@@ -51,12 +51,12 @@ const Index = () => {
   }, [activeTab]);
 
   return (
-    <div className="min-h-[100dvh] relative overflow-hidden">
+    <div className="min-h-[100dvh] relative overflow-hidden mejay-viewport">
       {/* Dev Plan Switcher */}
       <DevPlanSwitcher />
 
       {/* Settings Menu */}
-      <TopRightSettingsMenu />
+      <TopRightSettingsMenu className="mejay-fixed-right" />
 
       {/* Upgrade Modal */}
       <UpgradeModal />
