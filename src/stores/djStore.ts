@@ -3,6 +3,7 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { Track, Settings, getAllTracks, getSettings, addTrack, updateTrack, deleteTrack, updateSettings, generateId, getAllPlaylists, Playlist, addPlaylist, updatePlaylist, deletePlaylist, PartySource, resetLocalDatabase } from '@/lib/db';
 import { audioEngine, DeckId } from '@/lib/audioEngine';
 import { analyzeBPM } from '@/lib/bpmDetector';
+// Note: Energy Mode automation removed; mixing uses manual sliders only.
 import { usePlanStore } from '@/stores/planStore';
 import { toast } from '@/hooks/use-toast';
 
@@ -139,6 +140,8 @@ export const useDJStore = create<DJState>()(
     (set, get) => {
   let scheduledTimeouts: number[] = [];
   let masterVolumeSaveTimeout: number | null = null;
+  let settingsSaveTimeout: number | null = null;
+  let queuedSettingsUpdates: Partial<Settings> = {};
 
   const FREE_UPLOAD_LIMIT_SECONDS = 30 * 60;
   // Allow a little overage for a single additional track.
@@ -174,13 +177,10 @@ export const useDJStore = create<DJState>()(
   const defaultSettings: Settings = {
     crossfadeSeconds: 8,
     maxTempoPercent: 6,
-    energyMode: 'normal',
     shuffleEnabled: false,
     masterVolume: 0.9,
     nextSongStartOffset: 15,
     endEarlySeconds: 5,
-    mixTriggerMode: 'remaining',
-    mixTriggerSeconds: 20,
     tempoMode: 'auto',
     lockedBpm: 128,
     autoBaseBpm: null,
@@ -190,51 +190,6 @@ export const useDJStore = create<DJState>()(
     limiterEnabled: true,
     limiterStrength: 'medium',
     loopPlaylist: true,
-  };
-
-  const getEnergyProfile = (energyMode: Settings['energyMode']) => {
-    switch (energyMode) {
-      case 'chill':
-        return {
-          startQuantBeats: 4, // next bar
-          fadeQuantBeats: 4,  // next bar
-          tempoRampMs: 800,
-          settleBeats: 4, // 1 bar
-          stepLargeDeltas: true,
-          crossfadeMultiplier: 1.25,
-          crossfadeSecMin: 6,
-          crossfadeSecMax: 14,
-        };
-      case 'hype':
-        return {
-          startQuantBeats: 1, // next beat
-          fadeQuantBeats: 1,  // next beat
-          tempoRampMs: 300,
-          settleBeats: 1, // 1/4 bar
-          stepLargeDeltas: false,
-          crossfadeMultiplier: 0.75,
-          crossfadeSecMin: 2,
-          crossfadeSecMax: 8,
-        };
-      case 'normal':
-      default:
-        return {
-          startQuantBeats: 1, // next beat
-          fadeQuantBeats: 1,  // next beat
-          tempoRampMs: 500,
-          settleBeats: 2, // 1/2 bar
-          stepLargeDeltas: false,
-          crossfadeMultiplier: 1,
-          crossfadeSecMin: 4,
-          crossfadeSecMax: 10,
-        };
-    }
-  };
-
-  const getEffectiveCrossfadeSeconds = (userSeconds: number, energyMode: Settings['energyMode']) => {
-    const energy = getEnergyProfile(energyMode);
-    const biased = userSeconds * energy.crossfadeMultiplier;
-    return clamp(biased, energy.crossfadeSecMin, energy.crossfadeSecMax);
   };
 
   const computeTargetBpm = (settings: Settings) => {
@@ -261,8 +216,16 @@ export const useDJStore = create<DJState>()(
     }
 
     const endEarlySeconds = clamp(state.settings.endEarlySeconds ?? 0, 0, 60);
-    const effectiveCrossfadeSeconds = getEffectiveCrossfadeSeconds(state.settings.crossfadeSeconds ?? 8, state.settings.energyMode);
-    const energy = getEnergyProfile(state.settings.energyMode);
+    const effectiveCrossfadeSeconds = clamp(state.settings.crossfadeSeconds ?? 8, 1, 20);
+
+    // Fixed "normal" profile for quantization/ramp/settle math.
+    const energy = {
+      startQuantBeats: 1,
+      fadeQuantBeats: 1,
+      tempoRampMs: 500,
+      settleBeats: 2,
+      stepLargeDeltas: false,
+    };
 
     const outgoingRate = Math.max(0.25, audioEngine.getTempo(outgoingDeck) || 1);
 
@@ -373,9 +336,13 @@ export const useDJStore = create<DJState>()(
     loadTracks: async () => {
       set({ isLoadingTracks: true });
       try {
-        console.log('[DJ Store] Loading tracks from IndexedDB...');
+        if (import.meta.env.DEV) {
+          console.debug('[DJ Store] Loading tracks from IndexedDB...');
+        }
         const tracks = await getAllTracks();
-        console.log('[DJ Store] Loaded tracks:', tracks.length);
+        if (import.meta.env.DEV) {
+          console.debug('[DJ Store] Loaded tracks:', tracks.length);
+        }
         set({ tracks, isLoadingTracks: false });
       } catch (error) {
         console.error('[DJ Store] Failed to load tracks:', error);
@@ -464,7 +431,7 @@ export const useDJStore = create<DJState>()(
       const showLimitToast = () => {
         toast({
           title: 'Free plan limit reached',
-          description: 'Free mode supports ~30 minutes of imported music. Upgrade to import more.',
+          description: 'Free mode supports ~30 minutes of imported music. Upgrade to Pro or Full Program to import more.',
           variant: 'destructive',
         });
         usePlanStore.getState().openUpgradeModal();
@@ -776,7 +743,7 @@ export const useDJStore = create<DJState>()(
       const after = get();
       const triggerSecondsTrack = computeAutoMixTriggerSecondsTrack(after);
       audioEngine.setMixTriggerConfig('remaining', triggerSecondsTrack);
-      audioEngine.enableMixCheck(after.settings.mixTriggerMode !== 'manual');
+      audioEngine.enableMixCheck(true);
       audioEngine.resetMixTrigger();
 
       toast({ title: 'Previous Track' });
@@ -859,8 +826,16 @@ export const useDJStore = create<DJState>()(
       // DJ Logic timing
       const startOffsetSeconds = clamp(settings.nextSongStartOffset ?? 0, 0, 120);
       const endEarlySeconds = clamp(settings.endEarlySeconds ?? 0, 0, 60);
-      const effectiveCrossfadeSeconds = getEffectiveCrossfadeSeconds(settings.crossfadeSeconds ?? 8, settings.energyMode);
-      const energy = getEnergyProfile(settings.energyMode);
+      const effectiveCrossfadeSeconds = clamp(settings.crossfadeSeconds ?? 8, 1, 20);
+
+      // Fixed "normal" profile for quantization/ramp/settle behavior.
+      const energy = {
+        startQuantBeats: 1,
+        fadeQuantBeats: 1,
+        tempoRampMs: 500,
+        settleBeats: 2,
+        stepLargeDeltas: false,
+      };
 
       // Manual Next should transition immediately (on-beat), not wait until track end.
       const isManualImmediate = reason === 'user' || reason === 'end' || reason === 'switch';
@@ -984,7 +959,7 @@ export const useDJStore = create<DJState>()(
           const newState = get();
           const triggerSecondsTrack = computeAutoMixTriggerSecondsTrack(newState);
           audioEngine.setMixTriggerConfig('remaining', triggerSecondsTrack);
-          audioEngine.enableMixCheck(newState.settings.mixTriggerMode !== 'manual');
+          audioEngine.enableMixCheck(true);
 
           // If the user picked a different source during the mix, switch now.
           const afterQueued = get();
@@ -1011,7 +986,9 @@ export const useDJStore = create<DJState>()(
       
       let trackIds = getTrackIdsForPartySource(state, source);
 
-      console.log('[DJ Store] Starting party mode with', trackIds.length, 'playable tracks');
+      if (import.meta.env.DEV) {
+        console.debug('[DJ Store] Starting party mode with', trackIds.length, 'playable tracks');
+      }
       
       if (state.settings.shuffleEnabled) {
         trackIds = [...trackIds].sort(() => Math.random() - 0.5);
@@ -1078,7 +1055,7 @@ export const useDJStore = create<DJState>()(
       const after = get();
       const triggerSecondsTrack = computeAutoMixTriggerSecondsTrack(after);
       audioEngine.setMixTriggerConfig('remaining', triggerSecondsTrack);
-      audioEngine.enableMixCheck(after.settings.mixTriggerMode !== 'manual');
+      audioEngine.enableMixCheck(true);
     },
 
     stopPartyMode: () => {
@@ -1283,20 +1260,7 @@ export const useDJStore = create<DJState>()(
         updates.autoOffsetBpm = 0;
       }
 
-      // Energy Mode biasing (no UI changes): apply defaults unless explicitly overridden.
-      if (updates.energyMode) {
-        if (updates.targetLoudness === undefined) {
-          updates.targetLoudness = updates.energyMode === 'chill' ? 0.55 : updates.energyMode === 'hype' ? 0.8 : 0.7;
-        }
-        if (updates.limiterStrength === undefined) {
-          updates.limiterStrength = updates.energyMode === 'chill' ? 'strong' : updates.energyMode === 'hype' ? 'light' : 'medium';
-        }
-        if (updates.limiterEnabled === undefined) {
-          updates.limiterEnabled = true;
-        }
-      }
-
-      await updateSettings(updates);
+      // Apply settings immediately for responsive controls (sliders/toggles).
       set(state => ({ settings: { ...state.settings, ...updates } }));
 
       const state = get();
@@ -1312,11 +1276,11 @@ export const useDJStore = create<DJState>()(
         applyImmediateTempoToActiveDeck(state);
       }
 
+      // Apply mix check enable/disable immediately.
       // Keep the automix trigger in sync immediately when timing/energy/tempo changes.
       if (state.isPartyMode && (
         updates.endEarlySeconds !== undefined ||
         updates.crossfadeSeconds !== undefined ||
-        updates.energyMode !== undefined ||
         updates.tempoMode !== undefined ||
         updates.lockedBpm !== undefined ||
         updates.autoBaseBpm !== undefined ||
@@ -1325,13 +1289,9 @@ export const useDJStore = create<DJState>()(
       )) {
         const triggerSecondsTrack = computeAutoMixTriggerSecondsTrack(get());
         audioEngine.setMixTriggerConfig('remaining', triggerSecondsTrack);
+        audioEngine.enableMixCheck(true);
         // Re-evaluate immediately using the new threshold.
         audioEngine.resetMixTrigger();
-      }
-
-      // Apply mix check enable/disable immediately.
-      if (state.isPartyMode && updates.mixTriggerMode !== undefined) {
-        audioEngine.enableMixCheck(get().settings.mixTriggerMode !== 'manual');
       }
       
       // Apply audio engine settings
@@ -1344,6 +1304,22 @@ export const useDJStore = create<DJState>()(
       if (updates.limiterStrength !== undefined) {
         audioEngine.setLimiterStrength(updates.limiterStrength);
       }
+
+      // Persist settings with a short debounce to prevent IDB write races
+      // when controls update rapidly (e.g. sliders).
+      queuedSettingsUpdates = { ...queuedSettingsUpdates, ...updates };
+      if (settingsSaveTimeout !== null) {
+        clearTimeout(settingsSaveTimeout);
+      }
+      settingsSaveTimeout = window.setTimeout(() => {
+        const toSave = queuedSettingsUpdates;
+        queuedSettingsUpdates = {};
+        settingsSaveTimeout = null;
+
+        void updateSettings(toSave).catch((error) => {
+          console.error('[DJ Store] Failed to persist settings:', error);
+        });
+      }, 150);
     },
 
     createPlaylist: async (name: string) => {

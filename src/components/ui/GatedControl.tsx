@@ -60,7 +60,7 @@ export function GatedControl({
           </div>
         </TooltipTrigger>
         <TooltipContent side="top" className="bg-popover text-popover-foreground text-xs">
-          Upgrade to ME Plus to unlock
+          Available in Pro or Full Program
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>

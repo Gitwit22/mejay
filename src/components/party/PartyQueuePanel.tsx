@@ -4,7 +4,11 @@ import { cn } from '@/lib/utils';
 import { formatDuration } from '@/lib/utils';
 import { useRef, useEffect } from 'react';
 
-export function PartyQueuePanel() {
+type PartyQueuePanelProps = {
+  className?: string;
+};
+
+export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
   const {
     partyTrackIds,
     nowPlayingIndex,
@@ -55,7 +59,7 @@ export function PartyQueuePanel() {
   };
 
   return (
-    <div className="glass-card flex flex-col min-h-0">
+    <div className={cn('glass-card flex flex-col min-h-0', className)}>
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-semibold text-foreground">Playlist</h3>
@@ -94,7 +98,10 @@ export function PartyQueuePanel() {
       </div>
 
       {/* Track List */}
-      <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto space-y-1 scrollbar-thin">
+      <div
+        ref={listRef}
+        className="flex-1 min-h-0 overflow-y-auto overscroll-contain space-y-1 scrollbar-thin pr-1 pb-1"
+      >
         {partyTracks.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground text-sm">
             No tracks in playlist
@@ -111,7 +118,6 @@ export function PartyQueuePanel() {
               className={cn(
                 'flex items-center gap-2 p-2 rounded-lg transition-colors group',
                 state === 'playing' && 'bg-primary/20 border border-primary/30',
-                state === 'played' && 'opacity-50',
                 state === 'upcoming' && 'bg-white/5 hover:bg-white/10',
                 isPendingNext && 'ring-2 ring-accent',
                 'cursor-grab active:cursor-grabbing'
@@ -143,9 +149,9 @@ export function PartyQueuePanel() {
                 </div>
               </div>
               
-              {/* Actions for upcoming tracks */}
-              {state === 'upcoming' && (
-                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              {/* Actions for any non-current track (mobile shows without hover) */}
+              {state !== 'playing' && (
+                <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                   <button
                     onClick={() => playNow(index)}
                     className="p-1 rounded hover:bg-primary/20 text-muted-foreground hover:text-primary"

@@ -34,15 +34,12 @@ export interface PartySource {
 export interface Settings {
   crossfadeSeconds: number;
   maxTempoPercent: number;
-  energyMode: 'chill' | 'normal' | 'hype';
   shuffleEnabled: boolean;
   // Master output
   masterVolume: number; // 0..1
   // Mix timing controls
   nextSongStartOffset: number; // seconds into next song to start
   endEarlySeconds?: number; // fade out this many seconds before current track ends
-  mixTriggerMode: 'remaining' | 'elapsed' | 'manual';
-  mixTriggerSeconds: number; // when to start bringing in next track
   // Tempo controls
   tempoMode: 'auto' | 'locked';
   lockedBpm: number;
@@ -77,18 +74,36 @@ interface MeJayDB extends DBSchema {
 
 let dbInstance: IDBPDatabase<MeJayDB> | null = null;
 
+const stripLegacySettingsKeys = (value: unknown): Partial<Settings> => {
+  if (!value || typeof value !== 'object') return {};
+  const {
+    // Legacy automation settings (removed)
+    energyMode: _energyMode,
+    mixTriggerMode: _mixTriggerMode,
+    mixTriggerSeconds: _mixTriggerSeconds,
+    ...rest
+  } = value as Record<string, unknown>;
+  return rest as Partial<Settings>;
+};
+
 export async function getDB(): Promise<IDBPDatabase<MeJayDB>> {
   if (dbInstance) return dbInstance;
 
   try {
-    console.log('[DB] Opening IndexedDB...');
-    dbInstance = await openDB<MeJayDB>(MEJAY_DB_NAME, 2, {
-      upgrade(db, oldVersion, newVersion) {
-        console.log('[DB] Upgrading from version', oldVersion, 'to', newVersion);
+    if (import.meta.env.DEV) {
+      console.debug('[DB] Opening IndexedDB...');
+    }
+    dbInstance = await openDB<MeJayDB>(MEJAY_DB_NAME, 3, {
+      async upgrade(db, oldVersion, newVersion, transaction) {
+        if (import.meta.env.DEV) {
+          console.debug('[DB] Upgrading from version', oldVersion, 'to', newVersion);
+        }
         
         // Tracks store
         if (!db.objectStoreNames.contains('tracks')) {
-          console.log('[DB] Creating tracks store');
+          if (import.meta.env.DEV) {
+            console.debug('[DB] Creating tracks store');
+          }
           const trackStore = db.createObjectStore('tracks', { keyPath: 'id' });
           trackStore.createIndex('by-name', 'displayName');
           trackStore.createIndex('by-bpm', 'bpm');
@@ -96,15 +111,33 @@ export async function getDB(): Promise<IDBPDatabase<MeJayDB>> {
 
         // Playlists store
         if (!db.objectStoreNames.contains('playlists')) {
-          console.log('[DB] Creating playlists store');
+          if (import.meta.env.DEV) {
+            console.debug('[DB] Creating playlists store');
+          }
           const playlistStore = db.createObjectStore('playlists', { keyPath: 'id' });
           playlistStore.createIndex('by-name', 'name');
         }
 
         // Settings store
         if (!db.objectStoreNames.contains('settings')) {
-          console.log('[DB] Creating settings store');
+          if (import.meta.env.DEV) {
+            console.debug('[DB] Creating settings store');
+          }
           db.createObjectStore('settings', { keyPath: 'id' });
+        }
+
+        // v3: remove legacy automation keys from persisted settings.
+        if (oldVersion < 3) {
+          try {
+            const settingsStore = transaction.objectStore('settings');
+            const existing = await settingsStore.get('default');
+            if (existing) {
+              const cleaned = stripLegacySettingsKeys(existing);
+              await settingsStore.put({ ...cleaned, id: 'default' } as Settings & { id: string });
+            }
+          } catch (error) {
+            console.error('[DB] Failed to migrate settings to v3:', error);
+          }
         }
       },
       blocked() {
@@ -120,7 +153,9 @@ export async function getDB(): Promise<IDBPDatabase<MeJayDB>> {
         dbInstance = null;
       },
     });
-    console.log('[DB] Database opened successfully');
+    if (import.meta.env.DEV) {
+      console.debug('[DB] Database opened successfully');
+    }
     return dbInstance;
   } catch (error) {
     console.error('[DB] Failed to open database:', error);
@@ -209,13 +244,10 @@ export async function getSettings(): Promise<Settings> {
   const defaults: Settings = {
     crossfadeSeconds: 8,
     maxTempoPercent: 6,
-    energyMode: 'normal',
     shuffleEnabled: false,
     masterVolume: 0.9,
     nextSongStartOffset: 15,
     endEarlySeconds: 5,
-    mixTriggerMode: 'remaining',
-    mixTriggerSeconds: 20,
     tempoMode: 'auto',
     lockedBpm: 128,
     autoBaseBpm: null,
@@ -228,13 +260,13 @@ export async function getSettings(): Promise<Settings> {
   };
 
   // Merge to backfill new fields for existing users.
-  return settings ? { ...defaults, ...settings } : defaults;
+  return settings ? { ...defaults, ...stripLegacySettingsKeys(settings) } : defaults;
 }
 
 export async function updateSettings(updates: Partial<Settings>): Promise<void> {
   const db = await getDB();
   const current = await getSettings();
-  await db.put('settings', { ...current, ...updates, id: 'default' } as Settings & { id: string });
+  await db.put('settings', { ...current, ...stripLegacySettingsKeys(updates), id: 'default' } as Settings & { id: string });
 }
 
 // Generate unique ID

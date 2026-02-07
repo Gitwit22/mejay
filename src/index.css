@@ -366,6 +366,17 @@
     @apply absolute inset-y-0 left-0 rounded-full;
     background: hsl(0 0% 100% / 0.06);
   }
+
+  .end-early-tick {
+    @apply absolute top-[-2px] h-[calc(100%+4px)] w-[2px] rounded-full;
+    background: hsl(336 100% 50% / 0.7);
+    box-shadow: 0 0 0 1px hsl(0 0% 0% / 0.15);
+  }
+
+  .end-early-shade {
+    @apply absolute inset-y-0 rounded-full;
+    background: hsl(336 100% 50% / 0.08);
+  }
   
   /* Album Art */
   .album-art {

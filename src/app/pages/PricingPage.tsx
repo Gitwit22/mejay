@@ -1,21 +1,37 @@
-import {useEffect} from 'react'
-import {Link, useNavigate} from 'react-router-dom'
+import {useEffect, useState} from 'react'
+import {Link} from 'react-router-dom'
 
 import {toast} from '@/hooks/use-toast'
+import {createCheckoutSession} from '@/lib/checkout'
+import {usePlanStore} from '@/stores/planStore'
 
 export default function PricingPage() {
-  const navigate = useNavigate()
+  const [isCheckingOut, setIsCheckingOut] = useState<'pro' | 'full_program' | null>(null)
+  const {billingEnabled, setDevPlan} = usePlanStore()
 
   useEffect(() => {
     window.scrollTo(0, 0)
   }, [])
 
-  const handleLifetimeCta = () => {
-    toast({
-      title: 'Checkout coming soon',
-      description: 'For now, contact support and we’ll get you set up.',
-    })
-    navigate('/contact')
+  const handleCheckout = async (plan: 'pro' | 'full_program') => {
+    if (!billingEnabled) {
+      setDevPlan(plan === 'pro' ? 'pro' : 'full_program')
+      toast({title: 'Billing disabled (dev)', description: 'Unlocked locally.'})
+      return
+    }
+    try {
+      setIsCheckingOut(plan)
+      const {url} = await createCheckoutSession(plan)
+      window.location.assign(url)
+    } catch (e) {
+      toast({
+        title: 'Checkout unavailable',
+        description: e instanceof Error ? e.message : 'Could not start checkout right now.',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsCheckingOut(null)
+    }
   }
 
   return (
@@ -52,7 +68,7 @@ export default function PricingPage() {
       <main className="main-content">
         <section className="hero">
           <h1>Choose Your Plan</h1>
-          <p className="hero-subtitle">Start free, upgrade when you're ready. One-time payment, no subscriptions.</p>
+          <p className="hero-subtitle">Start free, upgrade when you're ready. Pro is monthly. Full Program is lifetime.</p>
         </section>
 
         <div className="pricing-grid">
@@ -74,55 +90,61 @@ export default function PricingPage() {
           </div>
 
           <div className="pricing-card featured">
-            <span className="plan-badge">Best Value</span>
-            <div className="plan-name">MEJay Lifetime</div>
-            <div className="plan-description">Own it forever, one-time payment</div>
-            <div className="plan-price">
-              <span className="price-amount">$199</span>
-              <span className="price-period">one-time</span>
-            </div>
-            <ul className="plan-features">
-              <li>Install on up to 3 devices</li>
-              <li>All core features unlocked</li>
-              <li>Priority updates</li>
-              <li>Offline-ready via PWA install</li>
-              <li>Lifetime access</li>
-              <li>No recurring fees</li>
-            </ul>
-            <button type="button" className="plan-cta" onClick={handleLifetimeCta}>
-              Get Lifetime Access
-            </button>
-          </div>
-
-          <div className="pricing-card coming-soon" aria-disabled="true">
-            <span className="coming-soon-badge">Coming Soon</span>
+            <span className="plan-badge">Most Popular</span>
             <div className="plan-name">MEJay Pro</div>
-            <div className="plan-description">Advanced features for professionals</div>
+            <div className="plan-description">Advanced features while you subscribe</div>
             <div className="plan-price">
               <span className="price-amount">$5</span>
               <span className="price-period">/month</span>
             </div>
             <ul className="plan-features">
-              <li>Everything in Lifetime</li>
-              <li>Cloud sync across devices</li>
-              <li>Advanced automation</li>
-              <li>Business venue features</li>
-              <li>Priority support</li>
+              <li>All Pro DJ features unlocked</li>
+              <li>Auto volume matching</li>
+              <li>Smooth transitions & advanced timing</li>
+              <li>Tempo control + BPM tools</li>
             </ul>
-            <button type="button" className="plan-cta secondary" disabled>
-              Notify Me
+            <button
+              type="button"
+              className="plan-cta"
+              onClick={() => handleCheckout('pro')}
+              disabled={isCheckingOut !== null}
+            >
+              {isCheckingOut === 'pro' ? 'Starting checkout…' : 'Upgrade to Pro'}
+            </button>
+          </div>
+
+          <div className="pricing-card">
+            <span className="plan-badge">Lifetime</span>
+            <div className="plan-name">Full Program</div>
+            <div className="plan-description">One-time purchase, own it forever</div>
+            <div className="plan-price">
+              <span className="price-amount">$199</span>
+              <span className="price-period">one-time</span>
+            </div>
+            <ul className="plan-features">
+              <li>Everything in Pro</li>
+              <li>Keep access forever</li>
+              <li>Best for long-term use</li>
+            </ul>
+            <button
+              type="button"
+              className="plan-cta secondary"
+              onClick={() => handleCheckout('full_program')}
+              disabled={isCheckingOut !== null}
+            >
+              {isCheckingOut === 'full_program' ? 'Starting checkout…' : 'Buy Full Program'}
             </button>
           </div>
         </div>
 
         <div className="license-note" role="note">
-          <div className="license-note-title">📋 License Information</div>
+          <div className="license-note-title">Need help?</div>
           <div className="license-note-text">
-            Lifetime includes up to 3 device activations. Need more due to a device replacement?{' '}
+            If checkout fails or you have questions,{' '}
             <Link className="license-note-link" to="/contact">
-              Contact us
-            </Link>{' '}
-            and we'll help.
+              contact support
+            </Link>
+            .
           </div>
         </div>
       </main>

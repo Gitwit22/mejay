@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react';
 import { ListMusic, Music, Library, Settings } from 'lucide-react';
 import { useDJStore } from '@/stores/djStore';
 import { cn } from '@/lib/utils';
-import { Switch } from '@/components/ui/switch';
 import {
   Select,
   SelectContent,
@@ -60,7 +59,6 @@ export function PartyModeView() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3 flex-shrink-0">
         <div>
-          <span className="text-[11px] text-muted-foreground uppercase tracking-[2px]">Auto DJ</span>
           <h2 className="text-[22px] sm:text-[24px] font-bold text-gradient-accent">Party Mode</h2>
           {isPartyMode && partySource && (
             <div className="flex items-center gap-1.5 mt-1">
@@ -165,14 +163,6 @@ export function PartyModeView() {
               )}
             </div>
 
-            <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-white/5 w-full sm:w-auto">
-              <span className="text-[10px] text-muted-foreground">Auto Mix</span>
-              <Switch
-                checked={settings.mixTriggerMode !== 'manual'}
-                onCheckedChange={(checked) => updateUserSettings({ mixTriggerMode: checked ? 'remaining' : 'manual' })}
-              />
-            </div>
-
             <div className="hidden lg:flex items-center gap-1 p-1 rounded-xl bg-white/5 w-full sm:w-auto">
               {/* Desktop: switch inline panels. */}
               <button
@@ -256,15 +246,19 @@ export function PartyModeView() {
                 </div>
               </div>
 
-              {/* Fixed-height scroll area so the layout stays stable */}
-              <div className="h-[38dvh] min-h-[260px] max-h-[420px] overflow-y-auto scrollbar-thin px-4 pb-[calc(env(safe-area-inset-bottom,0)+40px)]">
+              {/* Fixed-height panel so layout stays stable (inner content scrolls) */}
+              <div className="h-[38dvh] min-h-[260px] max-h-[420px] overflow-hidden px-4 pb-[calc(env(safe-area-inset-bottom,0)+40px)]">
                 {activePanel === 'queue' ? (
-                  <PartyQueuePanel />
+                  <PartyQueuePanel
+                    className="h-full rounded-none border-0 bg-transparent backdrop-blur-none p-0"
+                  />
                 ) : (
-                  <div className="space-y-4 pt-2">
-                    <VolumeControls />
-                    <MixControls />
-                    <TempoControls />
+                  <div className="h-full overflow-y-auto overscroll-contain scrollbar-thin pr-1">
+                    <div className="space-y-4 pt-2">
+                      <VolumeControls />
+                      <MixControls />
+                      <TempoControls />
+                    </div>
                   </div>
                 )}
               </div>

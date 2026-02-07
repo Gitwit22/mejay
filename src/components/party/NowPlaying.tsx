@@ -44,6 +44,12 @@ export function NowPlaying() {
     : 0;
   const startPct = currentDeck.duration > 0 ? (startAt / currentDeck.duration) * 100 : 0;
 
+  const endEarlySeconds = Math.max(0, Math.min(settings.endEarlySeconds ?? 0, 60));
+  const endAt = currentDeck.duration > 0
+    ? Math.max(0, Math.min(currentDeck.duration, currentDeck.duration - endEarlySeconds))
+    : 0;
+  const endPct = currentDeck.duration > 0 ? (endAt / currentDeck.duration) * 100 : 0;
+
   const [skipLocked, setSkipLocked] = React.useState(false);
   const skipLockTimerRef = React.useRef<number | null>(null);
   const prevNowPlayingIndexRef = React.useRef(nowPlayingIndex);
@@ -202,6 +208,23 @@ export function NowPlaying() {
               />
             </>
           )}
+
+          {endEarlySeconds > 0.01 && currentDeck.duration > 0 && (
+            <>
+              <div
+                className="end-early-shade"
+                style={{
+                  left: `${Math.max(0, Math.min(100, endPct))}%`,
+                  width: `${Math.max(0, Math.min(100, 100 - endPct))}%`,
+                }}
+              />
+              <div
+                className="end-early-tick"
+                style={{ left: `${Math.max(0, Math.min(100, endPct))}%` }}
+                aria-hidden="true"
+              />
+            </>
+          )}
           <div 
             className="slider-fill transition-all duration-200"
             style={{ width: `${progress}%` }}
@@ -214,6 +237,12 @@ export function NowPlaying() {
         {startAt > 0.01 && (
           <div className="mt-1 text-[10px] text-muted-foreground">
             Start: {formatDuration(startAt)}
+          </div>
+        )}
+
+        {endEarlySeconds > 0.01 && currentDeck.duration > 0 && (
+          <div className="mt-1 text-[10px] text-muted-foreground">
+            End: {formatDuration(endAt)} (-{Math.round(endEarlySeconds)}s)
           </div>
         )}
       </div>

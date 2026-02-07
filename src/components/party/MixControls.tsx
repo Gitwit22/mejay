@@ -7,7 +7,9 @@ const DEFAULT_END_EARLY_SECONDS = 5;
 const DEFAULT_CROSSFADE_SECONDS = 8;
 
 export function MixControls() {
-  const { settings, updateUserSettings, tracks, partyTrackIds, nowPlayingIndex } = useDJStore();
+  const { settings, updateUserSettings, tracks, partyTrackIds, nowPlayingIndex, mixInProgress } = useDJStore();
+
+  const timingDisabled = mixInProgress;
 
   const nextIndex = nowPlayingIndex + 1;
   const nextTrackId = nextIndex < partyTrackIds.length ? partyTrackIds[nextIndex] : settings.loopPlaylist ? partyTrackIds[0] : null;
@@ -50,6 +52,7 @@ export function MixControls() {
         <Slider
           value={[settings.nextSongStartOffset]}
           onValueChange={([v]) => updateUserSettings({ nextSongStartOffset: v })}
+          disabled={timingDisabled}
           min={0}
           max={startOffsetMax}
           step={1}
@@ -69,6 +72,7 @@ export function MixControls() {
         <Slider
           value={[settings.endEarlySeconds ?? 0]}
           onValueChange={([v]) => updateUserSettings({ endEarlySeconds: v })}
+          disabled={timingDisabled}
           min={0}
           max={60}
           step={1}
@@ -83,11 +87,14 @@ export function MixControls() {
       <div>
         <div className="flex justify-between mb-2">
           <span className="text-xs text-muted-foreground">Crossfade Duration</span>
-          <span className="text-xs font-semibold text-accent">{Math.round(settings.crossfadeSeconds)}s</span>
+          <span className="text-xs font-semibold text-accent">
+            {Math.round(settings.crossfadeSeconds)}s
+          </span>
         </div>
         <Slider
           value={[settings.crossfadeSeconds]}
           onValueChange={([v]) => updateUserSettings({ crossfadeSeconds: v })}
+          disabled={timingDisabled}
           min={1}
           max={20}
           step={1}
@@ -95,6 +102,12 @@ export function MixControls() {
         />
         <p className="text-[9px] text-muted-foreground mt-1">How long the transition lasts</p>
       </div>
+
+      {mixInProgress && (
+        <p className="text-[9px] text-muted-foreground">
+          Transition in progress — timing changes apply next mix
+        </p>
+      )}
 
       {/* Tiny summary */}
       <div className="pt-1 space-y-0.5">

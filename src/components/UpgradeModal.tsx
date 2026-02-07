@@ -2,9 +2,11 @@ import { usePlanStore } from '@/stores/planStore';
 import { X, Check, Sparkles, Volume2, Sliders, Gauge } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
+import { toast } from '@/hooks/use-toast';
+import { createCheckoutSession } from '@/lib/checkout';
 
 export function UpgradeModal() {
-  const { upgradeModalOpen, closeUpgradeModal } = usePlanStore();
+  const { upgradeModalOpen, closeUpgradeModal, billingEnabled, setDevPlan } = usePlanStore();
   const navigate = useNavigate();
 
   const goToPricing = () => {
@@ -12,10 +14,30 @@ export function UpgradeModal() {
     navigate('/pricing');
   };
 
+  const beginCheckout = async (plan: 'pro' | 'full_program') => {
+    if (!billingEnabled) {
+      setDevPlan(plan === 'pro' ? 'pro' : 'full_program');
+      toast({title: 'Billing disabled (dev)', description: 'Unlocked locally.'});
+      closeUpgradeModal();
+      return;
+    }
+    try {
+      const {url} = await createCheckoutSession(plan);
+      window.location.assign(url);
+    } catch (e) {
+      toast({
+        title: 'Checkout unavailable',
+        description: e instanceof Error ? e.message : 'Could not start checkout right now.',
+        variant: 'destructive',
+      });
+      goToPricing();
+    }
+  };
+
   const features = [
     { icon: Volume2, label: 'Auto volume matching' },
     { icon: Sliders, label: 'Smooth transitions & crossfade control' },
-    { icon: Gauge, label: 'Tempo & energy control' },
+    { icon: Gauge, label: 'Tempo control + BPM tools' },
     { icon: Sparkles, label: 'Party-ready playback' },
   ];
 
@@ -54,8 +76,8 @@ export function UpgradeModal() {
                 <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-primary to-secondary mb-4">
                   <Sparkles className="w-7 h-7 text-white" />
                 </div>
-                <h2 className="text-xl font-bold text-foreground mb-1">Unlock ME Plus</h2>
-                <p className="text-sm text-muted-foreground">Pro DJ features for seamless mixes</p>
+                <h2 className="text-xl font-bold text-foreground mb-1">Unlock Pro Features</h2>
+                <p className="text-sm text-muted-foreground">Pro or Full Program unlocks advanced tools</p>
               </div>
 
               {/* Features List */}
@@ -74,23 +96,28 @@ export function UpgradeModal() {
               {/* Pricing Buttons */}
               <div className="space-y-2">
                 <button
-                  onClick={goToPricing}
+                  onClick={() => beginCheckout('pro')}
                   className="w-full py-3.5 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold text-sm hover:opacity-90 transition-opacity"
                 >
-                  $4.99 / month
+                  Upgrade to Pro — $5/month
+                </button>
+                <button
+                  onClick={() => beginCheckout('full_program')}
+                  className="w-full py-3.5 rounded-xl bg-white/10 text-foreground font-medium text-sm hover:bg-white/15 transition-colors"
+                >
+                  Buy Full Program — Own It Forever
                 </button>
                 <button
                   onClick={goToPricing}
-                  className="w-full py-3.5 rounded-xl bg-white/10 text-foreground font-medium text-sm hover:bg-white/15 transition-colors"
+                  className="w-full py-3.5 rounded-xl bg-transparent text-muted-foreground font-medium text-sm hover:text-foreground transition-colors"
                 >
-                  $50 / year
-                  <span className="ml-2 text-xs text-accent">(2 months free)</span>
+                  View pricing details
                 </button>
               </div>
 
               {/* Footer */}
               <p className="text-center text-[11px] text-muted-foreground mt-4">
-                Cancel anytime. No commitment.
+                Pro is subscription. Full Program is a one-time purchase.
               </p>
             </div>
           </motion.div>

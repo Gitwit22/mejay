@@ -1,8 +1,6 @@
 import {useMemo, useState} from 'react'
 import {useNavigate} from 'react-router-dom'
 import {ChevronDown, LogOut, Settings as SettingsIcon} from 'lucide-react'
-
-import {Dialog, DialogContent, DialogHeader, DialogTitle} from '@/components/ui/dialog'
 import {
   Sheet,
   SheetContent,
@@ -27,8 +25,9 @@ import {Collapsible, CollapsibleContent, CollapsibleTrigger} from '@/components/
 import {Separator} from '@/components/ui/separator'
 import {cn} from '@/lib/utils'
 import {useDJStore} from '@/stores/djStore'
-import {appStatus, getDeviceStatusLabel} from '@/appStatus'
+import {appStatus} from '@/appStatus'
 import {toast} from '@/hooks/use-toast'
+import {usePlanStore} from '@/stores/planStore'
 
 type TopRightSettingsMenuProps = {
   className?: string
@@ -37,8 +36,14 @@ type TopRightSettingsMenuProps = {
 export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
-  const [activateOpen, setActivateOpen] = useState(false)
-  const [licenseInfoOpen, setLicenseInfoOpen] = useState(false)
+
+  const {plan} = usePlanStore()
+
+  const planLabel = useMemo(() => {
+    if (plan === 'full_program') return 'Full Program'
+    if (plan === 'pro') return 'Pro'
+    return 'Free'
+  }, [plan])
 
   const logoutButtonClassName = useMemo(
     () =>
@@ -127,12 +132,8 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                   <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm">
                     <div className="flex items-center justify-between px-4 py-3">
                       <div className="text-sm text-muted-foreground">Plan</div>
-                      <div className="text-sm font-medium">{appStatus.plan}</div>
-                    </div>
-                    <Separator />
-                    <div className="flex items-center justify-between px-4 py-3">
-                      <div className="text-sm text-muted-foreground">Device</div>
-                      <div className="text-sm font-medium">{getDeviceStatusLabel()}</div>
+                      <div className="text-sm font-medium">{planLabel}</div>
+                
                     </div>
                     <Separator />
                     <div className="flex items-center justify-between px-4 py-3">
@@ -142,9 +143,10 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                   </div>
                 </CollapsibleContent>
               </div>
+              
             </Collapsible>
 
-            {/* B) Account / License */}
+            {/* B) Upgrade */}
             <Collapsible defaultOpen>
               <div className="space-y-3">
                 <CollapsibleTrigger asChild>
@@ -152,30 +154,23 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                     type="button"
                     className="group flex w-full items-center justify-between text-left text-xs font-semibold tracking-wide uppercase text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    <span>Account / License</span>
+                    <span>Upgrade</span>
                     <ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]:rotate-180" />
                   </button>
                 </CollapsibleTrigger>
                 <CollapsibleContent>
                   <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm">
-                    <div className="flex items-center justify-between px-4 py-3">
-                      <div className="text-sm text-muted-foreground">License status</div>
-                      <div className="text-sm font-medium">{appStatus.licenseStatus}</div>
-                    </div>
-                    <Separator />
-                    <div className="flex items-center justify-between px-4 py-3">
-                      <div className="text-sm text-muted-foreground">Device installs used</div>
-                      <div className="text-sm font-medium">
-                        {appStatus.installsUsed} of {appStatus.installsTotal}
+                    <div className="p-4 space-y-3">
+                      <div className="text-xs text-muted-foreground">
+                        Pro unlocks advanced features with a monthly subscription. Full Program is a one-time purchase.
                       </div>
-                    </div>
-                    <Separator />
-                    <div className="flex gap-2 p-4">
-                      <Button type="button" className="flex-1" onClick={() => setActivateOpen(true)}>
-                        Activate License
-                      </Button>
-                      <Button type="button" variant="outline" className="flex-1" onClick={() => setLicenseInfoOpen(true)}>
-                        License Info
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full"
+                        onClick={() => closeAndNavigate('/pricing')}
+                      >
+                        View pricing
                       </Button>
                     </div>
                   </div>
@@ -324,38 +319,6 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
               </Button>
             </div>
           </div>
-
-          {/* Activate License modal */}
-          <Dialog open={activateOpen} onOpenChange={setActivateOpen}>
-            <DialogContent className="max-w-sm">
-              <DialogHeader>
-                <DialogTitle>Activate License</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4">
-                <p className="text-sm text-muted-foreground">Activation flow is coming soon.</p>
-                <Button type="button" className="w-full" onClick={() => closeAndNavigate('/app')}>
-                  Back to App
-                </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
-
-          {/* License Info modal */}
-          <Dialog open={licenseInfoOpen} onOpenChange={setLicenseInfoOpen}>
-            <DialogContent className="max-w-sm">
-              <DialogHeader>
-                <DialogTitle>License Info</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4">
-                <p className="text-sm text-muted-foreground">License info and device management will live here.</p>
-                <Button type="button" variant="outline" className="w-full" onClick={() => setLicenseInfoOpen(false)}>
-                  Close
-                </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
-
-          {/* About modal */}
         </SheetContent>
       </Sheet>
     </div>

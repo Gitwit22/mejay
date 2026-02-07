@@ -6,6 +6,9 @@ import { useEffect } from "react";
 import { BrowserRouter, Routes, Route, Outlet, useNavigate } from "react-router-dom";
 import { audioEngine } from "@/lib/audioEngine";
 import { useDJStore } from "@/stores/djStore";
+import { usePlanStore } from "@/stores/planStore";
+import { getCheckoutStatus } from "@/lib/checkout";
+import { toast } from "@/hooks/use-toast";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import WelcomePage from "./app/pages/WelcomePage";
@@ -111,12 +114,99 @@ const AppLifetimeAudioCleanup = () => {
   return null;
 };
 
+const STRIPE_SESSION_ID_KEY = 'mejay:stripeSessionId';
+
+const AppBillingBootstrap = () => {
+  useEffect(() => {
+    const run = async () => {
+      try {
+        const planState = usePlanStore.getState();
+        if (!planState.billingEnabled) return;
+
+        const url = new URL(window.location.href);
+        const checkout = url.searchParams.get('checkout');
+        const sessionIdFromUrl = url.searchParams.get('session_id');
+
+        const verifyAndApply = async (sessionId: string, showToast: boolean) => {
+          try {
+            const status = await getCheckoutStatus(sessionId);
+            if (status.hasFullAccess && (status.accessType === 'pro' || status.accessType === 'full_program')) {
+              usePlanStore.getState().setRuntimePlan(status.accessType);
+              try {
+                localStorage.setItem(STRIPE_SESSION_ID_KEY, sessionId);
+              } catch {
+                // ignore
+              }
+              if (showToast) {
+                toast({
+                  title: 'Upgrade complete',
+                  description: status.accessType === 'pro' ? 'Pro is now active.' : 'Full Program is now active.',
+                });
+              }
+              return;
+            }
+
+            // Only downgrade to Free when we have a valid Stripe response.
+            usePlanStore.getState().setRuntimePlan('free');
+            if (showToast) {
+              toast({
+                title: 'Upgrade not active',
+                description: 'Payment was not completed or subscription is inactive.',
+                variant: 'destructive',
+              });
+            }
+          } catch (e) {
+            // Missing functions / non-JSON / transient failures should never blank the UI.
+            if (showToast) {
+              toast({
+                title: 'Could not verify purchase',
+                description: e instanceof Error ? e.message : 'Status check failed.',
+                variant: 'destructive',
+              });
+            }
+          }
+        };
+
+        // 1) If we just returned from Stripe, verify with session_id.
+        if (checkout === 'success' && sessionIdFromUrl) {
+          await verifyAndApply(sessionIdFromUrl, true);
+
+          // Clean URL (remove checkout params) without navigation.
+          url.searchParams.delete('checkout');
+          url.searchParams.delete('plan');
+          url.searchParams.delete('session_id');
+          window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+          return;
+        }
+
+        // 2) Otherwise, restore from stored session id if present.
+        let stored: string | null = null;
+        try {
+          stored = localStorage.getItem(STRIPE_SESSION_ID_KEY);
+        } catch {
+          stored = null;
+        }
+        if (stored) {
+          await verifyAndApply(stored, false);
+        }
+      } catch {
+        // Never throw from bootstrap.
+      }
+    };
+
+    void run();
+  }, []);
+
+  return null;
+};
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <Toaster />
       <Sonner />
       <AppLifetimeAudioCleanup />
+      <AppBillingBootstrap />
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<WelcomePage />} />

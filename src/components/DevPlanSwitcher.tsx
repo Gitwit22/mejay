@@ -1,38 +1,38 @@
 import { usePlanStore } from '@/stores/planStore';
 import { cn } from '@/lib/utils';
-import { Crown, User } from 'lucide-react';
+import { CreditCard, Ban } from 'lucide-react';
 
 export function DevPlanSwitcher() {
-  const { plan, setPlan } = usePlanStore();
+  const { billingEnabled, setBillingEnabled } = usePlanStore();
 
-  // Show in development and preview (for testing)
+  if (!import.meta.env.DEV) return null;
 
   return (
     <div className="fixed top-3 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-2 px-3 py-2 rounded-xl bg-background/90 backdrop-blur-md border border-border shadow-lg">
       <span className="text-[10px] text-muted-foreground uppercase tracking-wider mr-1">Dev</span>
       <button
-        onClick={() => setPlan('free')}
+        onClick={() => setBillingEnabled(false)}
         className={cn(
           'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all',
-          plan === 'free'
+          !billingEnabled
             ? 'bg-muted text-foreground'
             : 'text-muted-foreground hover:text-foreground'
         )}
       >
-        <User className="w-3 h-3" />
-        Free
+        <Ban className="w-3 h-3" />
+        Billing Off
       </button>
       <button
-        onClick={() => setPlan('plus')}
+        onClick={() => setBillingEnabled(true)}
         className={cn(
           'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all',
-          plan === 'plus'
+          billingEnabled
             ? 'bg-gradient-to-r from-primary to-secondary text-primary-foreground'
             : 'text-muted-foreground hover:text-foreground'
         )}
       >
-        <Crown className="w-3 h-3" />
-        Plus
+        <CreditCard className="w-3 h-3" />
+        Billing On
       </button>
     </div>
   );
