@@ -7,6 +7,17 @@ export type CheckoutStatus = {
   hasFullAccess: boolean
 }
 
+export class CheckoutStatusError extends Error {
+  status: number
+  bodyText?: string
+  constructor(message: string, status: number, bodyText?: string) {
+    super(message)
+    this.name = 'CheckoutStatusError'
+    this.status = status
+    this.bodyText = bodyText
+  }
+}
+
 export async function startCheckout(plan: 'pro' | 'full_program') {
   const {billingEnabled, setDevPlan} = usePlanStore.getState()
   if (!billingEnabled) {
@@ -53,6 +64,7 @@ export async function getCheckoutStatus(sessionId: string): Promise<CheckoutStat
 
   const res = await fetch(url.toString(), {
     method: 'GET',
+    cache: 'no-store',
     headers: {
       'accept': 'application/json',
     },
@@ -61,7 +73,22 @@ export async function getCheckoutStatus(sessionId: string): Promise<CheckoutStat
   const contentType = res.headers.get('content-type') ?? ''
   if (!res.ok) {
     const text = await res.text().catch(() => '')
-    throw new Error(text || `Status check failed (${res.status})`)
+    let message = text || `Status check failed (${res.status})`
+    if (contentType.includes('application/json')) {
+      try {
+        const parsed = JSON.parse(text) as {error?: unknown; message?: unknown}
+        const parsedMessage =
+          typeof parsed?.message === 'string'
+            ? parsed.message
+            : typeof parsed?.error === 'string'
+              ? parsed.error
+              : ''
+        if (parsedMessage) message = parsedMessage
+      } catch {
+        // ignore
+      }
+    }
+    throw new CheckoutStatusError(message, res.status, text)
   }
 
   if (!contentType.includes('application/json')) {

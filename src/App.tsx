@@ -7,7 +7,7 @@ import { BrowserRouter, Routes, Route, Outlet, useNavigate } from "react-router-
 import { audioEngine } from "@/lib/audioEngine";
 import { useDJStore } from "@/stores/djStore";
 import { usePlanStore } from "@/stores/planStore";
-import { getCheckoutStatus } from "@/lib/checkout";
+import { CheckoutStatusError, getCheckoutStatus } from "@/lib/checkout";
 import { toast } from "@/hooks/use-toast";
 import { handleBecameOnline, periodicPolicyTick, startupCheck } from "@/licensing/licenseService";
 import { useLicenseStore } from "@/licensing/licenseStore";
@@ -118,6 +118,8 @@ const AppLifetimeAudioCleanup = () => {
 
 const STRIPE_SESSION_ID_KEY = 'mejay:stripeSessionId';
 
+const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
 const AppLicenseBootstrap = () => {
   useEffect(() => {
     void startupCheck();
@@ -160,49 +162,108 @@ const AppBillingBootstrap = () => {
         const checkout = url.searchParams.get('checkout');
         const sessionIdFromUrl = url.searchParams.get('session_id');
 
-        const verifyAndApply = async (sessionId: string, showToast: boolean) => {
+        const applySuccessfulUpgrade = (sessionId: string, accessType: 'pro' | 'full_program') => {
+          usePlanStore.getState().setRuntimePlan(accessType);
           try {
-            const status = await getCheckoutStatus(sessionId);
-            if (status.hasFullAccess && (status.accessType === 'pro' || status.accessType === 'full_program')) {
-              usePlanStore.getState().setRuntimePlan(status.accessType);
-              try {
-                localStorage.setItem(STRIPE_SESSION_ID_KEY, sessionId);
-              } catch {
-                // ignore
-              }
-              if (showToast) {
-                toast({
-                  title: 'Upgrade complete',
-                  description: status.accessType === 'pro' ? 'Pro is now active.' : 'Full Program is now active.',
-                });
-              }
-              return;
-            }
-
-            // Only downgrade to Free when we have a valid Stripe response.
-            usePlanStore.getState().setRuntimePlan('free');
-            if (showToast) {
-              toast({
-                title: 'Upgrade not active',
-                description: 'Payment was not completed or subscription is inactive.',
-                variant: 'destructive',
-              });
-            }
-          } catch (e) {
-            // Missing functions / non-JSON / transient failures should never blank the UI.
-            if (showToast) {
-              toast({
-                title: 'Could not verify purchase',
-                description: e instanceof Error ? e.message : 'Status check failed.',
-                variant: 'destructive',
-              });
-            }
+            localStorage.setItem(STRIPE_SESSION_ID_KEY, sessionId);
+          } catch {
+            // ignore
           }
         };
 
-        // 1) If we just returned from Stripe, verify with session_id.
-        if (checkout === 'success' && sessionIdFromUrl) {
-          await verifyAndApply(sessionIdFromUrl, true);
+        const verifyAndApplyOnce = async (sessionId: string) => {
+          const status = await getCheckoutStatus(sessionId);
+          if (status.hasFullAccess && (status.accessType === 'pro' || status.accessType === 'full_program')) {
+            applySuccessfulUpgrade(sessionId, status.accessType);
+            return { status, activated: true as const };
+          }
+
+          // Only downgrade to Free when we have a valid Stripe response.
+          usePlanStore.getState().setRuntimePlan('free');
+          return { status, activated: false as const };
+        };
+
+        // 1) If we just returned from Stripe, verify with session_id (with grace window).
+        if (checkout === 'success') {
+          const debug = {
+            checkout,
+            hadSessionId: !!sessionIdFromUrl,
+            verifyRan: false,
+            attempts: 0,
+            lastStatus: null as null | { accessType: string; hasFullAccess: boolean },
+            lastError: null as null | { name: string; message: string; status?: number },
+          };
+
+          const activatingToast = toast({
+            title: 'Activating your upgrade…',
+            description: 'This can take a few seconds. Please keep this tab open.',
+          });
+
+          if (!sessionIdFromUrl) {
+            console.warn('[Billing] Stripe return missing session_id', debug);
+            activatingToast.update({
+              title: 'Could not verify purchase',
+              description: 'Missing Stripe session id. Please contact support.',
+              variant: 'destructive',
+            });
+          } else {
+            const sessionId = sessionIdFromUrl;
+            const maxAttempts = 10;
+
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+              debug.verifyRan = true;
+              debug.attempts = attempt;
+
+              try {
+                const result = await verifyAndApplyOnce(sessionId);
+                debug.lastStatus = result.status;
+                debug.lastError = null;
+
+                if (result.activated) {
+                  activatingToast.update({
+                    title: 'Upgrade complete',
+                    description: result.status.accessType === 'pro' ? 'Pro is now active.' : 'Full Program is now active.',
+                  });
+                  window.setTimeout(() => activatingToast.dismiss(), 2500);
+                  break;
+                }
+              } catch (e) {
+                const err = e instanceof Error ? e : new Error('Status check failed.');
+                debug.lastError = {
+                  name: err.name,
+                  message: err.message,
+                  status: err instanceof CheckoutStatusError ? err.status : undefined,
+                };
+              }
+
+              if (attempt < maxAttempts) {
+                activatingToast.update({
+                  title: 'Activating your upgrade…',
+                  description: `Checking purchase status… (${attempt}/${maxAttempts})`,
+                });
+                await sleep(1000);
+              } else {
+                activatingToast.dismiss();
+
+                // Only show the scary toast after we tried verify + grace window.
+                if (debug.lastError) {
+                  console.warn('[Billing] Verification failed after grace window', debug);
+                  toast({
+                    title: 'Could not verify purchase',
+                    description: debug.lastError.message,
+                    variant: 'destructive',
+                  });
+                } else {
+                  console.warn('[Billing] Upgrade not active after grace window', debug);
+                  toast({
+                    title: 'Upgrade not active',
+                    description: 'Payment was not completed or subscription is inactive.',
+                    variant: 'destructive',
+                  });
+                }
+              }
+            }
+          }
 
           // Clean URL (remove checkout params) without navigation.
           url.searchParams.delete('checkout');
@@ -220,7 +281,11 @@ const AppBillingBootstrap = () => {
           stored = null;
         }
         if (stored) {
-          await verifyAndApply(stored, false);
+          try {
+            await verifyAndApplyOnce(stored);
+          } catch {
+            // Silent background check.
+          }
         }
       } catch {
         // Never throw from bootstrap.

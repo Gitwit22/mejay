@@ -18,6 +18,9 @@ const json = (body: unknown, init?: ResponseInit) =>
     ...init,
     headers: {
       'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store, max-age=0',
+      pragma: 'no-cache',
+      expires: '0',
       'access-control-allow-origin': '*',
       'access-control-allow-methods': 'GET, OPTIONS',
       'access-control-allow-headers': 'content-type',
