@@ -11,6 +11,8 @@ type CheckoutStatusResponse = {
   hasFullAccess: boolean
 }
 
+type SessionPlan = 'pro' | 'full_program'
+
 const json = (body: unknown, init?: ResponseInit) =>
   new Response(JSON.stringify(body), {
     ...init,
@@ -37,12 +39,22 @@ async function stripeGet(secretKey: string, path: string): Promise<any> {
   })
   const text = await res.text()
   if (!res.ok) {
-    throw new Error(`Stripe API error (${res.status}): ${text.slice(0, 500)}`)
+    let message = text.slice(0, 500)
+    try {
+      const parsed = JSON.parse(text) as any
+      const parsedMessage = parsed?.error?.message
+      if (typeof parsedMessage === 'string' && parsedMessage.trim()) {
+        message = parsedMessage
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(message)
   }
   return JSON.parse(text)
 }
 
-export const onRequest: PagesFunction<Env> = async (context): Promise<Response> => {
+export const onRequest = async (context: {request: Request; env: Env}): Promise<Response> => {
   const {request, env} = context
 
   if (request.method === 'OPTIONS') return json({ok: true}, {status: 200})
@@ -56,19 +68,24 @@ export const onRequest: PagesFunction<Env> = async (context): Promise<Response> 
       return json({error: 'Missing session_id'}, {status: 400})
     }
 
-    const secretKey = getRequiredEnv(env, 'STRIPE_SECRET_KEY')
-    const pricePro = getRequiredEnv(env, 'STRIPE_PRICE_PRO')
-    const priceFull = getRequiredEnv(env, 'STRIPE_PRICE_FULL_PROGRAM')
+    const secretKey = getRequiredEnv(env, 'STRIPE_SECRET_KEY').trim()
+    const pricePro = getRequiredEnv(env, 'STRIPE_PRICE_PRO').trim()
+    const priceFull = getRequiredEnv(env, 'STRIPE_PRICE_FULL_PROGRAM').trim()
 
     const session = await stripeGet(secretKey, `/v1/checkout/sessions/${encodeURIComponent(sessionId)}?expand[]=line_items&expand[]=subscription`)
 
-    const lineItems = session?.line_items?.data as Array<{price?: {id?: string}}> | undefined
-    const priceId = lineItems?.[0]?.price?.id
+    // Prefer session metadata written at session creation time.
+    const metaPlanRaw = (session?.metadata?.plan ?? '') as string
+    const metaPlan: SessionPlan | null =
+      metaPlanRaw === 'pro' || metaPlanRaw === 'full_program' ? metaPlanRaw : null
 
-    const accessType: AccessType = priceId === priceFull ? 'full_program' : priceId === pricePro ? 'pro' : 'free'
-
-    if (accessType === 'free') {
-      return json({accessType: 'free', hasFullAccess: false} satisfies CheckoutStatusResponse)
+    let accessType: AccessType = 'free'
+    if (metaPlan) {
+      accessType = metaPlan
+    } else {
+      const lineItems = session?.line_items?.data as Array<{price?: {id?: string}}> | undefined
+      const priceId = lineItems?.[0]?.price?.id
+      accessType = priceId === priceFull ? 'full_program' : priceId === pricePro ? 'pro' : 'free'
     }
 
     if (accessType === 'full_program') {
@@ -76,12 +93,14 @@ export const onRequest: PagesFunction<Env> = async (context): Promise<Response> 
       return json({accessType: paid ? 'full_program' : 'free', hasFullAccess: !!paid} satisfies CheckoutStatusResponse)
     }
 
-    // pro subscription
-    const sub = session?.subscription
-    const status: string | undefined = sub?.status
-    const active = status === 'active' || status === 'trialing'
+    if (accessType === 'pro') {
+      const sub = session?.subscription
+      const status: string | undefined = sub?.status
+      const active = status === 'active' || status === 'trialing'
+      return json({accessType: active ? 'pro' : 'free', hasFullAccess: !!active} satisfies CheckoutStatusResponse)
+    }
 
-    return json({accessType: active ? 'pro' : 'free', hasFullAccess: !!active} satisfies CheckoutStatusResponse)
+    return json({accessType: 'free', hasFullAccess: false} satisfies CheckoutStatusResponse)
   } catch (e) {
     return json(
       {

@@ -983,6 +983,18 @@ export const useDJStore = create<DJState>()(
 
     startPartyMode: async (source: PartySource) => {
       const state = get();
+
+      // Safety default: whenever the user chooses a source to start Party Mode,
+      // ensure we start quiet (max 10%) to avoid unexpected loud playback.
+      // Do not *increase* volume if the user already had it lower.
+      if (!state.isPartyMode) {
+        const current = state.settings.masterVolume ?? 1;
+        const initialPartyVolume = 0.1;
+        const next = Math.min(current, initialPartyVolume);
+        if (next !== current) {
+          get().setMasterVolume(next);
+        }
+      }
       
       let trackIds = getTrackIdsForPartySource(state, source);
 
