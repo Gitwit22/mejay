@@ -31,6 +31,7 @@ interface DeckState {
 class AudioEngine {
   private audioContext: AudioContext | null = null;
   private masterGain: GainNode | null = null;
+  private masterVolume: number = 1;
   private limiterNode: DynamicsCompressorNode | null = null;
   private decks: Record<DeckId, DeckState> = {
     A: this.createEmptyDeck(),
@@ -269,6 +270,7 @@ class AudioEngine {
     
     // Create master chain: deck gains -> limiter -> master gain -> destination
     this.masterGain = this.audioContext.createGain();
+    this.masterGain.gain.value = Math.max(0, Math.min(1, this.masterVolume));
     this.limiterNode = this.audioContext.createDynamicsCompressor();
     
     this.updateLimiter();
@@ -778,8 +780,10 @@ class AudioEngine {
   }
 
   setMasterVolume(value: number): void {
+    const v = Math.max(0, Math.min(1, value));
+    this.masterVolume = v;
     if (this.masterGain) {
-      this.masterGain.gain.value = Math.max(0, Math.min(1, value));
+      this.masterGain.gain.value = v;
     }
   }
 
@@ -793,6 +797,8 @@ class AudioEngine {
       this.audioContext.close();
       this.audioContext = null;
     }
+    this.masterGain = null;
+    this.limiterNode = null;
   }
 }
 
