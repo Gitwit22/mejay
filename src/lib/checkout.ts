@@ -1,4 +1,4 @@
-import type {Plan} from '@/stores/planStore'
+import {usePlanStore, type Plan} from '@/stores/planStore'
 
 // NOTE: Only `startCheckout` + `getCheckoutStatus` are used by the app.
 
@@ -8,6 +8,12 @@ export type CheckoutStatus = {
 }
 
 export async function startCheckout(plan: 'pro' | 'full_program') {
+  const {billingEnabled, setDevPlan} = usePlanStore.getState()
+  if (!billingEnabled) {
+    setDevPlan(plan)
+    return
+  }
+
   const res = await fetch('/api/checkout', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -15,8 +21,24 @@ export async function startCheckout(plan: 'pro' | 'full_program') {
   })
 
   if (!res.ok) {
-    const txt = await res.text().catch(() => '')
-    throw new Error(`Checkout failed (${res.status}). ${txt}`)
+    let details = ''
+    const contentType = res.headers.get('content-type') ?? ''
+    if (contentType.includes('application/json')) {
+      const data = (await res
+        .clone()
+        .json()
+        .catch(() => null)) as null | {error?: unknown; message?: unknown}
+      const msg =
+        typeof data?.error === 'string'
+          ? data.error
+          : typeof data?.message === 'string'
+            ? data.message
+            : ''
+      details = msg
+    }
+    if (!details) details = await res.text().catch(() => '')
+
+    throw new Error(`Checkout failed (${res.status}). ${details}`.trim())
   }
 
   const data = (await res.json()) as { url?: string }

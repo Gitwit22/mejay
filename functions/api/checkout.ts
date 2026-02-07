@@ -32,12 +32,23 @@ async function stripePost(secretKey: string, path: string, body: URLSearchParams
 
   const text = await res.text();
   if (!res.ok) {
-    throw new Error(`Stripe API error (${res.status}): ${text.slice(0, 500)}`);
+    let message = text.slice(0, 500);
+    try {
+      const parsed = JSON.parse(text) as any;
+      const parsedMessage = parsed?.error?.message;
+      if (typeof parsedMessage === "string" && parsedMessage.trim()) {
+        message = parsedMessage;
+      }
+    } catch {
+      // ignore
+    }
+
+    throw new Error(message);
   }
   return JSON.parse(text);
 }
 
-export const onRequest: PagesFunction<Env> = async (ctx) => {
+export const onRequest = async (ctx: {request: Request; env: Env}) => {
   const { request, env } = ctx;
 
   // CORS preflight
@@ -57,9 +68,9 @@ export const onRequest: PagesFunction<Env> = async (ctx) => {
     return json({ error: `Invalid plan. Use "pro" | "full_program".` }, 400);
   }
 
-  const secretKey = env.STRIPE_SECRET_KEY;
-  const proPrice = env.STRIPE_PRICE_PRO;
-  const fullPrice = env.STRIPE_PRICE_FULL_PROGRAM;
+  const secretKey = env.STRIPE_SECRET_KEY?.trim();
+  const proPrice = env.STRIPE_PRICE_PRO?.trim();
+  const fullPrice = env.STRIPE_PRICE_FULL_PROGRAM?.trim();
 
   if (!secretKey || !proPrice || !fullPrice) {
     return json({
@@ -74,6 +85,16 @@ export const onRequest: PagesFunction<Env> = async (ctx) => {
 
   const isPro = plan === "pro";
   const priceId = isPro ? proPrice : fullPrice;
+
+  if (!priceId.startsWith("price_")) {
+    return json(
+      {
+        error:
+          "Invalid Stripe price id. STRIPE_PRICE_PRO / STRIPE_PRICE_FULL_PROGRAM must be a Price ID that starts with 'price_'.",
+      },
+      500,
+    );
+  }
 
   // Stripe Checkout mode
   const mode = isPro ? "subscription" : "payment";
