@@ -10,6 +10,7 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet'
 import {Button} from '@/components/ui/button'
+import {Badge} from '@/components/ui/badge'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,13 +22,18 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
+import {Checkbox} from '@/components/ui/checkbox'
 import {Collapsible, CollapsibleContent, CollapsibleTrigger} from '@/components/ui/collapsible'
+import {Input} from '@/components/ui/input'
+import {Label} from '@/components/ui/label'
 import {Separator} from '@/components/ui/separator'
 import {cn} from '@/lib/utils'
 import {useDJStore} from '@/stores/djStore'
 import {appStatus} from '@/appStatus'
 import {toast} from '@/hooks/use-toast'
 import {usePlanStore} from '@/stores/planStore'
+import {useLicenseStore} from '@/licensing/licenseStore'
+import {getNextRequiredCheckBy} from '@/licensing/licensePolicy'
 
 type TopRightSettingsMenuProps = {
   className?: string
@@ -36,8 +42,30 @@ type TopRightSettingsMenuProps = {
 export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
+  const [licenseKey, setLicenseKey] = useState('')
+  const [resetAlsoClearLicense, setResetAlsoClearLicense] = useState(false)
 
   const {plan} = usePlanStore()
+
+  const {
+    token,
+    plan: licensePlan,
+    deviceId,
+    derivedStatus,
+    derivedReason,
+    activatedAt,
+    expiresAt,
+    lastSuccessfulCheckAt,
+    lastAttemptAt,
+    activateWithKey,
+    forceRefresh,
+    clearLicense,
+  } = useLicenseStore()
+
+  const nextRequiredCheckBy = useMemo(
+    () => getNextRequiredCheckBy(lastSuccessfulCheckAt),
+    [lastSuccessfulCheckAt],
+  )
 
   const planLabel = useMemo(() => {
     if (plan === 'full_program') return 'Full Program'
@@ -77,10 +105,17 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
 
   const handleResetLocalData = async () => {
     setOpen(false)
+
+    if (resetAlsoClearLicense) {
+      clearLicense()
+    }
+
     await useDJStore.getState().resetLocalData()
     toast({
       title: 'Local data reset',
-      description: 'Your local library, playlists, and settings were cleared.',
+      description: resetAlsoClearLicense
+        ? 'Your local library, playlists, settings, and license were cleared.'
+        : 'Your local library, playlists, and settings were cleared. Your license was kept.',
     })
     navigate('/', {replace: true})
     window.location.reload()
@@ -146,7 +181,7 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
               
             </Collapsible>
 
-            {/* B) Upgrade */}
+            {/* B) Account / License */}
             <Collapsible defaultOpen>
               <div className="space-y-3">
                 <CollapsibleTrigger asChild>
@@ -154,22 +189,177 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                     type="button"
                     className="group flex w-full items-center justify-between text-left text-xs font-semibold tracking-wide uppercase text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    <span>Upgrade</span>
+                    <span>Account / License</span>
                     <ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]:rotate-180" />
                   </button>
                 </CollapsibleTrigger>
                 <CollapsibleContent>
                   <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm">
-                    <div className="p-4 space-y-3">
-                      <div className="text-xs text-muted-foreground">
-                        Pro unlocks advanced features with a monthly subscription. Full Program is a one-time purchase.
+                    <div className="p-4 space-y-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium">License</div>
+                          <div className="text-xs text-muted-foreground">Activate on this device</div>
+                        </div>
+                        <Badge
+                          variant={
+                            derivedStatus === 'PRO_OK'
+                              ? 'default'
+                              : derivedStatus === 'PRO_NEEDS_MANDATORY_CHECK'
+                                ? 'secondary'
+                                : derivedStatus === 'PRO_EXPIRED' || derivedStatus === 'INVALID'
+                                  ? 'destructive'
+                                  : 'outline'
+                          }
+                        >
+                          {derivedStatus === 'PRO_OK'
+                            ? licensePlan === 'full_program'
+                              ? 'Full Program'
+                              : 'Pro Active'
+                            : derivedStatus === 'PRO_NEEDS_MANDATORY_CHECK'
+                              ? 'Needs Check'
+                              : derivedStatus === 'PRO_EXPIRED'
+                                ? 'Expired'
+                                : derivedStatus === 'INVALID'
+                                  ? 'Invalid'
+                                  : 'Free'}
+                        </Badge>
                       </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="w-full"
-                        onClick={() => closeAndNavigate('/pricing')}
-                      >
+
+                      {derivedStatus === 'PRO_NEEDS_MANDATORY_CHECK' && (
+                        <div className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs text-muted-foreground">
+                          Connect to the internet to verify your license (required every 30 days).
+                        </div>
+                      )}
+
+                      {derivedStatus === 'INVALID' && derivedReason && (
+                        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                          {derivedReason}
+                        </div>
+                      )}
+
+                      <div className="space-y-2">
+                        <Label className="text-xs">License key</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            value={licenseKey}
+                            onChange={(e) => setLicenseKey(e.target.value)}
+                            placeholder="MEJAY-XXXX-XXXX"
+                            className="h-9"
+                          />
+                          <Button
+                            type="button"
+                            className="h-9"
+                            onClick={async () => {
+                              try {
+                                await activateWithKey(licenseKey)
+                                setLicenseKey('')
+                                toast({
+                                  title: 'License activated',
+                                  description: 'Pro features are now enabled on this device.',
+                                })
+                              } catch (e) {
+                                toast({
+                                  title: 'Activation failed',
+                                  description: e instanceof Error ? e.message : 'Could not activate license.',
+                                  variant: 'destructive',
+                                })
+                              }
+                            }}
+                            disabled={!licenseKey.trim()}
+                          >
+                            Activate
+                          </Button>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground">
+                          A check-in is required at least once every 30 days.
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 text-xs">
+                        <div>
+                          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Last checked</div>
+                          <div className="text-sm font-medium">
+                            {lastSuccessfulCheckAt ? new Date(lastSuccessfulCheckAt).toLocaleDateString() : '—'}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Next required by</div>
+                          <div className="text-sm font-medium">
+                            {nextRequiredCheckBy ? new Date(nextRequiredCheckBy).toLocaleDateString() : '—'}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Expires</div>
+                          <div className="text-sm font-medium">
+                            {expiresAt ? new Date(expiresAt).toLocaleDateString() : '—'}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Device ID</div>
+                          <button
+                            type="button"
+                            className="text-left text-sm font-medium hover:underline"
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard.writeText(deviceId)
+                                toast({title: 'Copied', description: 'Device ID copied to clipboard.'})
+                              } catch {
+                                toast({title: 'Copy failed', description: deviceId})
+                              }
+                            }}
+                            title="Tap to copy"
+                          >
+                            {deviceId.slice(0, 8)}…
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="flex-1"
+                          onClick={async () => {
+                            try {
+                              await forceRefresh()
+                              toast({title: 'Refreshed', description: 'License check completed.'})
+                            } catch {
+                              toast({
+                                title: 'Refresh failed',
+                                description: 'Could not refresh license right now.',
+                                variant: 'destructive',
+                              })
+                            }
+                          }}
+                          disabled={!token}
+                        >
+                          Refresh now
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="flex-1"
+                          onClick={() => {
+                            clearLicense()
+                            toast({title: 'License cleared', description: 'This device is now in Free mode.'})
+                          }}
+                          disabled={!token}
+                        >
+                          Deactivate
+                        </Button>
+                      </div>
+
+                      {lastAttemptAt && (
+                        <p className="text-[10px] text-muted-foreground">Last attempt: {new Date(lastAttemptAt).toLocaleString()}</p>
+                      )}
+
+                      {activatedAt && (
+                        <p className="text-[10px] text-muted-foreground">Activated: {new Date(activatedAt).toLocaleDateString()}</p>
+                      )}
+
+                      <Separator />
+                      <Button type="button" variant="outline" className="w-full" onClick={() => closeAndNavigate('/pricing')}>
                         View pricing
                       </Button>
                     </div>
@@ -192,26 +382,6 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                 </CollapsibleTrigger>
                 <CollapsibleContent>
                   <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm">
-                    <div className="flex items-center justify-between px-4 py-3 opacity-60">
-                      <div>
-                        <div className="text-sm font-medium">Default Volume</div>
-                        <div className="text-xs text-muted-foreground">Coming soon</div>
-                      </div>
-                      <Button type="button" variant="outline" disabled>
-                        Edit
-                      </Button>
-                    </div>
-                    <Separator />
-                    <div className="flex items-center justify-between px-4 py-3 opacity-60">
-                      <div>
-                        <div className="text-sm font-medium">Audio Output</div>
-                        <div className="text-xs text-muted-foreground">Coming soon</div>
-                      </div>
-                      <Button type="button" variant="outline" disabled>
-                        Select
-                      </Button>
-                    </div>
-                    <Separator />
                     <div className="p-4">
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
@@ -227,9 +397,20 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                           <AlertDialogHeader>
                             <AlertDialogTitle>Reset local data?</AlertDialogTitle>
                             <AlertDialogDescription>
-                              This clears your local library, playlists, and settings on this device. This can’t be undone.
+                              This clears your local library, playlists, and settings on this device. Your license stays unless you choose to remove it.
                             </AlertDialogDescription>
                           </AlertDialogHeader>
+
+                          <div className="flex items-start gap-3 py-2">
+                            <Checkbox
+                              id="reset-also-clear-license"
+                              checked={resetAlsoClearLicense}
+                              onCheckedChange={(v) => setResetAlsoClearLicense(Boolean(v))}
+                            />
+                            <label htmlFor="reset-also-clear-license" className="text-sm leading-tight text-muted-foreground">
+                              Also remove license & activation info
+                            </label>
+                          </div>
                           <AlertDialogFooter>
                             <AlertDialogCancel>Cancel</AlertDialogCancel>
                             <AlertDialogAction
@@ -302,6 +483,9 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                     </Button>
                     <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/terms')}>
                       Terms of Service
+                    </Button>
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/privacy')}>
+                      Privacy Policy
                     </Button>
                     <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/contact')}>
                       Contact & Support

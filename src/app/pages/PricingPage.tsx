@@ -2,7 +2,7 @@ import {useEffect, useState} from 'react'
 import {Link} from 'react-router-dom'
 
 import {toast} from '@/hooks/use-toast'
-import {createCheckoutSession} from '@/lib/checkout'
+import {startCheckout} from '@/lib/checkout'
 import {usePlanStore} from '@/stores/planStore'
 
 export default function PricingPage() {
@@ -21,8 +21,7 @@ export default function PricingPage() {
     }
     try {
       setIsCheckingOut(plan)
-      const {url} = await createCheckoutSession(plan)
-      window.location.assign(url)
+      await startCheckout(plan)
     } catch (e) {
       toast({
         title: 'Checkout unavailable',

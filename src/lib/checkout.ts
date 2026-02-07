@@ -1,34 +1,28 @@
 import type {Plan} from '@/stores/planStore'
 
-export type CheckoutPlan = Exclude<Plan, 'free'>
-
-export type CheckoutResponse = {
-  url: string
-}
+// NOTE: Only `startCheckout` + `getCheckoutStatus` are used by the app.
 
 export type CheckoutStatus = {
   accessType: 'free' | 'pro' | 'full_program'
   hasFullAccess: boolean
 }
 
-export async function createCheckoutSession(plan: CheckoutPlan): Promise<CheckoutResponse> {
+export async function startCheckout(plan: 'pro' | 'full_program') {
   const res = await fetch('/api/checkout', {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({plan}),
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ plan }),
   })
 
   if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new Error(text || `Checkout failed (${res.status})`)
+    const txt = await res.text().catch(() => '')
+    throw new Error(`Checkout failed (${res.status}). ${txt}`)
   }
 
-  const data = (await res.json()) as Partial<CheckoutResponse>
-  if (!data.url) throw new Error('Checkout failed: missing redirect URL')
+  const data = (await res.json()) as { url?: string }
+  if (!data.url) throw new Error('Checkout failed: missing url')
 
-  return {url: data.url}
+  window.location.href = data.url
 }
 
 export async function getCheckoutStatus(sessionId: string): Promise<CheckoutStatus> {

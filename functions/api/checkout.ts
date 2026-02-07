@@ -1,95 +1,99 @@
-type Plan = 'pro' | 'full_program'
+// functions/api/checkout.ts
+
+type Plan = "pro" | "full_program";
 
 type Env = {
-  STRIPE_SECRET_KEY: string
-  STRIPE_PRICE_PRO: string
-  STRIPE_PRICE_FULL_PROGRAM: string
-}
+  STRIPE_SECRET_KEY: string;
+  STRIPE_PRICE_PRO: string;
+  STRIPE_PRICE_FULL_PROGRAM: string;
+};
 
-const json = (body: unknown, init?: ResponseInit) =>
-  new Response(JSON.stringify(body), {
-    ...init,
+function json(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
     headers: {
-      'content-type': 'application/json; charset=utf-8',
-      ...(init?.headers ?? {}),
+      "content-type": "application/json",
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "POST, OPTIONS",
+      "access-control-allow-headers": "content-type",
     },
-  })
-
-function getRequiredEnv(env: Partial<Env>, key: keyof Env): string {
-  const value = env[key]
-  if (!value) throw new Error(`Missing env var: ${key}`)
-  return value
+  });
 }
 
-export const onRequestPost = async (context: {request: Request; env: Env}): Promise<Response> => {
-  const {request, env} = context
-  try {
-    const contentType = request.headers.get('content-type') ?? ''
-    if (!contentType.includes('application/json')) {
-      return json({error: 'Expected application/json'}, {status: 415})
-    }
+async function stripePost(secretKey: string, path: string, body: URLSearchParams): Promise<any> {
+  const res = await fetch(`https://api.stripe.com${path}`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${secretKey}`,
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body,
+  });
 
-    const payload = (await request.json()) as {plan?: Plan}
-    const plan = payload?.plan
-    if (plan !== 'pro' && plan !== 'full_program') {
-      return json({error: 'Invalid plan'}, {status: 400})
-    }
-
-    const secretKey = getRequiredEnv(env, 'STRIPE_SECRET_KEY')
-
-    const priceId =
-      plan === 'pro'
-        ? getRequiredEnv(env, 'STRIPE_PRICE_PRO')
-        : getRequiredEnv(env, 'STRIPE_PRICE_FULL_PROGRAM')
-
-    const mode = plan === 'pro' ? 'subscription' : 'payment'
-
-    const origin = new URL(request.url).origin
-    const successUrl = `${origin}/?checkout=success&plan=${plan}&session_id={CHECKOUT_SESSION_ID}`
-    const cancelUrl = `${origin}/pricing?checkout=cancel`
-
-    const params = new URLSearchParams()
-    params.set('mode', mode)
-    params.set('success_url', successUrl)
-    params.set('cancel_url', cancelUrl)
-    params.set('line_items[0][price]', priceId)
-    params.set('line_items[0][quantity]', '1')
-
-    const stripeRes = await fetch('https://api.stripe.com/v1/checkout/sessions', {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${secretKey}`,
-        'content-type': 'application/x-www-form-urlencoded',
-      },
-      body: params.toString(),
-    })
-
-    const stripeText = await stripeRes.text()
-    if (!stripeRes.ok) {
-      // Avoid leaking secrets; Stripe response is safe but can be verbose.
-      return json(
-        {
-          error: 'Stripe API error',
-          status: stripeRes.status,
-          details: stripeText.slice(0, 2000),
-        },
-        {status: 502},
-      )
-    }
-
-    const session = JSON.parse(stripeText) as {url?: string}
-    if (!session.url) {
-      return json({error: 'Stripe session missing url'}, {status: 502})
-    }
-
-    return json({url: session.url})
-  } catch (e) {
-    return json(
-      {
-        error: 'Checkout failed',
-        message: e instanceof Error ? e.message : 'Unknown error',
-      },
-      {status: 500},
-    )
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Stripe API error (${res.status}): ${text.slice(0, 500)}`);
   }
+  return JSON.parse(text);
 }
+
+export const onRequest: PagesFunction<Env> = async (ctx) => {
+  const { request, env } = ctx;
+
+  // CORS preflight
+  if (request.method === "OPTIONS") return json({ ok: true }, 200);
+
+  if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
+
+  let body: any;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "Invalid JSON" }, 400);
+  }
+
+  const plan = body?.plan as Plan | undefined;
+  if (plan !== "pro" && plan !== "full_program") {
+    return json({ error: `Invalid plan. Use "pro" | "full_program".` }, 400);
+  }
+
+  const secretKey = env.STRIPE_SECRET_KEY;
+  const proPrice = env.STRIPE_PRICE_PRO;
+  const fullPrice = env.STRIPE_PRICE_FULL_PROGRAM;
+
+  if (!secretKey || !proPrice || !fullPrice) {
+    return json({
+      error:
+        "Missing env vars. Required: STRIPE_SECRET_KEY, STRIPE_PRICE_PRO, STRIPE_PRICE_FULL_PROGRAM",
+    }, 500);
+  }
+
+  // Build absolute origin from request
+  const url = new URL(request.url);
+  const origin = `${url.protocol}//${url.host}`;
+
+  const isPro = plan === "pro";
+  const priceId = isPro ? proPrice : fullPrice;
+
+  // Stripe Checkout mode
+  const mode = isPro ? "subscription" : "payment";
+
+  try {
+    const params = new URLSearchParams();
+    params.set("mode", mode);
+    params.set("line_items[0][price]", priceId);
+    params.set("line_items[0][quantity]", "1");
+    // Include the session id so the app can verify purchase and unlock features.
+    // Stripe will replace {CHECKOUT_SESSION_ID} with the real ID.
+    params.set("success_url", `${origin}/pricing?checkout=success&session_id={CHECKOUT_SESSION_ID}`);
+    params.set("cancel_url", `${origin}/pricing?checkout=cancel`);
+    params.set("metadata[plan]", plan);
+
+    const session = await stripePost(secretKey, "/v1/checkout/sessions", params);
+    const redirectUrl: string | undefined = session?.url;
+    if (!redirectUrl) return json({ error: "No checkout URL returned" }, 500);
+    return json({ url: redirectUrl }, 200);
+  } catch (err: any) {
+    return json({ error: err?.message ?? "Stripe error" }, 500);
+  }
+};

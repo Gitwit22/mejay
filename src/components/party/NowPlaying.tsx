@@ -250,6 +250,18 @@ export function NowPlaying() {
       {/* Controls */}
       <div className="flex justify-center items-center gap-4">
         <button
+          onClick={() => updateUserSettings({ shuffleEnabled: !settings.shuffleEnabled })}
+          className={cn(
+            'ctrl-btn ctrl-secondary',
+            settings.shuffleEnabled && 'ring-2 ring-primary'
+          )}
+          title={settings.shuffleEnabled ? 'Shuffle On' : 'Shuffle Off'}
+          type="button"
+        >
+          <Shuffle className="w-4 h-4" />
+        </button>
+
+        <button
           onPointerDown={onBackPointerDown}
           onPointerUp={onBackPointerUp}
           onPointerCancel={clearBackTimer}
@@ -260,18 +272,6 @@ export function NowPlaying() {
           type="button"
         >
           <SkipBack className="w-4 h-4" />
-        </button>
-
-        <button
-          onClick={() => updateUserSettings({ shuffleEnabled: !settings.shuffleEnabled })}
-          className={cn(
-            'ctrl-btn ctrl-secondary',
-            settings.shuffleEnabled && 'ring-2 ring-primary'
-          )}
-          title={settings.shuffleEnabled ? 'Shuffle On' : 'Shuffle Off'}
-          type="button"
-        >
-          <Shuffle className="w-4 h-4" />
         </button>
 
         <button

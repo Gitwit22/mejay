@@ -3,7 +3,7 @@ import { X, Check, Sparkles, Volume2, Sliders, Gauge } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { toast } from '@/hooks/use-toast';
-import { createCheckoutSession } from '@/lib/checkout';
+import { startCheckout } from '@/lib/checkout';
 
 export function UpgradeModal() {
   const { upgradeModalOpen, closeUpgradeModal, billingEnabled, setDevPlan } = usePlanStore();
@@ -22,8 +22,7 @@ export function UpgradeModal() {
       return;
     }
     try {
-      const {url} = await createCheckoutSession(plan);
-      window.location.assign(url);
+      await startCheckout(plan);
     } catch (e) {
       toast({
         title: 'Checkout unavailable',
