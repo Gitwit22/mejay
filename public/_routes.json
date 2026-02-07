@@ -2,7 +2,6 @@
   "version": 1,
   "include": ["/*"],
   "exclude": [
-    "/api/*",
     "/assets/*",
     "/*.png",
     "/*.jpg",
