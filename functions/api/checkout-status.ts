@@ -16,6 +16,9 @@ const json = (body: unknown, init?: ResponseInit) =>
     ...init,
     headers: {
       'content-type': 'application/json; charset=utf-8',
+      'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'GET, OPTIONS',
+      'access-control-allow-headers': 'content-type',
       ...(init?.headers ?? {}),
     },
   })
@@ -39,8 +42,11 @@ async function stripeGet(secretKey: string, path: string): Promise<any> {
   return JSON.parse(text)
 }
 
-export const onRequestGet = async (context: {request: Request; env: Env}): Promise<Response> => {
+export const onRequest: PagesFunction<Env> = async (context): Promise<Response> => {
   const {request, env} = context
+
+  if (request.method === 'OPTIONS') return json({ok: true}, {status: 200})
+  if (request.method !== 'GET') return json({error: 'Method not allowed'}, {status: 405})
 
   try {
     const url = new URL(request.url)

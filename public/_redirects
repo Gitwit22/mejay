@@ -3,4 +3,5 @@
 # Routing config (if needed later): see /_routes.json
 
 # SPA fallback (Cloudflare Pages / Netlify-style redirects)
+/api/* /api/:splat 200
 /* /index.html 200

@@ -9,6 +9,8 @@ import { useDJStore } from "@/stores/djStore";
 import { usePlanStore } from "@/stores/planStore";
 import { getCheckoutStatus } from "@/lib/checkout";
 import { toast } from "@/hooks/use-toast";
+import { handleBecameOnline, periodicPolicyTick, startupCheck } from "@/licensing/licenseService";
+import { useLicenseStore } from "@/licensing/licenseStore";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import WelcomePage from "./app/pages/WelcomePage";
@@ -116,10 +118,41 @@ const AppLifetimeAudioCleanup = () => {
 
 const STRIPE_SESSION_ID_KEY = 'mejay:stripeSessionId';
 
+const AppLicenseBootstrap = () => {
+  useEffect(() => {
+    void startupCheck();
+
+    const onOnline = () => {
+      void handleBecameOnline();
+    };
+    const onVisibility = () => {
+      if (!document.hidden) void startupCheck();
+    };
+
+    window.addEventListener('online', onOnline);
+    document.addEventListener('visibilitychange', onVisibility);
+
+    const intervalId = window.setInterval(() => {
+      periodicPolicyTick();
+    }, 60_000);
+
+    return () => {
+      window.removeEventListener('online', onOnline);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  return null;
+};
+
 const AppBillingBootstrap = () => {
   useEffect(() => {
     const run = async () => {
       try {
+        // If a license token exists, licensing is the source of truth.
+        if (useLicenseStore.getState().token) return;
+
         const planState = usePlanStore.getState();
         if (!planState.billingEnabled) return;
 
@@ -206,6 +239,7 @@ const App = () => (
       <Toaster />
       <Sonner />
       <AppLifetimeAudioCleanup />
+      <AppLicenseBootstrap />
       <AppBillingBootstrap />
       <BrowserRouter>
         <Routes>
