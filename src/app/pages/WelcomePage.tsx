@@ -4,6 +4,7 @@ import {Globe, Infinity, Sparkles, ArrowUpRight} from 'lucide-react'
 
 import {useGradientParallax} from '../hooks/useGradientParallax'
 import {appStatus} from '@/appStatus'
+import { MEJAY_LOGO_URL } from '@/lib/branding'
 
 export default function WelcomePage() {
   const navigate = useNavigate()
@@ -27,9 +28,7 @@ export default function WelcomePage() {
         <section className="hero-panel" aria-label="MEJay introduction">
           <header className="brand-row">
             <div className="brand">
-              <div className="welcome-logo-bezel">
-                <img className="welcome-logo" src="/image.jpg" alt="MEJay" />
-              </div>
+              <img className="welcome-logo" src={MEJAY_LOGO_URL} alt="MEJay" />
               <div className="brand-text">
                 <div className="brand-title">
                   <span className="brand-name">MEJay</span>
@@ -51,10 +50,13 @@ export default function WelcomePage() {
             <button type="button" className="cta-primary" onClick={() => navigate('/app')}>
               Enter MEJay
             </button>
+            <button type="button" className="cta-secondary" onClick={() => navigate('/login?returnTo=/app')}>
+              Login
+            </button>
           </div>
 
           <div className="trust-row" aria-label="Trust points">
-            <div className="trust-item">No login yet</div>
+            <div className="trust-item">Email login</div>
             <div className="trust-item">Browser-first</div>
             <div className="trust-item">Installable (PWA)</div>
           </div>

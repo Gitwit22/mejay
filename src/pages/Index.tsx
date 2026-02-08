@@ -9,6 +9,7 @@ import { DevPlanSwitcher } from '@/components/DevPlanSwitcher';
 import { UpgradeModal } from '@/components/UpgradeModal';
 import { TopRightSettingsMenu } from '@/components/TopRightSettingsMenu';
 import { cn } from '@/lib/utils';
+import { MEJAY_LOGO_URL } from '@/lib/branding';
 
 type TabId = 'library' | 'party' | 'playlists';
 
@@ -79,10 +80,12 @@ const Index = () => {
       >
         {/* Logo Header (hide in Party Mode to maximize usable viewport) */}
         {activeTab !== 'party' && (
-          <div className="flex justify-center mb-2 flex-shrink-0">
-            <div className="inline-flex rounded-2xl border border-white/10 bg-transparent p-3 shadow-[0_18px_60px_rgba(0,0,0,0.55)]">
-              <img src="/image.jpg" alt="MEJay" className="h-16 w-auto object-contain" />
-            </div>
+          <div className="flex justify-center mb-3 flex-shrink-0">
+            <img
+              src={MEJAY_LOGO_URL}
+              alt="MEJay"
+              className="h-32 w-auto object-contain drop-shadow-[0_18px_60px_rgba(0,0,0,0.55)]"
+            />
           </div>
         )}
 

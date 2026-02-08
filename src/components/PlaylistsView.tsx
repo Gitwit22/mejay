@@ -92,7 +92,7 @@ function PlaylistTrackList({
 
 export function PlaylistsView() {
   const navigate = useNavigate();
-  const { playlists, tracks, createPlaylist, deletePlaylistById, startPartyMode, removeTrackFromPlaylist } = useDJStore();
+  const { playlists, tracks, createPlaylist, deletePlaylistById, startPartyMode, removeFromPlaylist } = useDJStore();
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [selectedPlaylist, setSelectedPlaylist] = useState<string | null>(null);
@@ -177,7 +177,7 @@ export function PlaylistsView() {
               tracks={playlistTracks}
               playlistId={selectedPlaylist}
               isReordering={isReordering}
-              onRemove={(trackId) => removeTrackFromPlaylist(selectedPlaylist, trackId)}
+              onRemove={(trackId) => removeFromPlaylist(selectedPlaylist, trackId)}
             />
           )}
         </div>

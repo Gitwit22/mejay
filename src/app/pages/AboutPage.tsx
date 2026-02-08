@@ -1,6 +1,7 @@
 import {Link, useNavigate} from 'react-router-dom'
 
 import {useGradientScrollParallax} from '../hooks/useGradientScrollParallax'
+import { MEJAY_LOGO_URL } from '@/lib/branding'
 
 export default function AboutPage() {
   const navigate = useNavigate()
@@ -16,7 +17,7 @@ export default function AboutPage() {
         <div className="header-content">
           <Link to="/" className="logo-link" aria-label="MEJay Home">
             <div className="logo-small" aria-hidden="true">
-              <img className="about-logo" src="/image.jpg" alt="MEJay" />
+              <img className="about-logo" src={MEJAY_LOGO_URL} alt="MEJay" />
             </div>
             <span className="logo-text">MEJay</span>
           </Link>

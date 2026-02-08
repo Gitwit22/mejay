@@ -1,6 +1,7 @@
 import { audioEngine, type DeckId } from '@/lib/audioEngine'
 import type { Track } from '@/lib/db'
 import { useDJStore } from '@/stores/djStore'
+import { MEJAY_LOGO_URL } from '@/lib/branding'
 
 type MediaSessionPlaybackState = 'none' | 'paused' | 'playing'
 
@@ -34,9 +35,9 @@ function toArtwork(track?: Track): MediaImage[] | undefined {
   // Use stable app artwork so lock screen UI still looks good.
   // (Relative URLs are fine; Media Session will resolve them.)
   const base: MediaImage[] = [
-    { src: '/image.jpg', sizes: '512x512', type: 'image/jpeg' },
-    { src: '/party.jpg', sizes: '512x512', type: 'image/jpeg' },
-    { src: '/favicon.ico', sizes: '48x48', type: 'image/x-icon' },
+    { src: MEJAY_LOGO_URL, sizes: '512x512', type: 'image/png' },
+    { src: MEJAY_LOGO_URL, sizes: '256x256', type: 'image/png' },
+    { src: MEJAY_LOGO_URL, sizes: '96x96', type: 'image/png' },
   ]
 
   // In case you later add track-level artwork (e.g. track.artworkUrl), append it here.
@@ -197,48 +198,56 @@ export function initMediaSession(): void {
   })
 
   // Keep metadata and playback state in sync.
-  useDJStore.subscribe(
-    s => {
-      const activeDeck = s.activeDeck
-      const deckState = activeDeck === 'A' ? s.deckA : s.deckB
-      return {
-        activeDeck,
-        activeTrackId: deckState.trackId,
-        activeIsPlaying: deckState.isPlaying,
-        anyIsPlaying: s.deckA.isPlaying || s.deckB.isPlaying,
-      }
-    },
-    next => {
-      const state = useDJStore.getState()
-      const track = getActiveTrack(state)
-
-      setMetadata(track)
-
-      if (!next.activeTrackId) {
-        safeSetPlaybackState('none')
-        stopPositionInterval()
-        return
-      }
-
-      if (next.anyIsPlaying) {
-        safeSetPlaybackState('playing')
-        ensurePositionIntervalRunning()
-      } else {
-        safeSetPlaybackState('paused')
-        stopPositionInterval()
-      }
-
-      updatePositionState()
-    },
-    {
-      fireImmediately: true,
-      equalityFn: (a, b) =>
-        a.activeDeck === b.activeDeck &&
-        a.activeTrackId === b.activeTrackId &&
-        a.activeIsPlaying === b.activeIsPlaying &&
-        a.anyIsPlaying === b.anyIsPlaying,
+  const getSnapshot = (s: ReturnType<typeof useDJStore.getState>) => {
+    const activeDeck = s.activeDeck
+    const deckState = activeDeck === 'A' ? s.deckA : s.deckB
+    return {
+      activeDeck,
+      activeTrackId: deckState.trackId,
+      activeIsPlaying: deckState.isPlaying,
+      anyIsPlaying: s.deckA.isPlaying || s.deckB.isPlaying,
     }
-  )
+  }
+
+  const isEqual = (a: ReturnType<typeof getSnapshot>, b: ReturnType<typeof getSnapshot>) =>
+    a.activeDeck === b.activeDeck &&
+    a.activeTrackId === b.activeTrackId &&
+    a.activeIsPlaying === b.activeIsPlaying &&
+    a.anyIsPlaying === b.anyIsPlaying
+
+  const handleSnapshot = (next: ReturnType<typeof getSnapshot>) => {
+    const state = useDJStore.getState()
+    const track = getActiveTrack(state)
+
+    setMetadata(track)
+
+    if (!next.activeTrackId) {
+      safeSetPlaybackState('none')
+      stopPositionInterval()
+      return
+    }
+
+    if (next.anyIsPlaying) {
+      safeSetPlaybackState('playing')
+      ensurePositionIntervalRunning()
+    } else {
+      safeSetPlaybackState('paused')
+      stopPositionInterval()
+    }
+
+    updatePositionState()
+  }
+
+  // fireImmediately
+  let last = getSnapshot(useDJStore.getState())
+  handleSnapshot(last)
+
+  useDJStore.subscribe(s => {
+    const next = getSnapshot(s)
+    if (isEqual(last, next)) return
+    last = next
+    handleSnapshot(next)
+  })
 
   // Cleanup interval on page unload.
   window.addEventListener('pagehide', () => {

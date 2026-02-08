@@ -1,8 +1,9 @@
-import { Search, Upload, Music, MoreVertical, ListPlus, Check, Plus, X } from 'lucide-react';
+import { Search, Upload, Music, MoreVertical, ListPlus, Check, Plus, X, Play, Library } from 'lucide-react';
 import { useState, useRef } from 'react';
 import { useDJStore } from '@/stores/djStore';
 import { cn, formatDuration } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
+import { useNavigate } from 'react-router-dom';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,22 +12,28 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 export function LibraryView() {
+  const navigate = useNavigate();
   const { 
     tracks, 
     isLoadingTracks, 
     importTracks, 
-    deleteTrackById, 
+    removeFromLibrary,
     loadTrackToDeck, 
     deckA,
     playlists,
     addTrackToPlaylist,
     createPlaylist,
+    switchPartySourceSmooth,
   } = useDJStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [showAddToPlaylist, setShowAddToPlaylist] = useState<string | null>(null);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [playlistSearchQuery, setPlaylistSearchQuery] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Count only tracks that have a valid fileBlob (playable)
+  const playableTracks = tracks.filter(t => t.fileBlob);
+  const playableCount = playableTracks.length;
 
   const filteredTracks = tracks.filter(track =>
     track.displayName.toLowerCase().includes(searchQuery.toLowerCase())
@@ -81,12 +88,43 @@ export function LibraryView() {
     setShowAddToPlaylist(null);
   };
 
+  const handlePlayImportList = async () => {
+    if (playableCount === 0) {
+      toast({
+        title: 'No playable tracks',
+        description: 'Import some music files first, or they may have been lost after refresh.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    await switchPartySourceSmooth({ type: 'import' });
+    navigate('/app?tab=party');
+  };
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="mb-5">
-        <span className="text-[11px] text-muted-foreground uppercase tracking-[2px]">Your Music</span>
-        <h2 className="text-[28px] font-bold text-gradient-accent">Library</h2>
+      <div className="mb-5 flex items-start justify-between gap-3">
+        <div>
+          <span className="text-[11px] text-muted-foreground uppercase tracking-[2px]">Your Music</span>
+          <h2 className="text-[28px] font-bold text-gradient-accent">Library</h2>
+        </div>
+
+        <button
+          onClick={handlePlayImportList}
+          disabled={playableCount === 0}
+          className={cn(
+            'mt-1 inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors',
+            playableCount > 0
+              ? 'bg-white/5 hover:bg-white/10 border border-white/10'
+              : 'bg-white/5 border border-white/10 opacity-50 cursor-not-allowed'
+          )}
+          title={playableCount > 0 ? 'Start Party Mode from your Import List' : 'Import music to start Party Mode'}
+          type="button"
+        >
+          <Play className="w-4 h-4" />
+          Play Import
+        </button>
       </div>
 
       {/* Import Button */}
@@ -194,7 +232,7 @@ export function LibraryView() {
                     <DropdownMenuItem
                       className="text-destructive focus:text-destructive"
                       onSelect={() => {
-                        deleteTrackById(track.id);
+                        removeFromLibrary(track.id);
                       }}
                     >
                       <span className="flex items-center gap-2">

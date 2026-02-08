@@ -155,3 +155,14 @@ In development builds, a “Dev Plan Switcher” appears in the top-right to tog
 This is a React Router single-page app.
 
 - For Cloudflare Pages / Netlify-style SPA refresh support on deep links like `/app/...`, this repo includes [public/_redirects](public/_redirects) so all routes serve `index.html`.
+
+## Full Program fulfillment email (Resend)
+
+When a Stripe purchase sets the `full_program` entitlement, the API will (best-effort) send a one-time email containing a download link to:
+
+- `/api/download/full-program`
+
+To enable this, configure these environment variables in Cloudflare Pages (Project → Settings → Environment variables):
+
+- `RESEND_API_KEY`
+- `RESEND_FROM` (must be a verified sender in Resend, e.g. `MEJay <support@yourdomain.com>`)

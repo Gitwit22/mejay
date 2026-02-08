@@ -1,8 +1,8 @@
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 import { BrowserRouter, Routes, Route, Outlet, useNavigate } from "react-router-dom";
 import { audioEngine } from "@/lib/audioEngine";
 import { useDJStore } from "@/stores/djStore";
@@ -14,6 +14,7 @@ import { useLicenseStore } from "@/licensing/licenseStore";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import WelcomePage from "./app/pages/WelcomePage";
+import LoginPage from "./app/pages/LoginPage";
 import AboutPage from "./app/pages/AboutPage";
 import PricingPage from "./app/pages/PricingPage";
 import TermsPage from "./app/pages/TermsPage";
@@ -78,6 +79,7 @@ let didRedirectFromAppReloadThisDocument = false;
 
 const AppShellLayout = () => {
   const navigate = useNavigate();
+  const authStatus = usePlanStore((s) => s.authStatus)
 
   useEffect(() => {
     // User request: refresh should land on the Welcome page.
@@ -87,6 +89,20 @@ const AppShellLayout = () => {
       navigate("/", { replace: true });
     }
   }, [navigate]);
+
+  useEffect(() => {
+    // If server auth is anonymous, show login when entering the app shell.
+    // (Free/demo features can be revisited later, but checkout must be tied to a user.)
+    if (authStatus !== 'anonymous') return
+    try {
+      const path = `${window.location.pathname}${window.location.search}${window.location.hash}`
+      if (path.startsWith('/app')) {
+        navigate(`/login?returnTo=${encodeURIComponent(path)}`, {replace: true})
+      }
+    } catch {
+      navigate('/login?returnTo=/app', {replace: true})
+    }
+  }, [authStatus, navigate])
 
   return <Outlet />;
 };
@@ -149,6 +165,9 @@ const AppLicenseBootstrap = () => {
 };
 
 const AppBillingBootstrap = () => {
+  const qc = useQueryClient();
+  const hasAppliedUpgradeRef = useRef(false);
+
   useEffect(() => {
     const run = async () => {
       try {
@@ -158,28 +177,90 @@ const AppBillingBootstrap = () => {
         const planState = usePlanStore.getState();
         if (!planState.billingEnabled) return;
 
+        // 0) Server (cookie session via /api/account/me) is the authority.
+        // localStorage is only a fallback for offline/unreachable server.
+        try {
+          const ok = await usePlanStore.getState().refreshFromServer({reason: 'boot'})
+          if (!ok && usePlanStore.getState().authStatus !== 'anonymous') {
+            usePlanStore.getState().refreshFromStorage({reason: 'boot:fallback'})
+          }
+        } catch {
+          usePlanStore.getState().refreshFromStorage({reason: 'boot:fallback:error'})
+        }
+
         const url = new URL(window.location.href);
         const checkout = url.searchParams.get('checkout');
         const sessionIdFromUrl = url.searchParams.get('session_id');
 
-        const applySuccessfulUpgrade = (sessionId: string, accessType: 'pro' | 'full_program') => {
-          usePlanStore.getState().setRuntimePlan(accessType);
+        const cleanCheckoutUrl = () => {
+          const cleaned = new URL(window.location.href)
+          cleaned.searchParams.delete('checkout')
+          cleaned.searchParams.delete('plan')
+          cleaned.searchParams.delete('session_id')
+          window.history.replaceState(null, "", `${cleaned.pathname}${cleaned.search}${cleaned.hash}`)
+        }
+
+        const applySuccessfulUpgrade = async (args: {
+          sessionId: string
+          accessType: 'pro' | 'full_program'
+          stripeCustomerId?: string
+        }) => {
+          if (hasAppliedUpgradeRef.current) return;
+          hasAppliedUpgradeRef.current = true;
+
+          // Truth source: refresh from /api/account/me after server persists entitlements.
           try {
-            localStorage.setItem(STRIPE_SESSION_ID_KEY, sessionId);
+            localStorage.setItem(STRIPE_SESSION_ID_KEY, args.sessionId);
+          } catch {
+            // ignore
+          }
+
+          try {
+            const ok = await usePlanStore.getState().refreshFromServer({reason: 'postCheckout'})
+            if (!ok && usePlanStore.getState().authStatus !== 'anonymous') {
+              usePlanStore.getState().refreshFromStorage({emit: false, reason: 'postCheckout:fallback'})
+            }
+          } catch {
+            usePlanStore.getState().refreshFromStorage({emit: false, reason: 'postCheckout:fallback:error'})
+          }
+
+          // Best-effort: refresh any cached server data that may depend on entitlements.
+          // (This is effectively a no-op today if there are no queries.)
+          try {
+            void qc.invalidateQueries();
+            void qc.refetchQueries({ type: 'active' });
+          } catch {
+            // ignore
+          }
+
+          // Clean URL once activation is confirmed.
+          try {
+            cleanCheckoutUrl();
           } catch {
             // ignore
           }
         };
 
-        const verifyAndApplyOnce = async (sessionId: string) => {
+        const verifyAndApplyOnce = async (sessionId: string, opts?: {allowDowngrade?: boolean}) => {
           const status = await getCheckoutStatus(sessionId);
           if (status.hasFullAccess && (status.accessType === 'pro' || status.accessType === 'full_program')) {
-            applySuccessfulUpgrade(sessionId, status.accessType);
+            await applySuccessfulUpgrade({
+              sessionId,
+              accessType: status.accessType,
+              stripeCustomerId: status.stripeCustomerId,
+            });
             return { status, activated: true as const };
           }
 
-          // Only downgrade to Free when we have a valid Stripe response.
-          usePlanStore.getState().setRuntimePlan('free');
+          // Only downgrade outside the Stripe-return activation window.
+          if (opts?.allowDowngrade) {
+            usePlanStore.getState().applyEntitlements({
+              accessType: 'free',
+              hasFullAccess: false,
+              source: 'stripe',
+              reason: 'checkout:inactive',
+            })
+          }
           return { status, activated: false as const };
         };
 
@@ -208,14 +289,16 @@ const AppBillingBootstrap = () => {
             });
           } else {
             const sessionId = sessionIdFromUrl;
-            const maxAttempts = 10;
+            const activationDeadline = Date.now() + 10_000;
+            const delaysMs = [1000, 1000, 1500, 1500, 2000, 2000];
+            const maxAttempts = delaysMs.length;
 
             for (let attempt = 1; attempt <= maxAttempts; attempt++) {
               debug.verifyRan = true;
               debug.attempts = attempt;
 
               try {
-                const result = await verifyAndApplyOnce(sessionId);
+                const result = await verifyAndApplyOnce(sessionId, {allowDowngrade: false});
                 debug.lastStatus = result.status;
                 debug.lastError = null;
 
@@ -227,6 +310,17 @@ const AppBillingBootstrap = () => {
                   window.setTimeout(() => activatingToast.dismiss(), 2500);
                   break;
                 }
+
+                try {
+                  await usePlanStore.getState().refreshFromServer({reason: 'activation:retry'})
+                } catch {
+                  usePlanStore.getState().refreshFromStorage({emit: false, reason: 'activation:retry:fallback'})
+                }
+
+                // Stop retrying once we’re past the activation window.
+                if (Date.now() >= activationDeadline) {
+                  throw new Error('Activation window elapsed')
+                }
               } catch (e) {
                 const err = e instanceof Error ? e : new Error('Status check failed.');
                 debug.lastError = {
@@ -234,6 +328,20 @@ const AppBillingBootstrap = () => {
                   message: err.message,
                   status: err instanceof CheckoutStatusError ? err.status : undefined,
                 };
+
+                // Stop early on non-retryable client errors (except 429).
+                const status = err instanceof CheckoutStatusError ? err.status : undefined;
+                const retryable = status === 429 || (typeof status === 'number' && status >= 500);
+                if (typeof status === 'number' && status >= 400 && status < 500 && !retryable) {
+                  activatingToast.dismiss();
+                  console.warn('[Billing] Verification stopped (non-retryable)', debug);
+                  toast({
+                    title: 'Could not verify purchase',
+                    description: err.message,
+                    variant: 'destructive',
+                  });
+                  break;
+                }
               }
 
               if (attempt < maxAttempts) {
@@ -241,7 +349,7 @@ const AppBillingBootstrap = () => {
                   title: 'Activating your upgrade…',
                   description: `Checking purchase status… (${attempt}/${maxAttempts})`,
                 });
-                await sleep(1000);
+                await sleep(delaysMs[attempt - 1] ?? 1000);
               } else {
                 activatingToast.dismiss();
 
@@ -264,12 +372,6 @@ const AppBillingBootstrap = () => {
               }
             }
           }
-
-          // Clean URL (remove checkout params) without navigation.
-          url.searchParams.delete('checkout');
-          url.searchParams.delete('plan');
-          url.searchParams.delete('session_id');
-          window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
           return;
         }
 
@@ -282,7 +384,7 @@ const AppBillingBootstrap = () => {
         }
         if (stored) {
           try {
-            await verifyAndApplyOnce(stored);
+            await verifyAndApplyOnce(stored, {allowDowngrade: true});
           } catch {
             // Silent background check.
           }
@@ -293,7 +395,7 @@ const AppBillingBootstrap = () => {
     };
 
     void run();
-  }, []);
+  }, [qc]);
 
   return null;
 };
@@ -309,6 +411,7 @@ const App = () => (
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<WelcomePage />} />
+          <Route path="/login" element={<LoginPage />} />
           <Route path="/about" element={<AboutPage />} />
           <Route path="/pricing" element={<PricingPage />} />
           <Route path="/terms" element={<TermsPage />} />

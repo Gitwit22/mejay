@@ -56,6 +56,11 @@ interface DJState {
   loadSettings: () => Promise<void>;
   importTracks: (files: FileList) => Promise<void>;
   deleteTrackById: (id: string) => Promise<void>;
+
+  // Removal semantics (Library / Playlist / Current Source)
+  removeFromLibrary: (trackId: string, opts?: {reason?: 'user' | 'sync'}) => Promise<void>;
+  removeFromPlaylist: (playlistId: string, trackId: string, opts?: {emit?: boolean}) => Promise<void>;
+  removeFromCurrentSource: (trackId: string, opts?: {emit?: boolean}) => Promise<void>;
   
   // Playback
   loadTrackToDeck: (trackId: string, deck: DeckId, offsetSeconds?: number) => Promise<void>;
@@ -155,6 +160,108 @@ export const useDJStore = create<DJState>()(
   };
 
   const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+  const stopDeckIfTrackMatches = (trackId: string) => {
+    const state = get();
+    const toStop: DeckId[] = [];
+    if (state.deckA.trackId === trackId) toStop.push('A');
+    if (state.deckB.trackId === trackId) toStop.push('B');
+
+    for (const deck of toStop) {
+      try {
+        audioEngine.pause(deck);
+      } catch {
+        // ignore
+      }
+
+      if (deck === 'A') {
+        set(s => ({ deckA: { ...initialDeckState, playbackRate: s.deckA.playbackRate } }));
+      } else {
+        set(s => ({ deckB: { ...initialDeckState, playbackRate: s.deckB.playbackRate } }));
+      }
+    }
+  };
+
+  const computeQueueAfterRemoval = (state: DJState, trackId: string) => {
+    if (!state.isPartyMode || state.partyTrackIds.length === 0) return null;
+
+    const activeDeckState = state.activeDeck === 'A' ? state.deckA : state.deckB;
+    const isCurrent = !!activeDeckState.trackId && activeDeckState.trackId === trackId && activeDeckState.isPlaying;
+
+    const oldIds = state.partyTrackIds;
+    const oldNow = state.nowPlayingIndex;
+    const removedBefore = oldIds.slice(0, oldNow).filter(id => id === trackId).length;
+    const nextIds = oldIds.filter(id => id !== trackId);
+
+    let nextNow = Math.max(0, oldNow - removedBefore);
+    if (nextIds.length === 0) {
+      return { nextIds, nextNow: 0, shouldAdvance: isCurrent };
+    }
+
+    if (isCurrent) {
+      if (nextNow >= nextIds.length) nextNow = 0;
+      return { nextIds, nextNow, shouldAdvance: true };
+    }
+
+    if (nextNow >= nextIds.length) nextNow = Math.max(0, nextIds.length - 1);
+    return { nextIds, nextNow, shouldAdvance: false };
+  };
+
+  const jumpToQueueIndex = async (index: number) => {
+    const state = get();
+    if (!state.isPartyMode) return;
+
+    const trackId = state.partyTrackIds[index];
+    if (!trackId) {
+      get().stopPartyMode();
+      return;
+    }
+
+    const track = state.tracks.find(t => t.id === trackId);
+    if (!track?.fileBlob) {
+      get().stopPartyMode();
+      return;
+    }
+
+    clearScheduledTimeouts();
+    try {
+      audioEngine.enableMixCheck(false);
+    } catch {
+      // ignore
+    }
+
+    // Hard stop both decks to prevent "stuck playing" when deleting current track.
+    try {
+      audioEngine.stop('A');
+      audioEngine.stop('B');
+    } catch {
+      // ignore
+    }
+
+    set({
+      mixInProgress: false,
+      pendingNextIndex: null,
+      nowPlayingIndex: index,
+      activeDeck: 'A',
+      crossfadeValue: 0,
+    });
+
+    try {
+      audioEngine.setCrossfade(0);
+    } catch {
+      // ignore
+    }
+
+    const startAt = getEffectiveStartTimeSec(track, get().settings);
+    await get().loadTrackToDeck(trackId, 'A', startAt);
+    get().play('A');
+
+    // Restore automix trigger.
+    const after = get();
+    const triggerSecondsTrack = computeAutoMixTriggerSecondsTrack(after);
+    audioEngine.setMixTriggerConfig('remaining', triggerSecondsTrack);
+    audioEngine.enableMixCheck(true);
+  };
 
   const getEffectiveStartTimeSec = (track: Track | undefined, settings: Settings | undefined) => {
     const base = (settings?.nextSongStartOffset ?? 0);
@@ -577,8 +684,100 @@ export const useDJStore = create<DJState>()(
     },
 
     deleteTrackById: async (id: string) => {
-      await deleteTrack(id);
-      set(state => ({ tracks: state.tracks.filter(t => t.id !== id) }));
+      // Back-compat: treat as "remove from library" with full cleanup.
+      await get().removeFromLibrary(id, {reason: 'user'});
+    },
+
+    removeFromLibrary: async (trackId: string) => {
+      const stateBefore = get();
+
+      // 1) Remove from library storage.
+      await deleteTrack(trackId);
+      set(state => ({ tracks: state.tracks.filter(t => t.id !== trackId) }));
+
+      // 2) Remove from every playlist that contains it.
+      const playlistsToUpdate = stateBefore.playlists.filter(p => p.trackIds.includes(trackId));
+      if (playlistsToUpdate.length > 0) {
+        await Promise.all(
+          playlistsToUpdate.map(async (p) => {
+            const newTrackIds = p.trackIds.filter(id => id !== trackId);
+            await updatePlaylist(p.id, { trackIds: newTrackIds });
+          }),
+        );
+
+        set(state => ({
+          playlists: state.playlists.map(p =>
+            p.trackIds.includes(trackId) ? { ...p, trackIds: p.trackIds.filter(id => id !== trackId) } : p,
+          ),
+        }));
+      }
+
+      // 3) Remove from active queue if present + skip/stop if currently playing.
+      const stateMid = get();
+      const q = computeQueueAfterRemoval(stateMid, trackId);
+      if (q) {
+        set({ partyTrackIds: q.nextIds, nowPlayingIndex: q.nextNow });
+        if (q.nextIds.length === 0) {
+          get().stopPartyMode();
+        } else if (q.shouldAdvance) {
+          await jumpToQueueIndex(q.nextNow);
+        }
+      }
+
+      // 4) If loaded on a deck outside Party Mode, stop it.
+      stopDeckIfTrackMatches(trackId);
+
+      toast({
+        title: 'Removed from Library',
+        description: 'Track removed from Library, playlists, and queue.',
+      });
+    },
+
+    removeFromPlaylist: async (playlistId: string, trackId: string) => {
+      const stateBefore = get();
+      const playlist = stateBefore.playlists.find(p => p.id === playlistId);
+      if (!playlist) return;
+
+      const newTrackIds = playlist.trackIds.filter(id => id !== trackId);
+      await updatePlaylist(playlistId, { trackIds: newTrackIds });
+
+      set(state => ({
+        playlists: state.playlists.map(p =>
+          p.id === playlistId ? { ...p, trackIds: newTrackIds } : p,
+        ),
+      }));
+
+      // If playing from this playlist, remove from queue too.
+      const stateMid = get();
+      if (stateMid.isPartyMode && stateMid.partySource?.type === 'playlist' && stateMid.partySource.playlistId === playlistId) {
+        const q = computeQueueAfterRemoval(stateMid, trackId);
+        if (q) {
+          set({ partyTrackIds: q.nextIds, nowPlayingIndex: q.nextNow });
+          if (q.nextIds.length === 0) {
+            get().stopPartyMode();
+          } else if (q.shouldAdvance) {
+            await jumpToQueueIndex(q.nextNow);
+          }
+        }
+      }
+
+      toast({
+        title: 'Removed from Playlist',
+        description: `Track removed from "${playlist.name}".`,
+      });
+    },
+
+    removeFromCurrentSource: async (trackId: string) => {
+      const state = get();
+      const source = state.partySource;
+
+      if (source?.type === 'playlist' && source.playlistId) {
+        await get().removeFromPlaylist(source.playlistId, trackId);
+        return;
+      }
+
+      // Default: Import List (library)
+      await get().removeFromLibrary(trackId, {reason: 'user'});
     },
 
     loadTrackToDeck: async (trackId: string, deck: DeckId, offsetSeconds?: number) => {
@@ -1362,16 +1561,8 @@ export const useDJStore = create<DJState>()(
     },
 
     removeTrackFromPlaylist: async (playlistId: string, trackId: string) => {
-      const playlist = get().playlists.find(p => p.id === playlistId);
-      if (!playlist) return;
-      
-      const newTrackIds = playlist.trackIds.filter(id => id !== trackId);
-      await updatePlaylist(playlistId, { trackIds: newTrackIds });
-      set(state => ({
-        playlists: state.playlists.map(p =>
-          p.id === playlistId ? { ...p, trackIds: newTrackIds } : p
-        ),
-      }));
+      // Back-compat: treat as "remove from this playlist" with queue + currently-playing handling.
+      await get().removeFromPlaylist(playlistId, trackId);
     },
 
     reorderPlaylistTracks: async (playlistId: string, fromIndex: number, toIndex: number) => {

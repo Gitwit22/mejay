@@ -1,6 +1,6 @@
-import {useMemo, useState} from 'react'
+import {useEffect, useMemo, useState} from 'react'
 import {useNavigate} from 'react-router-dom'
-import {ChevronDown, LogOut, Settings as SettingsIcon} from 'lucide-react'
+import {ChevronDown, LogOut, Settings as SettingsIcon, X} from 'lucide-react'
 import {
   Sheet,
   SheetContent,
@@ -42,6 +42,7 @@ type TopRightSettingsMenuProps = {
 export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
+  const [panelMaxHeightPx, setPanelMaxHeightPx] = useState<number | null>(null)
   const [licenseKey, setLicenseKey] = useState('')
   const [resetAlsoClearLicense, setResetAlsoClearLicense] = useState(false)
 
@@ -128,6 +129,27 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
     })
   }
 
+  useEffect(() => {
+    if (!open) return
+
+    const reflow = () => {
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight
+      // Match the safe insets we apply (top-3 + bottom-3 = 24px).
+      const safeMax = Math.max(0, Math.floor(viewportHeight - 24))
+      setPanelMaxHeightPx(safeMax)
+    }
+
+    const rafId = window.requestAnimationFrame(reflow)
+    window.addEventListener('resize', reflow)
+    window.visualViewport?.addEventListener('resize', reflow)
+
+    return () => {
+      window.cancelAnimationFrame(rafId)
+      window.removeEventListener('resize', reflow)
+      window.visualViewport?.removeEventListener('resize', reflow)
+    }
+  }, [open])
+
   return (
     <div className={cn('fixed top-3 sm:top-16 right-3 z-[120]', className)}>
       <Sheet open={open} onOpenChange={setOpen}>
@@ -141,16 +163,40 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
           </button>
         </SheetTrigger>
 
+        {/* Escape hatch: pinned close button (always tappable, even if panel scrolls). */}
+        {open && (
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            className={cn(
+              'fixed top-3 right-3 z-[9999] inline-flex h-11 w-11 items-center justify-center rounded-xl',
+              'bg-background/90 backdrop-blur-md border border-border shadow-lg hover:bg-accent transition-colors',
+              'mejay-fixed-right',
+            )}
+            aria-label="Close settings"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        )}
+
         <SheetContent
           side="right"
-          className="w-[92vw] sm:w-[420px] sm:max-w-md flex flex-col h-[100dvh] max-h-[100dvh] min-h-0 overflow-hidden"
+          style={panelMaxHeightPx ? ({maxHeight: `${panelMaxHeightPx}px`} as React.CSSProperties) : undefined}
+          className={cn(
+            // Safe container: keep within viewport and allow scrolling even if the app shell is overflow-hidden.
+            '!right-3 !top-3 !bottom-3 w-[92vw] sm:w-[420px] sm:max-w-md',
+            'flex flex-col min-h-0 overflow-auto',
+            'max-h-[calc(100dvh-24px)]',
+            'rounded-2xl border',
+            'scrollbar-thin',
+          )}
         >
-          <SheetHeader className="shrink-0 bg-background/80 backdrop-blur-md pb-4">
+          <SheetHeader className="sticky top-0 z-10 shrink-0 bg-background/80 backdrop-blur-md pb-4">
             <SheetTitle>Setup</SheetTitle>
             <SheetDescription>Account, device, and local settings</SheetDescription>
           </SheetHeader>
 
-          <div className="flex-1 min-h-0 overflow-y-scroll pr-1 pb-6 mt-4 space-y-7 scrollbar-thin">
+          <div className="min-h-0 pr-1 pb-6 mt-4 space-y-7">
             {/* A) Status header */}
             <Collapsible defaultOpen>
               <div className="space-y-3">

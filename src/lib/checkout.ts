@@ -5,6 +5,39 @@ import {usePlanStore, type Plan} from '@/stores/planStore'
 export type CheckoutStatus = {
   accessType: 'free' | 'pro' | 'full_program'
   hasFullAccess: boolean
+  stripeCustomerId?: string
+  stripeSubscriptionId?: string
+}
+
+const CHECKOUT_TOKEN_KEY = 'mejay:checkoutToken'
+
+function getOrCreateCheckoutToken(): string {
+  try {
+    const existing = localStorage.getItem(CHECKOUT_TOKEN_KEY)
+    if (existing && existing.trim()) return existing
+  } catch {
+    // ignore
+  }
+
+  // 128-bit random token, base64url-ish.
+  let token = ''
+  try {
+    const bytes = new Uint8Array(16)
+    crypto.getRandomValues(bytes)
+    token = Array.from(bytes)
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('')
+  } catch {
+    token = `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  }
+
+  try {
+    localStorage.setItem(CHECKOUT_TOKEN_KEY, token)
+  } catch {
+    // ignore
+  }
+
+  return token
 }
 
 export class CheckoutStatusError extends Error {
@@ -25,10 +58,12 @@ export async function startCheckout(plan: 'pro' | 'full_program') {
     return
   }
 
+  const checkoutToken = getOrCreateCheckoutToken()
+
   const res = await fetch('/api/checkout', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ plan }),
+    body: JSON.stringify({ plan, checkoutToken }),
   })
 
   if (!res.ok) {
@@ -62,11 +97,19 @@ export async function getCheckoutStatus(sessionId: string): Promise<CheckoutStat
   const url = new URL('/api/checkout-status', window.location.origin)
   url.searchParams.set('session_id', sessionId)
 
+  let checkoutToken: string | null = null
+  try {
+    checkoutToken = localStorage.getItem(CHECKOUT_TOKEN_KEY)
+  } catch {
+    checkoutToken = null
+  }
+
   const res = await fetch(url.toString(), {
     method: 'GET',
     cache: 'no-store',
     headers: {
       'accept': 'application/json',
+      ...(checkoutToken ? { 'x-checkout-token': checkoutToken } : {}),
     },
   })
 
@@ -100,5 +143,10 @@ export async function getCheckoutStatus(sessionId: string): Promise<CheckoutStat
   if (!data.accessType) throw new Error('Status check failed: missing accessType')
   if (typeof data.hasFullAccess !== 'boolean') throw new Error('Status check failed: missing hasFullAccess')
 
-  return {accessType: data.accessType as CheckoutStatus['accessType'], hasFullAccess: data.hasFullAccess}
+  return {
+    accessType: data.accessType as CheckoutStatus['accessType'],
+    hasFullAccess: data.hasFullAccess,
+    ...(typeof data.stripeCustomerId === 'string' ? {stripeCustomerId: data.stripeCustomerId} : {}),
+    ...(typeof data.stripeSubscriptionId === 'string' ? {stripeSubscriptionId: data.stripeSubscriptionId} : {}),
+  }
 }

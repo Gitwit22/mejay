@@ -1,5 +1,6 @@
 import {useEffect} from 'react'
 import {Link} from 'react-router-dom'
+import { MEJAY_LOGO_URL } from '@/lib/branding'
 
 export default function ContactPage() {
   useEffect(() => {
@@ -15,7 +16,7 @@ export default function ContactPage() {
         <div className="header-content">
           <Link to="/" className="logo-link" aria-label="MEJay home">
             <div className="logo-small" aria-hidden="true">
-              <img className="site-logo" src="/image.jpg" alt="MEJay" />
+              <img className="site-logo" src={MEJAY_LOGO_URL} alt="MEJay" />
             </div>
             <span className="logo-text">MEJay</span>
           </Link>

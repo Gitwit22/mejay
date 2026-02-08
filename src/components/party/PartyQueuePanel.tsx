@@ -1,4 +1,4 @@
-import { Music, GripVertical, Play, SkipForward, Shuffle, Repeat, Check } from 'lucide-react';
+import { Music, GripVertical, Play, SkipForward, Shuffle, Repeat, Check, Trash2 } from 'lucide-react';
 import { useDJStore } from '@/stores/djStore';
 import { cn } from '@/lib/utils';
 import { formatDuration } from '@/lib/utils';
@@ -14,13 +14,24 @@ export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
     nowPlayingIndex,
     pendingNextIndex,
     tracks,
+    playlists,
+    partySource,
     settings,
     shufflePartyTracks,
     playNow,
     playNext,
     moveTrackInParty,
     updateUserSettings,
+    removeFromCurrentSource,
   } = useDJStore();
+
+  const playingFromLabel = (() => {
+    if (partySource?.type === 'playlist' && partySource.playlistId) {
+      const name = playlists.find(p => p.id === partySource.playlistId)?.name;
+      return name ? `Playlist — ${name}` : 'Playlist';
+    }
+    return 'Import List';
+  })();
 
   const listRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLDivElement>(null);
@@ -62,7 +73,10 @@ export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
     <div className={cn('glass-card flex flex-col min-h-0', className)}>
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-foreground">Playlist</h3>
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-foreground">Queue</h3>
+          <p className="text-[10px] text-muted-foreground truncate">Playing from: {playingFromLabel}</p>
+        </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => updateUserSettings({ shuffleEnabled: !settings.shuffleEnabled })}
@@ -104,7 +118,7 @@ export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
       >
         {partyTracks.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground text-sm">
-            No tracks in playlist
+            No tracks in queue
           </div>
         ) : (
           partyTracks.map(({ track, index, state, isPendingNext }) => (
@@ -150,24 +164,42 @@ export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
               </div>
               
               {/* Actions for any non-current track (mobile shows without hover) */}
-              {state !== 'playing' && (
-                <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-                  <button
-                    onClick={() => playNow(index)}
-                    className="p-1 rounded hover:bg-primary/20 text-muted-foreground hover:text-primary"
-                    title="Play Now"
-                  >
-                    <Play className="w-3 h-3" />
-                  </button>
-                  <button
-                    onClick={() => playNext(index)}
-                    className="p-1 rounded hover:bg-accent/20 text-muted-foreground hover:text-accent"
-                    title="Play Next"
-                  >
-                    <SkipForward className="w-3 h-3" />
-                  </button>
-                </div>
-              )}
+              <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                {state !== 'playing' && (
+                  <>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        playNow(index);
+                      }}
+                      className="p-1 rounded hover:bg-primary/20 text-muted-foreground hover:text-primary"
+                      title="Play Now"
+                    >
+                      <Play className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        playNext(index);
+                      }}
+                      className="p-1 rounded hover:bg-accent/20 text-muted-foreground hover:text-accent"
+                      title="Play Next"
+                    >
+                      <SkipForward className="w-3 h-3" />
+                    </button>
+                  </>
+                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeFromCurrentSource(track!.id);
+                  }}
+                  className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
+                  title="Remove"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
             </div>
           ))
         )}

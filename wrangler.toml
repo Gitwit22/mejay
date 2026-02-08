@@ -1,0 +1,8 @@
+name = "mejay-api"
+main = "src/worker.ts"
+compatibility_date = "2026-02-07"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "mejaydb"
+database_id = "1218d7a8-4fa7-4ed7-a31c-d673a2450229"
