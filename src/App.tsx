@@ -80,6 +80,7 @@ let didRedirectFromAppReloadThisDocument = false;
 const AppShellLayout = () => {
   const navigate = useNavigate();
   const authStatus = usePlanStore((s) => s.authStatus)
+  const authBypassEnabled = usePlanStore((s) => s.authBypassEnabled)
 
   useEffect(() => {
     // User request: refresh should land on the Welcome page.
@@ -93,6 +94,7 @@ const AppShellLayout = () => {
   useEffect(() => {
     // If server auth is anonymous, show login when entering the app shell.
     // (Free/demo features can be revisited later, but checkout must be tied to a user.)
+    if (authBypassEnabled) return
     if (authStatus !== 'anonymous') return
     try {
       const path = `${window.location.pathname}${window.location.search}${window.location.hash}`
@@ -102,7 +104,7 @@ const AppShellLayout = () => {
     } catch {
       navigate('/login?returnTo=/app', {replace: true})
     }
-  }, [authStatus, navigate])
+  }, [authBypassEnabled, authStatus, navigate])
 
   return <Outlet />;
 };

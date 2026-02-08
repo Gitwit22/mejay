@@ -2,12 +2,16 @@ import {useMemo, useState} from 'react'
 import {useNavigate, useSearchParams, Link} from 'react-router-dom'
 import {toast} from '@/hooks/use-toast'
 import {MEJAY_LOGO_URL} from '@/lib/branding'
+import {usePlanStore} from '@/stores/planStore'
 
 type Step = 'email' | 'code'
 
 export default function LoginPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const authBypassEnabled = usePlanStore((s) => s.authBypassEnabled)
+  const canToggleAuthBypass = usePlanStore((s) => s.canToggleAuthBypass)
+  const setAuthBypassEnabled = usePlanStore((s) => s.setAuthBypassEnabled)
 
   const returnTo = useMemo(() => {
     const rt = searchParams.get('returnTo')
@@ -76,6 +80,21 @@ export default function LoginPage() {
     }
   }
 
+  const bypass = () => {
+    if (!canToggleAuthBypass) {
+      toast({
+        title: 'Bypass unavailable',
+        description: 'Auth bypass is disabled in this build.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setAuthBypassEnabled(true)
+    toast({title: 'Auth bypass enabled', description: 'Skipping login for this browser.'})
+    navigate(returnTo, {replace: true})
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center px-6 py-10">
       <div className="w-full max-w-md glass-card p-6">
@@ -140,6 +159,26 @@ export default function LoginPage() {
         )}
 
         <div className="mt-6 text-center text-xs text-muted-foreground">
+          {canToggleAuthBypass && !authBypassEnabled && (
+            <button
+              type="button"
+              onClick={bypass}
+              className="block w-full mb-3 text-xs text-muted-foreground hover:text-foreground"
+            >
+              Bypass login (dev/demo)
+            </button>
+          )}
+
+          {canToggleAuthBypass && authBypassEnabled && (
+            <button
+              type="button"
+              onClick={() => setAuthBypassEnabled(false)}
+              className="block w-full mb-3 text-xs text-muted-foreground hover:text-foreground"
+            >
+              Disable bypass
+            </button>
+          )}
+
           <Link to="/" className="hover:text-foreground">Back to home</Link>
         </div>
       </div>

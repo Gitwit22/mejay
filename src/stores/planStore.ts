@@ -31,6 +31,11 @@ interface PlanState {
   /** Server auth status (cookie session). */
   authStatus: 'unknown' | 'authenticated' | 'anonymous';
   user: {id: string; email: string} | null;
+  /** Allows entering /app without a server session (dev/demo only). */
+  authBypassEnabled: boolean;
+  /** Whether UI is allowed to toggle auth bypass at runtime. */
+  canToggleAuthBypass: boolean;
+  setAuthBypassEnabled: (enabled: boolean) => void;
   /** When false (dev), bypass billing/checkout and unlock locally. */
   billingEnabled: boolean;
   upgradeModalOpen: boolean;
@@ -66,6 +71,7 @@ interface PlanState {
 const ACCESS_PLAN_KEY = 'mejay:accessPlan';
 const BILLING_ENABLED_KEY = 'mejay:billingEnabled';
 const STRIPE_CUSTOMER_ID_KEY = 'mejay:stripeCustomerId';
+const AUTH_BYPASS_KEY = 'mejay:authBypassEnabled';
 
 const ENTITLEMENTS_CHANNEL = 'mejay' as const;
 const TAB_ID =
@@ -114,6 +120,34 @@ function isLocalHostRuntime(): boolean {
     return false
   }
 }
+
+function parseEnvBool(raw: unknown): boolean {
+  return raw === '1' || raw === 'true' || raw === true
+}
+
+function canToggleAuthBypassRuntime(): boolean {
+  // Default: allow toggling in dev. In production, require explicit opt-in.
+  if (import.meta.env.DEV) return true
+  return parseEnvBool(import.meta.env.VITE_AUTH_BYPASS_TOGGLE)
+}
+
+function readInitialAuthBypassEnabled(): boolean {
+  // Explicit build-time flags.
+  if (parseEnvBool(import.meta.env.VITE_AUTH_BYPASS)) return true
+  if (import.meta.env.DEV && parseEnvBool(import.meta.env.VITE_DEV_BYPASS_AUTH)) return true
+
+  // Optional persisted toggle (dev by default; prod only if VITE_AUTH_BYPASS_TOGGLE=1).
+  if (!canToggleAuthBypassRuntime()) return false
+  const raw = safeReadLocalStorage(AUTH_BYPASS_KEY)
+  return raw === 'true'
+}
+
+function getBypassUser(): {id: string; email: string} {
+  return {id: 'auth-bypass', email: 'bypass@mejay.local'}
+}
+
+const INITIAL_AUTH_BYPASS_ENABLED = readInitialAuthBypassEnabled()
+const INITIAL_CAN_TOGGLE_AUTH_BYPASS = canToggleAuthBypassRuntime()
 
 function readInitialAccessPlan(): Plan {
   const raw = safeReadLocalStorage(ACCESS_PLAN_KEY);
@@ -219,11 +253,34 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   plan: readInitialAccessPlan(),
   planSource: 'runtime',
   entitlementsVersion: 0,
-  authStatus: 'unknown',
-  user: null,
+  authStatus: INITIAL_AUTH_BYPASS_ENABLED ? 'authenticated' : 'unknown',
+  user: INITIAL_AUTH_BYPASS_ENABLED ? getBypassUser() : null,
+  authBypassEnabled: INITIAL_AUTH_BYPASS_ENABLED,
+  canToggleAuthBypass: INITIAL_CAN_TOGGLE_AUTH_BYPASS,
   billingEnabled: readInitialBillingEnabled(),
   upgradeModalOpen: false,
   stripeCustomerId: readInitialStripeCustomerId(),
+
+  setAuthBypassEnabled: (enabled) => {
+    // In production, only allow runtime toggling if explicitly enabled.
+    if (!get().canToggleAuthBypass && enabled !== get().authBypassEnabled) return
+
+    set({authBypassEnabled: enabled})
+    if (enabled) {
+      set({authStatus: 'authenticated', user: get().user ?? getBypassUser()})
+      safeWriteLocalStorage(AUTH_BYPASS_KEY, 'true')
+      return
+    }
+
+    safeRemoveLocalStorage(AUTH_BYPASS_KEY)
+    set({authStatus: 'unknown', user: null})
+    // Kick a best-effort refresh so the UI reflects real server status.
+    void get()
+      .refreshFromServer({reason: 'disableAuthBypass'})
+      .catch(() => {
+        // ignore
+      })
+  },
 
   notifyEntitlementsChanged: (reason) => {
     const nextVersion = get().entitlementsVersion + 1
@@ -296,6 +353,15 @@ export const usePlanStore = create<PlanState>((set, get) => ({
 
   refreshFromServer: async (opts) => {
     const reason = opts?.reason
+
+    // Auth bypass: treat as logged-in for UI routing purposes.
+    // Note: This does NOT create a server session.
+    if (get().authBypassEnabled) {
+      if (get().authStatus !== 'authenticated') {
+        set({authStatus: 'authenticated', user: get().user ?? getBypassUser()})
+      }
+      return true
+    }
 
     // Respect dev override and billing-off mode.
     if (!get().billingEnabled) return false

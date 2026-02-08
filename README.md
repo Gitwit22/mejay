@@ -129,6 +129,21 @@ The UI contains a simple plan feature gate (Free/Plus) used to lock some control
 
 In development builds, a “Dev Plan Switcher” appears in the top-right to toggle Free/Plus.
 
+## Auth bypass (dev/demo)
+
+The app normally requires a server session (cookie) to enter `/app` and will redirect anonymous users to `/login`.
+
+For development (and controlled demo builds), you can bypass the login redirect:
+
+- `VITE_DEV_BYPASS_AUTH=1` (dev only): Automatically bypass login in `bun dev`.
+- `VITE_AUTH_BYPASS=1` (any build): Always bypass login redirect (use carefully).
+- `VITE_AUTH_BYPASS_TOGGLE=1` (prod only): Shows “Bypass login” / “Disable bypass” buttons on the login page.
+
+Notes:
+
+- This bypass only affects client-side routing; it does **not** create a server session. Server-protected endpoints may still return `401`.
+- Leaving `VITE_AUTH_BYPASS=1` enabled in a real production deployment is effectively a public demo mode.
+
 ## Tech stack
 
 - Vite + React + TypeScript
