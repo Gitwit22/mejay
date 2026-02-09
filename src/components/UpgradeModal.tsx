@@ -6,7 +6,7 @@ import { toast } from '@/hooks/use-toast';
 import { startCheckout } from '@/lib/checkout';
 
 export function UpgradeModal() {
-  const { upgradeModalOpen, closeUpgradeModal, billingEnabled, setDevPlan } = usePlanStore();
+  const { upgradeModalOpen, closeUpgradeModal, billingEnabled, setDevPlan, authBypassEnabled } = usePlanStore();
   const navigate = useNavigate();
 
   const goToPricing = () => {
@@ -19,6 +19,16 @@ export function UpgradeModal() {
       setDevPlan(plan === 'pro' ? 'pro' : 'full_program');
       toast({title: 'Billing disabled (dev)', description: 'Unlocked locally.'});
       closeUpgradeModal();
+      return;
+    }
+
+    if (authBypassEnabled) {
+      toast({
+        title: 'Login bypass is enabled',
+        description: 'Disable bypass and sign in to use checkout.',
+        variant: 'destructive',
+      });
+      goToPricing();
       return;
     }
     try {

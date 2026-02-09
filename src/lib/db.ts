@@ -43,6 +43,8 @@ export interface Settings {
   // Tempo controls
   tempoMode: 'auto' | 'locked';
   lockedBpm: number;
+  /** 0..100 - allowed BPM drift before correcting back to lockedBpm. */
+  lockTolerancePct: number;
   // Auto tempo baseline + offset (Auto Match)
   autoBaseBpm: number | null;
   autoOffsetBpm: number;
@@ -250,6 +252,7 @@ export async function getSettings(): Promise<Settings> {
     endEarlySeconds: 5,
     tempoMode: 'auto',
     lockedBpm: 128,
+    lockTolerancePct: 10,
     autoBaseBpm: null,
     autoOffsetBpm: 0,
     autoVolumeMatch: true,

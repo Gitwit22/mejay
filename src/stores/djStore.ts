@@ -161,6 +161,63 @@ export const useDJStore = create<DJState>()(
 
   const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
+  const lockTolerancePctToAllowedDriftBpm = (pctRaw: number | undefined | null): number => {
+    const pct = clamp(Number.isFinite(pctRaw as number) ? (pctRaw as number) : 10, 0, 100);
+    // Piecewise mapping aligned with the product spec examples:
+    // 0 -> 0.0 BPM
+    // 5 -> 0.2 BPM
+    // 10 -> 0.5 BPM
+    // 20 -> 1.0 BPM
+    // 30 -> 2.0 BPM
+    // 100 -> 4.0 BPM
+    if (pct <= 0) return 0;
+    if (pct <= 5) return (pct / 5) * 0.2;
+    if (pct <= 10) return 0.2 + ((pct - 5) / 5) * 0.3;
+    if (pct <= 20) return 0.5 + ((pct - 10) / 10) * 0.5;
+    if (pct <= 30) return 1.0 + ((pct - 20) / 10) * 1.0;
+    return 2.0 + ((pct - 30) / 70) * 2.0;
+  };
+
+  const lastLockCorrectionAtCtx: Record<DeckId, number> = { A: -Infinity, B: -Infinity };
+  const maybeCorrectTempoLockDrift = (deck: DeckId) => {
+    const state = get();
+    if (state.settings.tempoMode !== 'locked') return;
+    if (!audioEngine.isPlaying(deck)) return;
+
+    const ctxNow = audioEngine.getAudioContextTime();
+    if (ctxNow === null) return;
+
+    // Don't fight scheduled ramps (mixing, user actions, etc).
+    if (audioEngine.isTempoRamping(deck, ctxNow)) return;
+
+    // Throttle corrections.
+    if (ctxNow - lastLockCorrectionAtCtx[deck] < 0.75) return;
+
+    const targetBpm = state.settings.lockedBpm;
+    if (!Number.isFinite(targetBpm) || targetBpm <= 0) return;
+
+    const baseBpm = audioEngine.getBaseBpm(deck) || 120;
+    const effectiveRate = Math.max(0.25, audioEngine.getEffectiveTempo(deck, ctxNow) || 1);
+    const currentBpm = baseBpm * effectiveRate;
+
+    const allowedDrift = lockTolerancePctToAllowedDriftBpm(state.settings.lockTolerancePct);
+    const drift = Math.abs(currentBpm - targetBpm);
+    if (drift <= allowedDrift) return;
+
+    const targetRatio = audioEngine.calculateTempoRatio(deck, targetBpm, state.settings.maxTempoPercent);
+
+    // Bar-align when possible (4 beats); start slightly in the future for scheduling safety.
+    const startCandidate = ctxNow + 0.05;
+    const startAt = audioEngine.getNextBeatTimeFrom(deck, startCandidate, 4, effectiveRate) ?? startCandidate;
+
+    // Smooth correction: scale ramp time with how far outside tolerance we are.
+    const deltaOutside = Math.max(0, drift - allowedDrift);
+    const durationMs = clamp(400 + deltaOutside * 500, state.settings.lockTolerancePct <= 0 ? 150 : 400, 3000);
+
+    lastLockCorrectionAtCtx[deck] = ctxNow;
+    audioEngine.rampTempo(deck, targetRatio, startAt, durationMs);
+  };
+
   const stopDeckIfTrackMatches = (trackId: string) => {
     const state = get();
     const toStop: DeckId[] = [];
@@ -290,6 +347,7 @@ export const useDJStore = create<DJState>()(
     endEarlySeconds: 5,
     tempoMode: 'auto',
     lockedBpm: 128,
+    lockTolerancePct: 10,
     autoBaseBpm: null,
     autoOffsetBpm: 0,
     autoVolumeMatch: true,
@@ -389,6 +447,28 @@ export const useDJStore = create<DJState>()(
 
   // Set up audio engine callbacks
   audioEngine.setOnTimeUpdate((deck, time) => {
+    // Keep playbackRate in sync even when the engine is ramping tempo.
+    // (The store's playbackRate is used for UI BPM display.)
+    try {
+      const effectiveRate = audioEngine.getEffectiveTempo(deck);
+      const prevRate = deck === 'A' ? get().deckA.playbackRate : get().deckB.playbackRate;
+      if (Math.abs(effectiveRate - prevRate) > 0.001) {
+        if (deck === 'A') {
+          set(state => ({ deckA: { ...state.deckA, playbackRate: effectiveRate } }));
+        } else {
+          set(state => ({ deckB: { ...state.deckB, playbackRate: effectiveRate } }));
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      maybeCorrectTempoLockDrift(deck);
+    } catch {
+      // ignore
+    }
+
     if (deck === 'A') {
       set(state => ({ deckA: { ...state.deckA, currentTime: time } }));
     } else {
@@ -1469,6 +1549,18 @@ export const useDJStore = create<DJState>()(
 
         updates.autoBaseBpm = effectiveBpm;
         updates.autoOffsetBpm = 0;
+      }
+
+      // When enabling Tempo Lock, default the master BPM to the current playback BPM.
+      if (updates.tempoMode === 'locked' && before.settings.tempoMode !== 'locked') {
+        const deck = before.activeDeck;
+        const deckState = deck === 'A' ? before.deckA : before.deckB;
+        const track = deckState.trackId ? before.tracks.find(t => t.id === deckState.trackId) : undefined;
+
+        const baseBpm = track?.bpm ?? audioEngine.getBaseBpm(deck) ?? 120;
+        const rate = Math.max(0.25, audioEngine.getEffectiveTempo(deck) || deckState.playbackRate || 1);
+        const effectiveBpm = baseBpm * rate;
+        updates.lockedBpm = Math.round(effectiveBpm * 10) / 10;
       }
 
       // Apply settings immediately for responsive controls (sliders/toggles).

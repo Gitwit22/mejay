@@ -15,6 +15,16 @@ export function TempoControls() {
     ? Math.round((settings.autoBaseBpm + (settings.autoOffsetBpm ?? 0)) * 10) / 10
     : null;
 
+  const allowedDriftBpm = (() => {
+    const pct = Math.max(0, Math.min(100, settings.lockTolerancePct ?? 10))
+    if (pct <= 0) return 0
+    if (pct <= 5) return (pct / 5) * 0.2
+    if (pct <= 10) return 0.2 + ((pct - 5) / 5) * 0.3
+    if (pct <= 20) return 0.5 + ((pct - 10) / 10) * 0.5
+    if (pct <= 30) return 1.0 + ((pct - 20) / 10) * 1.0
+    return 2.0 + ((pct - 30) / 70) * 2.0
+  })()
+
   const handleAutoMatchClick = async () => {
     // If already in Auto Match, treat another tap as a quick “reset speed to original”.
     if (settings.tempoMode === 'auto') {
@@ -111,6 +121,34 @@ export function TempoControls() {
           </div>
         )}
 
+        {/* NEW: Lock Tolerance Slider */}
+        {settings.tempoMode === 'locked' && (
+          <div>
+            <div className="flex justify-between mb-2">
+              <span className="text-xs text-muted-foreground">Lock Tolerance</span>
+              <span className="text-xs font-semibold text-accent">
+                {Math.round((settings.lockTolerancePct ?? 10) * 10) / 10}%
+                <span className="text-muted-foreground font-normal">&nbsp;· ±{allowedDriftBpm.toFixed(1)} BPM</span>
+              </span>
+            </div>
+            <Slider
+              value={[settings.lockTolerancePct ?? 10]}
+              onValueChange={([v]) => updateUserSettings({ lockTolerancePct: v })}
+              min={0}
+              max={100}
+              step={1}
+              className="w-full"
+            />
+            <div className="mt-2 flex items-center justify-between text-[10px] text-muted-foreground">
+              <span>Strict</span>
+              <span>Loose</span>
+            </div>
+            <p className="text-[9px] text-muted-foreground mt-1">
+              Controls how much tempo drift is allowed before the locked BPM is corrected.
+            </p>
+          </div>
+        )}
+
         {/* Auto Match Offset Slider */}
         {settings.tempoMode === 'auto' && (
           <div>
@@ -139,24 +177,7 @@ export function TempoControls() {
           </div>
         )}
 
-        {/* Max Tempo Stretch */}
-        <div>
-          <div className="flex justify-between mb-2">
-            <span className="text-xs text-muted-foreground">Max Tempo Change</span>
-            <span className="text-xs font-semibold text-accent">±{settings.maxTempoPercent}%</span>
-          </div>
-          <Slider
-            value={[settings.maxTempoPercent]}
-            onValueChange={([v]) => updateUserSettings({ maxTempoPercent: v })}
-            min={2}
-            max={15}
-            step={1}
-            className="w-full"
-          />
-          <p className="text-[9px] text-muted-foreground mt-1">
-            Limits tempo stretching to avoid artifacts
-          </p>
-        </div>
+        {/* Max tempo stretch remains a safety clamp (hidden from UI for now). */}
       </div>
     </GatedSection>
   );

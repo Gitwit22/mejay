@@ -52,19 +52,29 @@ export class CheckoutStatusError extends Error {
 }
 
 export async function startCheckout(plan: 'pro' | 'full_program') {
-  const {billingEnabled, setDevPlan} = usePlanStore.getState()
+  const {billingEnabled, setDevPlan, authBypassEnabled, refreshFromServer} = usePlanStore.getState()
   if (!billingEnabled) {
     setDevPlan(plan)
     return
+  }
+
+  if (authBypassEnabled) {
+    throw new Error('Checkout is disabled while Login Bypass is enabled. Disable bypass and sign in to upgrade.')
   }
 
   const checkoutToken = getOrCreateCheckoutToken()
 
   const res = await fetch('/api/checkout', {
     method: 'POST',
+    credentials: 'include',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ plan, checkoutToken }),
   })
+
+  if (res.status === 401) {
+    void refreshFromServer({reason: 'startCheckout:401'}).catch(() => {})
+    throw new Error('Login required to start checkout. Please sign in and try again.')
+  }
 
   if (!res.ok) {
     let details = ''

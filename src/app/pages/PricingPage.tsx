@@ -8,7 +8,7 @@ import { MEJAY_LOGO_URL } from '@/lib/branding'
 
 export default function PricingPage() {
   const [isCheckingOut, setIsCheckingOut] = useState<'pro' | 'full_program' | null>(null)
-  const {billingEnabled, setDevPlan} = usePlanStore()
+  const {billingEnabled, setDevPlan, authBypassEnabled} = usePlanStore()
 
   useEffect(() => {
     window.scrollTo(0, 0)
@@ -18,6 +18,15 @@ export default function PricingPage() {
     if (!billingEnabled) {
       setDevPlan(plan === 'pro' ? 'pro' : 'full_program')
       toast({title: 'Billing disabled (dev)', description: 'Unlocked locally.'})
+      return
+    }
+
+    if (authBypassEnabled) {
+      toast({
+        title: 'Login bypass is enabled',
+        description: 'Disable bypass and sign in to use checkout.',
+        variant: 'destructive',
+      })
       return
     }
     try {

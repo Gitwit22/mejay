@@ -720,6 +720,22 @@ class AudioEngine {
     return this.decks[deck].playbackRate;
   }
 
+  /** Returns the deck's current effective playbackRate (includes any active ramp). */
+  getEffectiveTempo(deck: DeckId, atTime?: number): number {
+    if (!this.audioContext) return this.decks[deck].playbackRate;
+    const t = atTime ?? this.audioContext.currentTime;
+    return this.getEffectivePlaybackRateAt(deck, t) || this.decks[deck].playbackRate || 1;
+  }
+
+  /** True when a tempo ramp is scheduled/in progress at `atTime` (default: now). */
+  isTempoRamping(deck: DeckId, atTime?: number): boolean {
+    if (!this.audioContext) return false;
+    const ramp = this.decks[deck].tempoRamp;
+    if (!ramp) return false;
+    const t = atTime ?? this.audioContext.currentTime;
+    return t < ramp.endTime;
+  }
+
   setCrossfade(value: number): void {
     this.crossfadeValue = Math.max(0, Math.min(1, value));
     this.updateCrossfade();

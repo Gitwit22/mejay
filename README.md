@@ -181,3 +181,23 @@ To enable this, configure these environment variables in Cloudflare Pages (Proje
 
 - `RESEND_API_KEY`
 - `RESEND_FROM` (must be a verified sender in Resend, e.g. `MEJay <support@yourdomain.com>`)
+
+## Login code email (Resend)
+
+The login flow uses email verification codes:
+
+- `POST /api/auth/start` generates a 6-digit code and emails it.
+- `POST /api/auth/verify` verifies the code and sets a session cookie.
+
+In this repo, the `/api/auth/*` routes are implemented as Cloudflare Pages Functions under [functions/api/auth](functions/api/auth).
+
+There is also an optional Cloudflare Worker entrypoint at [src/worker.ts](src/worker.ts) (configured by [wrangler.toml](wrangler.toml)) if you deploy the API separately as a Worker.
+
+To enable login emails in production, set these environment variables in the environment that serves `/api/auth/*`:
+
+- `RESEND_API_KEY`
+- `RESEND_FROM` (verified sender in Resend)
+
+If you are using Cloudflare Pages Functions (the default in this repo), set them in Cloudflare Pages (Project → Settings → Environment variables).
+
+If you are deploying the API as a separate Worker, set them on the Worker.
