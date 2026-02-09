@@ -30,6 +30,13 @@ export default function LoginPage() {
   const [verifiedToken, setVerifiedToken] = useState('')
   const [busy, setBusy] = useState(false)
 
+  const goToCreateAccount = () => {
+    setPurpose('signup_verify')
+    setCodeStep('email')
+    setCode('')
+    setMode('code')
+  }
+
   const login = async () => {
     setBusy(true)
     try {
@@ -191,7 +198,11 @@ export default function LoginPage() {
               {purpose === 'password_reset' ? 'Reset your password with a code.' : 'Verify your email to set a password.'}
             </p>
           )}
-          {mode === 'setPassword' && <p className="text-sm text-muted-foreground">Choose a new password.</p>}
+          {mode === 'setPassword' && (
+            <p className="text-sm text-muted-foreground">
+              {purpose === 'password_reset' ? 'Choose a new password.' : 'Create a password for your account.'}
+            </p>
+          )}
         </div>
 
         {mode === 'password' && (
@@ -239,16 +250,11 @@ export default function LoginPage() {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setPurpose('signup_verify')
-                  setCodeStep('email')
-                  setCode('')
-                  setMode('code')
-                }}
+                onClick={goToCreateAccount}
                 disabled={busy}
                 className="text-muted-foreground hover:text-foreground"
               >
-                Use a code instead
+                Create account
               </button>
             </div>
           </div>
@@ -273,14 +279,25 @@ export default function LoginPage() {
             >
               {busy ? 'Sending…' : 'Send code'}
             </button>
-            <button
-              type="button"
-              onClick={() => setMode('password')}
-              disabled={busy}
-              className="w-full py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground"
-            >
-              Back to password
-            </button>
+
+            <div className="flex items-center justify-between text-xs">
+              <button
+                type="button"
+                onClick={() => setMode('password')}
+                disabled={busy}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                Back to password
+              </button>
+              <button
+                type="button"
+                onClick={() => setPurpose(purpose === 'signup_verify' ? 'password_reset' : 'signup_verify')}
+                disabled={busy}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                {purpose === 'signup_verify' ? 'Reset password instead' : 'Create account instead'}
+              </button>
+            </div>
           </div>
         )}
 
