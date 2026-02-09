@@ -519,9 +519,12 @@ class AudioEngine {
     if (!baseBpm || baseBpm === 0) return 1;
     
     const idealRatio = targetBpm / baseBpm;
-    const minRatio = 1 - (maxPercent / 100);
-    const maxRatio = 1 + (maxPercent / 100);
-    
+    const safeMaxPercent = Number.isFinite(maxPercent) ? Math.max(0, maxPercent) : 0;
+    const minRatioFloor = 0.25;
+    const maxRatioCeil = 4;
+    const minRatio = Math.max(minRatioFloor, 1 - (safeMaxPercent / 100));
+    const maxRatio = Math.min(maxRatioCeil, Math.max(minRatio, 1 + (safeMaxPercent / 100)));
+
     return Math.max(minRatio, Math.min(maxRatio, idealRatio));
   }
 

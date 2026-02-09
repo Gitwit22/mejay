@@ -92,7 +92,7 @@ function PlaylistTrackList({
 
 export function PlaylistsView() {
   const navigate = useNavigate();
-  const { playlists, tracks, createPlaylist, deletePlaylistById, startPartyMode, removeFromPlaylist } = useDJStore();
+  const { playlists, tracks, createPlaylist, deletePlaylistById, startPartyMode, removeFromPlaylist, clearPlaylistTracks } = useDJStore();
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [selectedPlaylist, setSelectedPlaylist] = useState<string | null>(null);
@@ -122,6 +122,14 @@ export function PlaylistsView() {
         .filter((t): t is Track => t !== undefined)
     : [];
 
+  const handleClearPlaylist = async (playlistId: string) => {
+    const playlist = playlists.find(p => p.id === playlistId);
+    if (!playlist || playlist.trackIds.length === 0) return;
+    const ok = window.confirm(`Remove all tracks from "${playlist.name}"?`);
+    if (!ok) return;
+    await clearPlaylistTracks(playlistId);
+  };
+
   if (selectedPlaylist && selectedPlaylistData) {
     return (
       <div className="flex flex-col h-full">
@@ -148,6 +156,22 @@ export function PlaylistsView() {
               Play This Set
             </button>
           )}
+
+          <button
+            onClick={() => handleClearPlaylist(selectedPlaylist)}
+            disabled={selectedPlaylistData.trackIds.length === 0}
+            className={cn(
+              'flex items-center justify-center gap-2 px-4 py-4 rounded-xl text-[15px] transition-colors',
+              selectedPlaylistData.trackIds.length > 0
+                ? 'bg-destructive/10 text-destructive hover:bg-destructive/15 border border-destructive/30'
+                : 'bg-white/5 text-muted-foreground border border-white/10 opacity-50 cursor-not-allowed',
+            )}
+            title="Clear all tracks from this set"
+          >
+            <Trash2 className="w-5 h-5" />
+            Clear
+          </button>
+
           <button
             onClick={() => setIsReordering(!isReordering)}
             className={cn(

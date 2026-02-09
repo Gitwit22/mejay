@@ -114,7 +114,7 @@ export function TempoControls() {
               value={[settings.lockedBpm]}
               onValueChange={([v]) => updateUserSettings({ lockedBpm: v })}
               min={60}
-              max={180}
+              max={300}
               step={5}
               className="w-full"
             />
@@ -161,8 +161,8 @@ export function TempoControls() {
             <Slider
               value={[settings.autoOffsetBpm ?? 0]}
               onValueChange={([v]) => updateUserSettings({ autoOffsetBpm: v })}
-              min={-50}
-              max={50}
+              min={-150}
+              max={150}
               step={5}
               className="w-full"
             />

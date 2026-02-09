@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
-import { Track, Settings, getAllTracks, getSettings, addTrack, updateTrack, deleteTrack, updateSettings, generateId, getAllPlaylists, Playlist, addPlaylist, updatePlaylist, deletePlaylist, PartySource, resetLocalDatabase } from '@/lib/db';
+import { Track, Settings, getAllTracks, getSettings, addTrack, updateTrack, deleteTrack, updateSettings, generateId, getAllPlaylists, Playlist, addPlaylist, updatePlaylist, deletePlaylist, PartySource, resetLocalDatabase, clearTracksAndPlaylists } from '@/lib/db';
 import { audioEngine, DeckId } from '@/lib/audioEngine';
 import { analyzeBPM } from '@/lib/bpmDetector';
 // Note: Energy Mode automation removed; mixing uses manual sliders only.
@@ -55,6 +55,7 @@ interface DJState {
   loadPlaylists: () => Promise<void>;
   loadSettings: () => Promise<void>;
   importTracks: (files: FileList) => Promise<void>;
+  clearAllImports: () => Promise<void>;
   deleteTrackById: (id: string) => Promise<void>;
 
   // Removal semantics (Library / Playlist / Current Source)
@@ -340,7 +341,7 @@ export const useDJStore = create<DJState>()(
 
   const defaultSettings: Settings = {
     crossfadeSeconds: 8,
-    maxTempoPercent: 6,
+    maxTempoPercent: 150,
     shuffleEnabled: false,
     masterVolume: 0.9,
     nextSongStartOffset: 15,
@@ -615,6 +616,56 @@ export const useDJStore = create<DJState>()(
         crossfadeValue: 0,
         mixInProgress: false,
         settings: defaultSettings,
+      });
+    },
+
+    clearAllImports: async () => {
+      // Stop party mode + playback first so we don't reference deleted tracks.
+      try {
+        get().stopPartyMode();
+      } catch {
+        // ignore
+      }
+
+      try {
+        audioEngine.stop('A');
+        audioEngine.stop('B');
+      } catch {
+        // ignore
+      }
+
+      try {
+        await clearTracksAndPlaylists();
+      } catch (error) {
+        console.error('[DJ Store] Failed to clear imports:', error);
+        toast({
+          title: 'Clear failed',
+          description: 'Could not clear your imports. Please try again.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      set({
+        tracks: [],
+        playlists: [],
+        deckA: { ...initialDeckState },
+        deckB: { ...initialDeckState },
+        activeDeck: 'A',
+        isPartyMode: false,
+        partySource: null,
+        partyTrackIds: [],
+        nowPlayingIndex: 0,
+        pendingNextIndex: null,
+        pendingSourceSwitch: null,
+        queuedSourceSwitch: null,
+        crossfadeValue: 0,
+        mixInProgress: false,
+      });
+
+      toast({
+        title: 'Cleared',
+        description: 'All imported tracks and playlists were removed.',
       });
     },
 
@@ -1369,18 +1420,41 @@ export const useDJStore = create<DJState>()(
 
     stopPartyMode: () => {
       clearScheduledTimeouts();
-      get().pause('A');
-      get().pause('B');
-      audioEngine.enableMixCheck(false);
-      set({ 
-        isPartyMode: false, 
-        partyTrackIds: [], 
+      // Use hard stop so we also cancel scheduled starts (e.g. during an in-flight mix).
+      try {
+        audioEngine.stop('A');
+        audioEngine.stop('B');
+      } catch {
+        // ignore
+      }
+
+      try {
+        audioEngine.enableMixCheck(false);
+        audioEngine.resetMixTrigger();
+      } catch {
+        // ignore
+      }
+
+      try {
+        audioEngine.setCrossfade(0);
+      } catch {
+        // ignore
+      }
+
+      set((state) => ({
+        isPartyMode: false,
+        partySource: null,
+        partyTrackIds: [],
         nowPlayingIndex: 0,
         pendingNextIndex: null,
         pendingSourceSwitch: null,
         queuedSourceSwitch: null,
         mixInProgress: false,
-      });
+        activeDeck: 'A',
+        crossfadeValue: 0,
+        deckA: { ...initialDeckState, playbackRate: state.deckA.playbackRate },
+        deckB: { ...initialDeckState, playbackRate: state.deckB.playbackRate },
+      }));
     },
 
     triggerMixNow: () => {
@@ -1564,15 +1638,23 @@ export const useDJStore = create<DJState>()(
       // Auto Match offset is a simple BPM nudge, clamped to ±50 BPM.
       if (updates.autoOffsetBpm !== undefined) {
         const raw = Number(updates.autoOffsetBpm);
-        const clampedOffset = clamp(Number.isFinite(raw) ? raw : 0, -50, 50);
-        updates.autoOffsetBpm = clamp(Math.round(clampedOffset / 5) * 5, -50, 50);
+        const clampedOffset = clamp(Number.isFinite(raw) ? raw : 0, -150, 150);
+        updates.autoOffsetBpm = clamp(Math.round(clampedOffset / 5) * 5, -150, 150);
       }
 
       // Locked BPM should move in bigger 5 BPM steps.
       if (updates.lockedBpm !== undefined) {
         const raw = Number(updates.lockedBpm);
-        const clampedBpm = clamp(Number.isFinite(raw) ? raw : before.settings.lockedBpm, 60, 180);
-        updates.lockedBpm = clamp(Math.round(clampedBpm / 5) * 5, 60, 180);
+        const clampedBpm = clamp(Number.isFinite(raw) ? raw : before.settings.lockedBpm, 60, 300);
+        updates.lockedBpm = clamp(Math.round(clampedBpm / 5) * 5, 60, 300);
+      }
+
+      // Safety clamp: tempo stretch percentage.
+      // Allow large changes so big BPM ranges are audible, but keep it bounded.
+      if (updates.maxTempoPercent !== undefined) {
+        const raw = Number(updates.maxTempoPercent);
+        const clampedPct = clamp(Number.isFinite(raw) ? raw : before.settings.maxTempoPercent, 0, 300);
+        updates.maxTempoPercent = Math.round(clampedPct);
       }
 
       // When enabling Auto Match, capture a baseline from the currently playing deck
@@ -1609,7 +1691,7 @@ export const useDJStore = create<DJState>()(
         const rate = Math.max(0.25, audioEngine.getEffectiveTempo(deck) || deckState.playbackRate || 1);
         const effectiveBpm = baseBpm * rate;
         // Default to nearest 5 BPM so the slider + behavior feel consistent.
-        updates.lockedBpm = clamp(Math.round(effectiveBpm / 5) * 5, 60, 180);
+        updates.lockedBpm = clamp(Math.round(effectiveBpm / 5) * 5, 60, 300);
       }
 
       // Apply settings immediately for responsive controls (sliders/toggles).

@@ -1,4 +1,4 @@
-import { Search, Upload, Music, MoreVertical, ListPlus, Check, Plus, X, Play, Library } from 'lucide-react';
+import { Search, Upload, Music, MoreVertical, ListPlus, Check, Plus, X, Play, Trash2 } from 'lucide-react';
 import { useState, useRef } from 'react';
 import { useDJStore } from '@/stores/djStore';
 import { cn, formatDuration } from '@/lib/utils';
@@ -18,6 +18,7 @@ export function LibraryView() {
     isLoadingTracks, 
     importTracks, 
     removeFromLibrary,
+    clearAllImports,
     loadTrackToDeck, 
     deckA,
     playlists,
@@ -45,6 +46,15 @@ export function LibraryView() {
 
   const handleImport = () => {
     fileInputRef.current?.click();
+  };
+
+  const handleClearAllImports = async () => {
+    if (tracks.length === 0) return;
+    const ok = window.confirm(
+      'This will permanently remove all imported tracks from your device and clear all playlists. Continue?',
+    );
+    if (!ok) return;
+    await clearAllImports();
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -142,6 +152,22 @@ export function LibraryView() {
       >
         <Upload className="w-5 h-5" />
         Import Music
+      </button>
+
+      <button
+        onClick={handleClearAllImports}
+        disabled={tracks.length === 0}
+        className={cn(
+          'flex items-center justify-center gap-2.5 w-full py-3 text-[13px] rounded-xl border transition-colors mb-5',
+          tracks.length > 0
+            ? 'border-destructive/40 text-destructive bg-destructive/10 hover:bg-destructive/15'
+            : 'border-white/10 text-muted-foreground bg-white/5 opacity-50 cursor-not-allowed',
+        )}
+        type="button"
+        title={tracks.length > 0 ? 'Remove all imported tracks and clear playlists' : 'No imports to clear'}
+      >
+        <Trash2 className="w-4 h-4" />
+        Clear Imports
       </button>
 
       {/* Search Bar */}

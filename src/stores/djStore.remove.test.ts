@@ -116,6 +116,40 @@ beforeEach(() => {
 })
 
 describe('DJ Store removal semantics', () => {
+  it('stopPartyMode hard-stops audio and clears deck state', () => {
+    useDJStore.setState({
+      isPartyMode: true,
+      partySource: { type: 'import' },
+      partyTrackIds: ['t1', 't2'],
+      nowPlayingIndex: 0,
+      activeDeck: 'A',
+      deckA: { ...useDJStore.getState().deckA, trackId: 't1', isPlaying: false, playbackRate: 1.25 },
+      deckB: { ...useDJStore.getState().deckB, trackId: 't2', isPlaying: false, playbackRate: 0.9 },
+      mixInProgress: true,
+      pendingNextIndex: 1,
+      queuedSourceSwitch: { type: 'import' },
+    })
+
+    useDJStore.getState().stopPartyMode()
+
+    expect(audioEngine.stop).toHaveBeenCalledWith('A')
+    expect(audioEngine.stop).toHaveBeenCalledWith('B')
+    expect(audioEngine.pause).not.toHaveBeenCalled()
+
+    const after = useDJStore.getState()
+    expect(after.isPartyMode).toBe(false)
+    expect(after.partySource).toBe(null)
+    expect(after.partyTrackIds).toEqual([])
+    expect(after.nowPlayingIndex).toBe(0)
+    expect(after.mixInProgress).toBe(false)
+
+    expect(after.deckA.trackId).toBe(null)
+    expect(after.deckB.trackId).toBe(null)
+    // Preserve user tempo UI state.
+    expect(after.deckA.playbackRate).toBe(1.25)
+    expect(after.deckB.playbackRate).toBe(0.9)
+  })
+
   it('removeFromLibrary removes from queue and adjusts nowPlayingIndex when removing earlier track', async () => {
     // Playing t3 at index 2.
     useDJStore.setState({

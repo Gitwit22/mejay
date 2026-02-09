@@ -122,6 +122,11 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
     window.location.reload()
   }
 
+  const handleClearLibrary = async () => {
+    setOpen(false)
+    await useDJStore.getState().clearAllImports()
+  }
+
   const handleInstallStub = () => {
     toast({
       title: 'Install coming soon',
@@ -429,6 +434,33 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                 <CollapsibleContent>
                   <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm">
                     <div className="p-4">
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button type="button" variant="outline" className="w-full">
+                            Clear Library (Imports + Playlists)
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Clear library?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              This permanently removes all imported tracks and clears all playlists on this device. Your settings and license are kept.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction
+                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              onClick={handleClearLibrary}
+                            >
+                              Clear
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+
+                      <div className="h-3" />
+
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
                           <Button

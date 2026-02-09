@@ -239,13 +239,22 @@ export async function deletePlaylist(id: string): Promise<void> {
   await db.delete('playlists', id);
 }
 
+// Bulk clear operations
+export async function clearTracksAndPlaylists(): Promise<void> {
+  const db = await getDB();
+  const tx = db.transaction(['tracks', 'playlists'], 'readwrite');
+  await tx.objectStore('tracks').clear();
+  await tx.objectStore('playlists').clear();
+  await tx.done;
+}
+
 // Settings operations
 export async function getSettings(): Promise<Settings> {
   const db = await getDB();
   const settings = await db.get('settings', 'default');
   const defaults: Settings = {
     crossfadeSeconds: 8,
-    maxTempoPercent: 6,
+    maxTempoPercent: 150,
     shuffleEnabled: false,
     masterVolume: 0.9,
     nextSongStartOffset: 15,
@@ -265,6 +274,22 @@ export async function getSettings(): Promise<Settings> {
   // Merge to backfill new fields for existing users.
   const merged = settings ? { ...defaults, ...stripLegacySettingsKeys(settings) } : defaults;
 
+  // Normalize tempo safety clamp.
+  const rawMaxTempoPercent = Number((merged as any).maxTempoPercent);
+  const clampedMaxTempoPercent = Number.isFinite(rawMaxTempoPercent)
+    ? Math.max(0, Math.min(300, rawMaxTempoPercent))
+    : defaults.maxTempoPercent;
+  const snappedMaxTempoPercent = Math.round(clampedMaxTempoPercent);
+
+  // Normalize BPM-related settings to match UI behavior.
+  const rawLocked = Number((merged as any).lockedBpm);
+  const clampedLocked = Number.isFinite(rawLocked) ? Math.max(60, Math.min(300, rawLocked)) : defaults.lockedBpm;
+  const snappedLocked = Math.round(clampedLocked / 5) * 5;
+
+  const rawOffset = Number((merged as any).autoOffsetBpm);
+  const clampedOffset = Number.isFinite(rawOffset) ? Math.max(-150, Math.min(150, rawOffset)) : defaults.autoOffsetBpm;
+  const snappedOffset = Math.round(clampedOffset / 5) * 5;
+
   // Snap lock tolerance to 5% increments (UI + engine expect bigger steps).
   const rawPct = Number((merged as any).lockTolerancePct);
   const clampedPct = Number.isFinite(rawPct) ? Math.max(0, Math.min(100, rawPct)) : defaults.lockTolerancePct;
@@ -272,6 +297,9 @@ export async function getSettings(): Promise<Settings> {
 
   return {
     ...merged,
+    maxTempoPercent: snappedMaxTempoPercent,
+    lockedBpm: snappedLocked,
+    autoOffsetBpm: snappedOffset,
     lockTolerancePct: snappedPct,
   };
 }

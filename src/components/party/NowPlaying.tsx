@@ -169,20 +169,28 @@ export function NowPlaying() {
       </div>
 
       {/* BPM Display */}
-      {currentTrack?.bpm && (
+      {(currentTrack?.bpm || currentDeck.playbackRate !== 1) && (
         <div className="flex justify-center gap-4 mb-3">
-          <div className="text-center">
-            <span className="text-xl font-bold text-accent font-display">
-              {Math.round(currentTrack.bpm * currentDeck.playbackRate)}
-            </span>
-            <span className="block text-[9px] text-muted-foreground uppercase tracking-wider">
-              BPM
-            </span>
-          </div>
+          {currentTrack?.bpm && (
+            <div className="text-center">
+              <span className="text-xl font-bold text-accent font-display">
+                {Math.round(currentTrack.bpm * currentDeck.playbackRate)}
+              </span>
+              <span className="block text-[9px] text-muted-foreground uppercase tracking-wider">
+                BPM
+              </span>
+            </div>
+          )}
+
           {currentDeck.playbackRate !== 1 && (
             <div className="text-center">
               <span className="text-xl font-bold text-muted-foreground font-display">
-                {((currentDeck.playbackRate - 1) * 100).toFixed(1)}%
+                {(() => {
+                  const pct = (currentDeck.playbackRate - 1) * 100;
+                  const semitones = 12 * Math.log2(Math.max(0.0001, currentDeck.playbackRate));
+                  const sign = pct >= 0 ? '+' : '';
+                  return `${sign}${pct.toFixed(1)}% (${semitones >= 0 ? '+' : ''}${semitones.toFixed(2)}st)`;
+                })()}
               </span>
               <span className="block text-[9px] text-muted-foreground uppercase tracking-wider">
                 Pitch
