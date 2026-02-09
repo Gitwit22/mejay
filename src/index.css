@@ -664,7 +664,10 @@
 .mejay-welcome .hero-ctas {
   margin-top: 18px;
   display: flex;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
+  gap: 10px;
 }
 
 
@@ -682,6 +685,43 @@
   transition: transform 140ms ease, box-shadow 140ms ease, filter 140ms ease;
   position: relative;
   overflow: hidden;
+}
+
+.mejay-welcome .cta-primary.cta-login {
+  height: 60px;
+  font-size: 16px;
+}
+
+.mejay-welcome .cta-alt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.mejay-welcome .cta-alt-label {
+  opacity: 0.8;
+}
+
+.mejay-welcome .cta-alt-link {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 800;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 255, 255, 0.35);
+  text-underline-offset: 4px;
+  transition: color 140ms ease, text-decoration-color 140ms ease;
+}
+
+.mejay-welcome .cta-alt-link:hover {
+  color: rgba(255, 255, 255, 1);
+  text-decoration-color: rgba(0, 245, 212, 0.75);
 }
 
 .mejay-welcome .cta-primary::after {

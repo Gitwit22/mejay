@@ -1,5 +1,5 @@
 import {useEffect, useState} from 'react'
-import {Link} from 'react-router-dom'
+import {Link, useLocation, useNavigate} from 'react-router-dom'
 
 import {toast} from '@/hooks/use-toast'
 import {startCheckout} from '@/lib/checkout'
@@ -7,8 +7,28 @@ import {usePlanStore} from '@/stores/planStore'
 import { MEJAY_LOGO_URL } from '@/lib/branding'
 
 export default function PricingPage() {
+  const location = useLocation()
+  const navigate = useNavigate()
   const [isCheckingOut, setIsCheckingOut] = useState<'pro' | 'full_program' | null>(null)
   const {billingEnabled, setDevPlan, authBypassEnabled} = usePlanStore()
+
+  const from = (location.state as any)?.from
+  const fromPath = typeof from === 'string' ? from : null
+  const isInApp = (fromPath?.startsWith('/app') ?? false) || location.pathname.startsWith('/app')
+  const backLabel = isInApp ? 'Back to MeJay' : 'Return to home'
+
+  const handleBack = () => {
+    const current = `${location.pathname}${location.search}${location.hash}`
+    if (fromPath && fromPath.trim() && fromPath !== current) {
+      navigate(fromPath)
+      return
+    }
+    if (isInApp) {
+      navigate('/app')
+      return
+    }
+    navigate('/')
+  }
 
   useEffect(() => {
     window.scrollTo(0, 0)
@@ -57,7 +77,7 @@ export default function PricingPage() {
             <span className="logo-text">MEJay</span>
           </Link>
 
-          <Link to="/" className="back-link">
+          <button type="button" className="back-link" onClick={handleBack}>
             <svg
               width="20"
               height="20"
@@ -69,8 +89,8 @@ export default function PricingPage() {
             >
               <path d="M19 12H5M12 19l-7-7 7-7" />
             </svg>
-            Back to Home
-          </Link>
+            {backLabel}
+          </button>
         </div>
       </header>
 

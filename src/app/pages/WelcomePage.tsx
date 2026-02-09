@@ -47,12 +47,24 @@ export default function WelcomePage() {
           </div>
 
           <div className="hero-ctas">
-            <button type="button" className="cta-primary" onClick={() => navigate('/app')}>
-              Enter MEJay
-            </button>
-            <button type="button" className="cta-secondary" onClick={() => navigate('/login?returnTo=/app')}>
+            <button
+              type="button"
+              className="cta-primary cta-login"
+              onClick={() => navigate('/login?returnTo=/app')}
+            >
               Login
             </button>
+
+            <div className="cta-alt" aria-label="Create account">
+              <span className="cta-alt-label">or</span>
+              <button
+                type="button"
+                className="cta-alt-link"
+                onClick={() => navigate('/login?returnTo=/app&intent=signup')}
+              >
+                create an account
+              </button>
+            </div>
           </div>
 
           <div className="trust-row" aria-label="Trust points">

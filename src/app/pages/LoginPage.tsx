@@ -1,4 +1,4 @@
-import {useMemo, useState} from 'react'
+import {useEffect, useMemo, useState} from 'react'
 import {useNavigate, useSearchParams, Link} from 'react-router-dom'
 import {toast} from '@/hooks/use-toast'
 import {MEJAY_LOGO_URL} from '@/lib/branding'
@@ -29,6 +29,14 @@ export default function LoginPage() {
   const [password2, setPassword2] = useState('')
   const [verifiedToken, setVerifiedToken] = useState('')
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    const intent = (searchParams.get('intent') ?? '').toLowerCase()
+    if (intent !== 'signup') return
+    goToCreateAccount()
+    // Only run when intent changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
 
   const goToCreateAccount = () => {
     setPurpose('signup_verify')

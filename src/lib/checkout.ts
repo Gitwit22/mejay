@@ -160,3 +160,51 @@ export async function getCheckoutStatus(sessionId: string): Promise<CheckoutStat
     ...(typeof data.stripeSubscriptionId === 'string' ? {stripeSubscriptionId: data.stripeSubscriptionId} : {}),
   }
 }
+
+export async function openBillingPortal() {
+  const {billingEnabled, authBypassEnabled, refreshFromServer} = usePlanStore.getState()
+  if (!billingEnabled) {
+    throw new Error('Billing disabled (dev).')
+  }
+
+  if (authBypassEnabled) {
+    throw new Error('Manage billing is disabled while Login Bypass is enabled. Disable bypass and sign in to manage billing.')
+  }
+
+  const res = await fetch('/api/billing-portal', {
+    method: 'POST',
+    credentials: 'include',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify({}),
+  })
+
+  if (res.status === 401) {
+    void refreshFromServer({reason: 'openBillingPortal:401'}).catch(() => {})
+    throw new Error('Login required to manage billing. Please sign in and try again.')
+  }
+
+  if (!res.ok) {
+    let details = ''
+    const contentType = res.headers.get('content-type') ?? ''
+    if (contentType.includes('application/json')) {
+      const data = (await res
+        .clone()
+        .json()
+        .catch(() => null)) as null | {error?: unknown; message?: unknown}
+      const msg =
+        typeof data?.message === 'string'
+          ? data.message
+          : typeof data?.error === 'string'
+            ? data.error
+            : ''
+      details = msg
+    }
+    if (!details) details = await res.text().catch(() => '')
+    throw new Error(`Billing portal failed (${res.status}). ${details}`.trim())
+  }
+
+  const data = (await res.json()) as {url?: string}
+  if (!data.url) throw new Error('Billing portal failed: missing url')
+
+  window.location.href = data.url
+}

@@ -1,17 +1,19 @@
 import { usePlanStore } from '@/stores/planStore';
 import { X, Check, Sparkles, Volume2, Sliders, Gauge } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from '@/hooks/use-toast';
 import { startCheckout } from '@/lib/checkout';
 
 export function UpgradeModal() {
   const { upgradeModalOpen, closeUpgradeModal, billingEnabled, setDevPlan, authBypassEnabled } = usePlanStore();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const goToPricing = () => {
     closeUpgradeModal();
-    navigate('/pricing');
+    const from = `${location.pathname}${location.search}`;
+    navigate('/app/pricing', { state: { from } });
   };
 
   const beginCheckout = async (plan: 'pro' | 'full_program') => {

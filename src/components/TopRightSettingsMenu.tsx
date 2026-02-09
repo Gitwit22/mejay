@@ -1,5 +1,5 @@
 import {useEffect, useMemo, useState} from 'react'
-import {useNavigate} from 'react-router-dom'
+import {useLocation, useNavigate, type NavigateOptions} from 'react-router-dom'
 import {ChevronDown, LogOut, Settings as SettingsIcon, X} from 'lucide-react'
 import {
   Sheet,
@@ -34,6 +34,7 @@ import {toast} from '@/hooks/use-toast'
 import {usePlanStore} from '@/stores/planStore'
 import {useLicenseStore} from '@/licensing/licenseStore'
 import {getNextRequiredCheckBy} from '@/licensing/licensePolicy'
+import {openBillingPortal} from '@/lib/checkout'
 
 type TopRightSettingsMenuProps = {
   className?: string
@@ -41,6 +42,7 @@ type TopRightSettingsMenuProps = {
 
 export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   const navigate = useNavigate()
+  const location = useLocation()
   const [open, setOpen] = useState(false)
   const [panelMaxHeightPx, setPanelMaxHeightPx] = useState<number | null>(null)
   const [licenseKey, setLicenseKey] = useState('')
@@ -99,10 +101,12 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
     navigate('/')
   }
 
-  const closeAndNavigate = (to: string) => {
+  const closeAndNavigate = (to: string, options?: NavigateOptions) => {
     setOpen(false)
-    navigate(to)
+    navigate(to, options)
   }
+
+  const from = `${location.pathname}${location.search}`
 
   const handleResetLocalData = async () => {
     setOpen(false)
@@ -410,7 +414,31 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                       )}
 
                       <Separator />
-                      <Button type="button" variant="outline" className="w-full" onClick={() => closeAndNavigate('/pricing')}>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full"
+                        onClick={async () => {
+                          try {
+                            await openBillingPortal()
+                          } catch (e) {
+                            const msg = e instanceof Error ? e.message : 'Could not open billing portal.'
+                            toast({
+                              title: 'Billing',
+                              description: msg,
+                              variant: 'destructive',
+                            })
+                          }
+                        }}
+                      >
+                        Manage billing
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full"
+                        onClick={() => closeAndNavigate('/app/pricing', {state: {from}})}
+                      >
                         View pricing
                       </Button>
                     </div>
@@ -556,7 +584,12 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                     <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/about')}>
                       About MEJay
                     </Button>
-                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/pricing')}>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full justify-start"
+                      onClick={() => closeAndNavigate('/app/pricing', {state: {from}})}
+                    >
                       Pricing
                     </Button>
                     <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/terms')}>

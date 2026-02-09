@@ -421,6 +421,7 @@ const App = () => (
           <Route path="/contact" element={<ContactPage />} />
           <Route path="/app" element={<AppShellLayout />}>
             <Route index element={<Index />} />
+            <Route path="pricing" element={<PricingPage />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Route>
