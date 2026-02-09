@@ -418,8 +418,7 @@ export const useDJStore = create<DJState>()(
     return desiredRealSeconds * outgoingRate;
   };
 
-  const applyImmediateTempoToActiveDeck = (state: DJState) => {
-    const deck = state.activeDeck;
+  const applyImmediateTempoToDeck = (state: DJState, deck: DeckId) => {
     const deckState = deck === 'A' ? state.deckA : state.deckB;
     if (!deckState.trackId) return;
 
@@ -427,6 +426,25 @@ export const useDJStore = create<DJState>()(
     if (targetBpm === null) return;
     const ratio = audioEngine.calculateTempoRatio(deck, targetBpm, state.settings.maxTempoPercent);
     get().setTempo(deck, ratio);
+  };
+
+  const applyImmediateTempoToPlayingDecks = (state: DJState) => {
+    const playing: DeckId[] = [];
+    try {
+      if (audioEngine.isPlaying('A')) playing.push('A');
+      if (audioEngine.isPlaying('B')) playing.push('B');
+    } catch {
+      // ignore
+    }
+
+    if (playing.length === 0) {
+      applyImmediateTempoToDeck(state, state.activeDeck);
+      return;
+    }
+
+    for (const deck of playing) {
+      applyImmediateTempoToDeck(state, deck);
+    }
   };
 
   const getTrackIdsForPartySource = (state: DJState, source: PartySource): string[] => {
@@ -1536,6 +1554,13 @@ export const useDJStore = create<DJState>()(
     updateUserSettings: async (updates: Partial<Settings>) => {
       const before = get();
 
+      // Snap Lock Tolerance to bigger 5% increments for stronger impact.
+      if (updates.lockTolerancePct !== undefined) {
+        const raw = Number(updates.lockTolerancePct);
+        const clampedPct = clamp(Number.isFinite(raw) ? raw : 10, 0, 100);
+        updates.lockTolerancePct = clamp(Math.round(clampedPct / 5) * 5, 0, 100);
+      }
+
       // When enabling Auto Match, capture a baseline from the currently playing deck
       // including any tempo stretch already applied, then set slider offset to 0.
       if (updates.tempoMode === 'auto' && before.settings.tempoMode !== 'auto') {
@@ -1568,15 +1593,15 @@ export const useDJStore = create<DJState>()(
 
       const state = get();
 
-      // Make Master BPM / tempo mode changes apply instantly to the currently playing deck.
-      if (state.isPartyMode && (
+      // Make Master BPM / tempo mode changes apply instantly to the currently playing deck(s).
+      if (
         updates.tempoMode !== undefined ||
         updates.lockedBpm !== undefined ||
         updates.autoBaseBpm !== undefined ||
         updates.autoOffsetBpm !== undefined ||
         updates.maxTempoPercent !== undefined
-      )) {
-        applyImmediateTempoToActiveDeck(state);
+      ) {
+        applyImmediateTempoToPlayingDecks(state);
       }
 
       // Apply mix check enable/disable immediately.

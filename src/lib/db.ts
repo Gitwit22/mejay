@@ -263,7 +263,17 @@ export async function getSettings(): Promise<Settings> {
   };
 
   // Merge to backfill new fields for existing users.
-  return settings ? { ...defaults, ...stripLegacySettingsKeys(settings) } : defaults;
+  const merged = settings ? { ...defaults, ...stripLegacySettingsKeys(settings) } : defaults;
+
+  // Snap lock tolerance to 5% increments (UI + engine expect bigger steps).
+  const rawPct = Number((merged as any).lockTolerancePct);
+  const clampedPct = Number.isFinite(rawPct) ? Math.max(0, Math.min(100, rawPct)) : defaults.lockTolerancePct;
+  const snappedPct = Math.round(clampedPct / 5) * 5;
+
+  return {
+    ...merged,
+    lockTolerancePct: snappedPct,
+  };
 }
 
 export async function updateSettings(updates: Partial<Settings>): Promise<void> {

@@ -136,7 +136,7 @@ export function TempoControls() {
               onValueChange={([v]) => updateUserSettings({ lockTolerancePct: v })}
               min={0}
               max={100}
-              step={1}
+              step={5}
               className="w-full"
             />
             <div className="mt-2 flex items-center justify-between text-[10px] text-muted-foreground">
