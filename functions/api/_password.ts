@@ -54,6 +54,10 @@ export async function verifyPassword(password: string, stored: string): Promise<
 
   const iterations = Number(iterStr)
   if (!Number.isFinite(iterations) || iterations <= 0) return false
+  // Cloudflare Workers enforces an upper bound on PBKDF2 iterations.
+  // If an old hash was created elsewhere with a higher value, treat it as invalid
+  // so we can fall back to password reset instead of throwing a 500.
+  if (iterations > 100_000) return false
 
   try {
     const salt = base64UrlDecodeToBytes(saltB64)
