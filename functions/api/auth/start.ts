@@ -10,6 +10,8 @@ import {
   sha256Hex,
 } from '../_auth'
 
+type Purpose = 'signup_verify' | 'password_reset'
+
 type Env = {
   DB: any
   AUTH_CODE_PEPPER?: string
@@ -38,6 +40,59 @@ function isLocalHost(req: Request) {
   return host === '127.0.0.1' || host === 'localhost'
 }
 
+function getClientIp(req: Request): string {
+  const cf = (req.headers.get('cf-connecting-ip') || '').trim()
+  if (cf) return cf
+  const xff = (req.headers.get('x-forwarded-for') || '').trim()
+  if (xff) return xff.split(',')[0].trim()
+  return 'unknown'
+}
+
+function parsePurpose(raw: unknown): Purpose {
+  if (raw === 'password_reset') return 'password_reset'
+  return 'signup_verify'
+}
+
+async function applyIpRateLimit(args: {env: Env; request: Request; purpose: Purpose; kind: 'start' | 'verify'}) {
+  const {env, request, purpose, kind} = args
+  const ip = getClientIp(request)
+  const now = nowIso()
+  const windowSeconds = 10 * 60
+  const maxPerWindow = kind === 'start' ? 8 : 20
+
+  const row = (await env.DB
+    .prepare('SELECT window_start, count, locked_until FROM auth_ip_rates WHERE ip = ?1 AND purpose = ?2 AND kind = ?3')
+    .bind(ip, purpose, kind)
+    .first()) as {window_start: string; count: number; locked_until: string | null} | null
+
+  if (row?.locked_until && row.locked_until > now) {
+    return {ok: false as const}
+  }
+
+  const windowStart = row?.window_start ?? now
+  const shouldReset = row?.window_start ? (Date.parse(now) - Date.parse(row.window_start) > windowSeconds * 1000) : true
+  const nextWindowStart = shouldReset ? now : windowStart
+  const nextCount = (shouldReset ? 0 : (row?.count ?? 0)) + 1
+  const lockedUntil = nextCount > maxPerWindow ? addMsIso(LOCKOUT_MS) : null
+
+  await env.DB
+    .prepare(
+      [
+        'INSERT INTO auth_ip_rates (ip, purpose, kind, window_start, count, locked_until)',
+        'VALUES (?1, ?2, ?3, ?4, ?5, ?6)',
+        'ON CONFLICT(ip, purpose, kind) DO UPDATE SET',
+        'window_start=excluded.window_start,',
+        'count=excluded.count,',
+        'locked_until=excluded.locked_until',
+      ].join(' '),
+    )
+    .bind(ip, purpose, kind, nextWindowStart, nextCount, lockedUntil)
+    .run()
+
+  if (lockedUntil) return {ok: false as const}
+  return {ok: true as const}
+}
+
 async function sendLoginCodeEmail(args: {env: Env; to: string; code: string; origin: string}) {
   const {env, to, code, origin} = args
 
@@ -54,7 +109,7 @@ async function sendLoginCodeEmail(args: {env: Env; to: string; code: string; ori
     }
   }
 
-  const subject = 'Your MEJay sign-in code'
+  const subject = 'Your MEJay code'
   const text = `Your MEJay sign-in code is: ${code}\n\nThis code expires in 10 minutes.\n\nIf you didn’t request this, you can ignore this email.\n\n${origin}`
   const html = `
     <div style="font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; line-height: 1.5; color: #111">
@@ -123,14 +178,20 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
   const body = await readJson(request)
   const emailRaw = String((body as any).email || '')
   const email = normalizeEmail(emailRaw)
+  const purpose = parsePurpose((body as any).purpose)
 
   if (!email || !email.includes('@')) {
     return json({ok: false, error: 'invalid_email'}, {status: 400})
   }
 
+  const ipLimit = await applyIpRateLimit({env, request, purpose, kind: 'start'})
+  if (!ipLimit.ok) {
+    return json({ok: false, error: 'rate_limited'}, {status: 429})
+  }
+
   const existing = (await env.DB
-    .prepare('SELECT attempts, locked_until FROM auth_codes WHERE email = ?1')
-    .bind(email)
+    .prepare('SELECT attempts, locked_until FROM email_codes WHERE email = ?1 AND purpose = ?2')
+    .bind(email, purpose)
     .first()) as {attempts: number; locked_until: string | null} | null
 
   if (existing?.locked_until && existing.locked_until > nowIso()) {
@@ -140,8 +201,8 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
   // Reset attempts if previously locked and lock expired.
   if (existing?.attempts && existing.attempts >= MAX_ATTEMPTS && (!existing.locked_until || existing.locked_until <= nowIso())) {
     await env.DB
-      .prepare('UPDATE auth_codes SET attempts = 0, locked_until = NULL WHERE email = ?1')
-      .bind(email)
+      .prepare('UPDATE email_codes SET attempts = 0, locked_until = NULL WHERE email = ?1 AND purpose = ?2')
+      .bind(email, purpose)
       .run()
   }
 
@@ -152,16 +213,16 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
   await env.DB
     .prepare(
       [
-        'INSERT INTO auth_codes (email, code_hash, expires_at, attempts, locked_until)',
-        'VALUES (?1, ?2, ?3, 0, NULL)',
-        'ON CONFLICT(email) DO UPDATE SET',
+        'INSERT INTO email_codes (email, purpose, code_hash, expires_at, attempts, locked_until)',
+        'VALUES (?1, ?2, ?3, ?4, 0, NULL)',
+        'ON CONFLICT(email, purpose) DO UPDATE SET',
         'code_hash = excluded.code_hash,',
         'expires_at = excluded.expires_at,',
         'attempts = 0,',
         'locked_until = NULL',
       ].join(' '),
     )
-    .bind(email, codeHash, addMsIso(CODE_TTL_MS))
+    .bind(email, purpose, codeHash, addMsIso(CODE_TTL_MS))
     .run()
 
   const allowDevReturn = isLocalHost(request) || env.ALLOW_DEV_ENDPOINTS === 'true'

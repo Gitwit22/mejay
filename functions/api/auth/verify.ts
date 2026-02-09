@@ -1,19 +1,23 @@
 import {
   LOCKOUT_MS,
   MAX_ATTEMPTS,
-  SESSION_TTL_MS,
   addMsIso,
-  makeSessionCookie,
+  addMs,
   normalizeEmail,
   nowIso,
   readJson,
   sha256Hex,
+  signVerifiedToken,
+  type VerifiedPurpose,
 } from '../_auth'
+
+type Purpose = VerifiedPurpose
 
 type Env = {
   DB: any
   AUTH_CODE_PEPPER?: string
   SESSION_PEPPER?: string
+  AUTH_TOKEN_SECRET?: string
 }
 
 const json = (body: unknown, init?: ResponseInit) =>
@@ -36,12 +40,13 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
   const body = await readJson(request)
   const email = normalizeEmail(String((body as any).email || ''))
   const code = String((body as any).code || '').trim()
+  const purpose = ((body as any).purpose === 'password_reset' ? 'password_reset' : 'signup_verify') as Purpose
 
   if (!email || !code) return json({ok: false, error: 'missing'}, {status: 400})
 
   const row = (await env.DB
-    .prepare('SELECT code_hash, expires_at, attempts, locked_until FROM auth_codes WHERE email = ?1')
-    .bind(email)
+    .prepare('SELECT code_hash, expires_at, attempts, locked_until FROM email_codes WHERE email = ?1 AND purpose = ?2')
+    .bind(email, purpose)
     .first()) as
     | {code_hash: string; expires_at: string; attempts: number; locked_until: string | null}
     | null
@@ -57,47 +62,22 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
     const newAttempts = (row.attempts ?? 0) + 1
     const lockedUntil = newAttempts >= MAX_ATTEMPTS ? addMsIso(LOCKOUT_MS) : null
     await env.DB
-      .prepare('UPDATE auth_codes SET attempts = ?1, locked_until = ?2 WHERE email = ?3')
-      .bind(newAttempts, lockedUntil, email)
+      .prepare('UPDATE email_codes SET attempts = ?1, locked_until = ?2 WHERE email = ?3 AND purpose = ?4')
+      .bind(newAttempts, lockedUntil, email, purpose)
       .run()
     return json({ok: false, error: 'bad_code'}, {status: 400})
   }
 
-  // Find or create user
-  let user = (await env.DB
-    .prepare('SELECT id, email FROM users WHERE email = ?1')
-    .bind(email)
-    .first()) as {id: string; email: string} | null
+  // Delete code so it can't be reused.
+  await env.DB.prepare('DELETE FROM email_codes WHERE email = ?1 AND purpose = ?2').bind(email, purpose).run()
 
-  if (!user) {
-    const userId = crypto.randomUUID()
-    await env.DB.prepare('INSERT INTO users (id, email) VALUES (?1, ?2)').bind(userId, email).run()
-    user = {id: userId, email}
-  }
-
-  // Create session
-  const sessionToken = crypto.randomUUID() + crypto.randomUUID()
-  const sessionPepper = env.SESSION_PEPPER || 'dev-session-pepper'
-  const tokenHash = await sha256Hex(`session:${sessionToken}:${sessionPepper}`)
-  const expiresAt = addMsIso(SESSION_TTL_MS)
-
-  await env.DB
-    .prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?1, ?2, ?3)')
-    .bind(tokenHash, user.id, expiresAt)
-    .run()
-
-  // Delete code so it can't be reused
-  await env.DB.prepare('DELETE FROM auth_codes WHERE email = ?1').bind(email).run()
-
-  const secure = new URL(request.url).protocol === 'https:'
-  const cookie = makeSessionCookie(sessionToken, {secure, maxAgeSeconds: Math.floor(SESSION_TTL_MS / 1000)})
-
-  return new Response(JSON.stringify({ok: true}), {
-    status: 200,
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': 'no-store, max-age=0',
-      'Set-Cookie': cookie,
-    },
+  // Return short-lived token proving the user verified their email recently.
+  const verifiedToken = await signVerifiedToken({
+    env,
+    email,
+    purpose,
+    expMs: addMs(15 * 60 * 1000),
   })
+
+  return json({ok: true, verifiedToken}, {status: 200})
 }

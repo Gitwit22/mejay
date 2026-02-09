@@ -4,6 +4,8 @@ export type EnvWithDb = {
   DB: D1Database
   AUTH_CODE_PEPPER?: string
   SESSION_PEPPER?: string
+  /** Optional dedicated secret for verified token signing. Falls back to SESSION_PEPPER. */
+  AUTH_TOKEN_SECRET?: string
 }
 
 export type AccessType = 'free' | 'pro' | 'full_program'
@@ -31,8 +33,113 @@ export function nowIso() {
   return new Date().toISOString()
 }
 
+export function nowMs() {
+  return Date.now()
+}
+
+export function addMs(ms: number) {
+  return Date.now() + ms
+}
+
 export function addMsIso(ms: number) {
   return new Date(Date.now() + ms).toISOString()
+}
+
+function base64UrlEncode(bytes: Uint8Array): string {
+  let binary = ''
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+  const b64 = btoa(binary)
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+}
+
+function base64UrlDecodeToBytes(input: string): Uint8Array {
+  const b64 = input.replace(/-/g, '+').replace(/_/g, '/')
+  const pad = b64.length % 4 === 0 ? '' : '='.repeat(4 - (b64.length % 4))
+  const binary = atob(b64 + pad)
+  const out = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i)
+  return out
+}
+
+async function hmacSha256Bytes(secret: string, message: string): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    {name: 'HMAC', hash: 'SHA-256'},
+    false,
+    ['sign'],
+  )
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message))
+  return new Uint8Array(sig)
+}
+
+export type VerifiedPurpose = 'signup_verify' | 'password_reset'
+
+export type VerifiedTokenPayload = {
+  email: string
+  purpose: VerifiedPurpose
+  exp: number
+}
+
+function getAuthTokenSecret(env: Pick<EnvWithDb, 'AUTH_TOKEN_SECRET' | 'SESSION_PEPPER'>): string {
+  return (env.AUTH_TOKEN_SECRET || env.SESSION_PEPPER || 'dev-session-pepper').trim()
+}
+
+export async function signVerifiedToken(args: {
+  env: Pick<EnvWithDb, 'AUTH_TOKEN_SECRET' | 'SESSION_PEPPER'>
+  email: string
+  purpose: VerifiedPurpose
+  expMs: number
+}): Promise<string> {
+  const {env, email, purpose, expMs} = args
+  const payload: VerifiedTokenPayload = {email: normalizeEmail(email), purpose, exp: expMs}
+  const payloadJson = JSON.stringify(payload)
+  const payloadB64 = base64UrlEncode(new TextEncoder().encode(payloadJson))
+  const secret = getAuthTokenSecret(env)
+  const sigBytes = await hmacSha256Bytes(secret, payloadB64)
+  const sigB64 = base64UrlEncode(sigBytes)
+  return `${payloadB64}.${sigB64}`
+}
+
+export async function verifyVerifiedToken(args: {
+  env: Pick<EnvWithDb, 'AUTH_TOKEN_SECRET' | 'SESSION_PEPPER'>
+  token: string
+  expectedPurpose?: VerifiedPurpose
+}): Promise<{ok: true; payload: VerifiedTokenPayload} | {ok: false; error: 'invalid' | 'expired'}> {
+  const {env, token, expectedPurpose} = args
+  const trimmed = (token || '').trim()
+  const parts = trimmed.split('.')
+  if (parts.length !== 2) return {ok: false, error: 'invalid'}
+
+  const [payloadB64, sigB64] = parts
+  if (!payloadB64 || !sigB64) return {ok: false, error: 'invalid'}
+
+  try {
+    const secret = getAuthTokenSecret(env)
+    const expectedSigBytes = await hmacSha256Bytes(secret, payloadB64)
+    const expectedSigB64 = base64UrlEncode(expectedSigBytes)
+    if (expectedSigB64 !== sigB64) return {ok: false, error: 'invalid'}
+
+    const payloadBytes = base64UrlDecodeToBytes(payloadB64)
+    const payload = JSON.parse(new TextDecoder().decode(payloadBytes)) as VerifiedTokenPayload
+    if (!payload || typeof payload.email !== 'string' || typeof payload.purpose !== 'string' || typeof payload.exp !== 'number') {
+      return {ok: false, error: 'invalid'}
+    }
+
+    if (expectedPurpose && payload.purpose !== expectedPurpose) return {ok: false, error: 'invalid'}
+    if (payload.exp < nowMs()) return {ok: false, error: 'expired'}
+
+    return {
+      ok: true,
+      payload: {
+        email: normalizeEmail(payload.email),
+        purpose: payload.purpose as VerifiedPurpose,
+        exp: payload.exp,
+      },
+    }
+  } catch {
+    return {ok: false, error: 'invalid'}
+  }
 }
 
 export function parseCookies(req: Request) {
