@@ -175,73 +175,77 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
     return json({ok: false, error: 'db_not_configured'}, {status: 500})
   }
 
-  const body = await readJson(request)
-  const emailRaw = String((body as any).email || '')
-  const email = normalizeEmail(emailRaw)
-  const purpose = parsePurpose((body as any).purpose)
+  try {
+    const body = await readJson(request)
+    const emailRaw = String((body as any).email || '')
+    const email = normalizeEmail(emailRaw)
+    const purpose = parsePurpose((body as any).purpose)
 
-  if (!email || !email.includes('@')) {
-    return json({ok: false, error: 'invalid_email'}, {status: 400})
-  }
+    if (!email || !email.includes('@')) {
+      return json({ok: false, error: 'invalid_email'}, {status: 400})
+    }
 
-  const ipLimit = await applyIpRateLimit({env, request, purpose, kind: 'start'})
-  if (!ipLimit.ok) {
-    return json({ok: false, error: 'rate_limited'}, {status: 429})
-  }
+    const ipLimit = await applyIpRateLimit({env, request, purpose, kind: 'start'})
+    if (!ipLimit.ok) {
+      return json({ok: false, error: 'rate_limited'}, {status: 429})
+    }
 
-  const existing = (await env.DB
-    .prepare('SELECT attempts, locked_until FROM email_codes WHERE email = ?1 AND purpose = ?2')
-    .bind(email, purpose)
-    .first()) as {attempts: number; locked_until: string | null} | null
-
-  if (existing?.locked_until && existing.locked_until > nowIso()) {
-    return json({ok: false, error: 'locked'}, {status: 429})
-  }
-
-  // Reset attempts if previously locked and lock expired.
-  if (existing?.attempts && existing.attempts >= MAX_ATTEMPTS && (!existing.locked_until || existing.locked_until <= nowIso())) {
-    await env.DB
-      .prepare('UPDATE email_codes SET attempts = 0, locked_until = NULL WHERE email = ?1 AND purpose = ?2')
+    const existing = (await env.DB
+      .prepare('SELECT attempts, locked_until FROM email_codes WHERE email = ?1 AND purpose = ?2')
       .bind(email, purpose)
+      .first()) as {attempts: number; locked_until: string | null} | null
+
+    if (existing?.locked_until && existing.locked_until > nowIso()) {
+      return json({ok: false, error: 'locked'}, {status: 429})
+    }
+
+    // Reset attempts if previously locked and lock expired.
+    if (existing?.attempts && existing.attempts >= MAX_ATTEMPTS && (!existing.locked_until || existing.locked_until <= nowIso())) {
+      await env.DB
+        .prepare('UPDATE email_codes SET attempts = 0, locked_until = NULL WHERE email = ?1 AND purpose = ?2')
+        .bind(email, purpose)
+        .run()
+    }
+
+    const code = random6DigitCode()
+    const pepper = env.AUTH_CODE_PEPPER || 'dev-pepper-change-me'
+    const codeHash = await sha256Hex(`${email}:${code}:${pepper}`)
+
+    await env.DB
+      .prepare(
+        [
+          'INSERT INTO email_codes (email, purpose, code_hash, expires_at, attempts, locked_until)',
+          'VALUES (?1, ?2, ?3, ?4, 0, NULL)',
+          'ON CONFLICT(email, purpose) DO UPDATE SET',
+          'code_hash = excluded.code_hash,',
+          'expires_at = excluded.expires_at,',
+          'attempts = 0,',
+          'locked_until = NULL',
+        ].join(' '),
+      )
+      .bind(email, purpose, codeHash, addMsIso(CODE_TTL_MS))
       .run()
+
+    const allowDevReturn = isLocalHost(request) || env.ALLOW_DEV_ENDPOINTS === 'true'
+
+    const origin = new URL(request.url).origin
+    const sent = await sendLoginCodeEmail({env, to: email, code, origin})
+    if (!sent.sent && !allowDevReturn) {
+      // Don't leak the code if we couldn't email it.
+      return json({ok: false, error: sent.reason ?? 'email_failed', ...(sent.details ? {resend: sent.details} : {})}, {status: 500})
+    }
+
+    return json({ok: true, ...(allowDevReturn ? {devCode: code} : {})}, {status: 200})
+  } catch (err) {
+    console.error('/api/auth/start threw', err)
+    const message = err instanceof Error ? err.message : String(err)
+    const lower = message.toLowerCase()
+    if (lower.includes('no such table') || lower.includes('no such column')) {
+      return json({ok: false, error: 'db_schema_out_of_date'}, {status: 500})
+    }
+    return json({ok: false, error: 'server_error'}, {status: 500})
   }
 
-  const code = random6DigitCode()
-  const pepper = env.AUTH_CODE_PEPPER || 'dev-pepper-change-me'
-  const codeHash = await sha256Hex(`${email}:${code}:${pepper}`)
-
-  await env.DB
-    .prepare(
-      [
-        'INSERT INTO email_codes (email, purpose, code_hash, expires_at, attempts, locked_until)',
-        'VALUES (?1, ?2, ?3, ?4, 0, NULL)',
-        'ON CONFLICT(email, purpose) DO UPDATE SET',
-        'code_hash = excluded.code_hash,',
-        'expires_at = excluded.expires_at,',
-        'attempts = 0,',
-        'locked_until = NULL',
-      ].join(' '),
-    )
-    .bind(email, purpose, codeHash, addMsIso(CODE_TTL_MS))
-    .run()
-
-  const allowDevReturn = isLocalHost(request) || env.ALLOW_DEV_ENDPOINTS === 'true'
-
-  const origin = new URL(request.url).origin
-  const sent = await sendLoginCodeEmail({env, to: email, code, origin})
-  if (!sent.sent && !allowDevReturn) {
-    // Don't leak the code if we couldn't email it.
-    return json(
-      {
-        ok: false,
-        error: sent.reason ?? 'email_failed',
-        ...(sent.reason === 'resend_failed' || sent.reason === 'resend_not_configured'
-          ? {resend: (sent as any).details}
-          : null),
-      },
-      {status: 500},
-    )
-  }
-
-  return json({ok: true, ...(allowDevReturn ? {devCode: code} : {})}, {status: 200})
+  // Fallback (should be unreachable).
+  return json({ok: false, error: 'server_error'}, {status: 500})
 }
