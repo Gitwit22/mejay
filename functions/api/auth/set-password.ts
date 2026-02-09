@@ -122,16 +122,20 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
       },
     })
   } catch (err) {
-    console.error('/api/auth/set-password threw', err)
+    const errorId = crypto.randomUUID()
+    console.error('/api/auth/set-password threw', {errorId, err})
     const message = err instanceof Error ? err.message : String(err)
     const lower = message.toLowerCase()
     const allowDebug = isLocalHost(request) || env.ALLOW_DEV_ENDPOINTS === 'true'
     if (lower.includes('no such table') || lower.includes('no such column')) {
-      return json({ok: false, error: 'db_schema_out_of_date'}, {status: 500})
+      return json({ok: false, error: 'db_schema_out_of_date', errorId}, {status: 500})
+    }
+    if (lower.includes('constraint failed') || lower.includes('sqlite_constraint')) {
+      return json({ok: false, error: 'db_constraint', errorId}, {status: 500})
     }
     if (allowDebug) {
-      return json({ok: false, error: 'server_error', detail: message.slice(0, 600)}, {status: 500})
+      return json({ok: false, error: 'server_error', errorId, detail: message.slice(0, 600)}, {status: 500})
     }
-    return json({ok: false, error: 'server_error'}, {status: 500})
+    return json({ok: false, error: 'server_error', errorId}, {status: 500})
   }
 }
