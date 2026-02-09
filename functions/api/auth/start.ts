@@ -43,7 +43,16 @@ async function sendLoginCodeEmail(args: {env: Env; to: string; code: string; ori
 
   const apiKey = (env.RESEND_API_KEY ?? '').trim()
   const from = (env.RESEND_FROM ?? '').trim()
-  if (!apiKey || !from) return {sent: false as const, reason: 'resend_not_configured' as const}
+  if (!apiKey || !from) {
+    return {
+      sent: false as const,
+      reason: 'resend_not_configured' as const,
+      details: {
+        apiKeyPresent: !!apiKey,
+        fromPresent: !!from,
+      },
+    }
+  }
 
   const subject = 'Your MEJay sign-in code'
   const text = `Your MEJay sign-in code is: ${code}\n\nThis code expires in 10 minutes.\n\nIf you didn’t request this, you can ignore this email.\n\n${origin}`
@@ -75,14 +84,29 @@ async function sendLoginCodeEmail(args: {env: Env; to: string; code: string; ori
 
     if (!res.ok) {
       const bodyText = await res.text().catch(() => '')
-      console.error('Resend sendLoginCodeEmail failed', res.status, bodyText.slice(0, 500))
-      return {sent: false as const, reason: 'resend_failed' as const}
+      const details = bodyText.slice(0, 4000)
+      console.error('Resend sendLoginCodeEmail failed', res.status, details)
+      return {
+        sent: false as const,
+        reason: 'resend_failed' as const,
+        details: {
+          status: res.status,
+          body: details,
+        },
+      }
     }
 
     return {sent: true as const}
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
     console.error('Resend sendLoginCodeEmail threw', err)
-    return {sent: false as const, reason: 'resend_failed' as const}
+    return {
+      sent: false as const,
+      reason: 'resend_failed' as const,
+      details: {
+        message,
+      },
+    }
   }
 }
 
@@ -146,7 +170,16 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
   const sent = await sendLoginCodeEmail({env, to: email, code, origin})
   if (!sent.sent && !allowDevReturn) {
     // Don't leak the code if we couldn't email it.
-    return json({ok: false, error: sent.reason ?? 'email_failed'}, {status: 500})
+    return json(
+      {
+        ok: false,
+        error: sent.reason ?? 'email_failed',
+        ...(sent.reason === 'resend_failed' || sent.reason === 'resend_not_configured'
+          ? {resend: (sent as any).details}
+          : null),
+      },
+      {status: 500},
+    )
   }
 
   return json({ok: true, ...(allowDevReturn ? {devCode: code} : {})}, {status: 200})
