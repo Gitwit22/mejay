@@ -1561,18 +1561,41 @@ export const useDJStore = create<DJState>()(
         updates.lockTolerancePct = clamp(Math.round(clampedPct / 5) * 5, 0, 100);
       }
 
+      // Auto Match offset is a simple BPM nudge, clamped to ±50 BPM.
+      if (updates.autoOffsetBpm !== undefined) {
+        const raw = Number(updates.autoOffsetBpm);
+        const clampedOffset = clamp(Number.isFinite(raw) ? raw : 0, -50, 50);
+        updates.autoOffsetBpm = clamp(Math.round(clampedOffset / 5) * 5, -50, 50);
+      }
+
+      // Locked BPM should move in bigger 5 BPM steps.
+      if (updates.lockedBpm !== undefined) {
+        const raw = Number(updates.lockedBpm);
+        const clampedBpm = clamp(Number.isFinite(raw) ? raw : before.settings.lockedBpm, 60, 180);
+        updates.lockedBpm = clamp(Math.round(clampedBpm / 5) * 5, 60, 180);
+      }
+
       // When enabling Auto Match, capture a baseline from the currently playing deck
       // including any tempo stretch already applied, then set slider offset to 0.
       if (updates.tempoMode === 'auto' && before.settings.tempoMode !== 'auto') {
-        const deck = before.activeDeck;
+        let deck: DeckId = before.activeDeck;
+        try {
+          const aPlaying = audioEngine.isPlaying('A');
+          const bPlaying = audioEngine.isPlaying('B');
+          if (aPlaying && !bPlaying) deck = 'A';
+          if (bPlaying && !aPlaying) deck = 'B';
+        } catch {
+          // ignore
+        }
+
         const deckState = deck === 'A' ? before.deckA : before.deckB;
         const track = deckState.trackId ? before.tracks.find(t => t.id === deckState.trackId) : undefined;
 
         const baseBpm = track?.bpm ?? audioEngine.getBaseBpm(deck) ?? 120;
-        const rate = Math.max(0.25, audioEngine.getTempo(deck) || deckState.playbackRate || 1);
+        const rate = Math.max(0.25, audioEngine.getEffectiveTempo(deck) || audioEngine.getTempo(deck) || deckState.playbackRate || 1);
         const effectiveBpm = baseBpm * rate;
 
-        updates.autoBaseBpm = effectiveBpm;
+        updates.autoBaseBpm = Math.round(effectiveBpm * 10) / 10;
         updates.autoOffsetBpm = 0;
       }
 
@@ -1585,7 +1608,8 @@ export const useDJStore = create<DJState>()(
         const baseBpm = track?.bpm ?? audioEngine.getBaseBpm(deck) ?? 120;
         const rate = Math.max(0.25, audioEngine.getEffectiveTempo(deck) || deckState.playbackRate || 1);
         const effectiveBpm = baseBpm * rate;
-        updates.lockedBpm = Math.round(effectiveBpm * 10) / 10;
+        // Default to nearest 5 BPM so the slider + behavior feel consistent.
+        updates.lockedBpm = clamp(Math.round(effectiveBpm / 5) * 5, 60, 180);
       }
 
       // Apply settings immediately for responsive controls (sliders/toggles).

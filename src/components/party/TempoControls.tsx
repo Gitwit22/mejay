@@ -115,7 +115,7 @@ export function TempoControls() {
               onValueChange={([v]) => updateUserSettings({ lockedBpm: v })}
               min={60}
               max={180}
-              step={1}
+              step={5}
               className="w-full"
             />
           </div>
@@ -153,7 +153,7 @@ export function TempoControls() {
         {settings.tempoMode === 'auto' && (
           <div>
             <div className="flex justify-between mb-2">
-              <span className="text-xs text-muted-foreground">Tempo Offset</span>
+              <span className="text-xs text-muted-foreground">BPM Nudge</span>
               <span className="text-xs font-semibold text-accent">
                 {settings.autoOffsetBpm >= 0 ? '+' : ''}{Math.round(settings.autoOffsetBpm)} BPM
               </span>
@@ -161,9 +161,9 @@ export function TempoControls() {
             <Slider
               value={[settings.autoOffsetBpm ?? 0]}
               onValueChange={([v]) => updateUserSettings({ autoOffsetBpm: v })}
-              min={-20}
-              max={20}
-              step={1}
+              min={-50}
+              max={50}
+              step={5}
               className="w-full"
             />
             <div className="mt-2 flex items-center justify-between text-[10px] text-muted-foreground">
