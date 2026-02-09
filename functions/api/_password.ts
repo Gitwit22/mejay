@@ -38,7 +38,9 @@ const deriveKeyBytes = async (args: {password: string; salt: Uint8Array; iterati
 }
 
 export async function hashPassword(password: string): Promise<string> {
-  const iterations = 150_000
+  // Cloudflare Workers CPU time is limited; keep PBKDF2 iterations conservative.
+  // Verification reads iterations from stored hashes, so lowering here only affects NEW hashes.
+  const iterations = 100_000
   const salt = crypto.getRandomValues(new Uint8Array(16))
   const dk = await deriveKeyBytes({password, salt, iterations, lengthBytes: 32})
   return `pbkdf2_sha256$${iterations}$${base64UrlEncode(salt)}$${base64UrlEncode(dk)}`
