@@ -235,24 +235,64 @@ export function PartyModeView() {
             </div>
           </div>
 
-          {/* Desktop: two columns; Queue + Settings scroll internally */}
-          <div className="hidden lg:grid h-full min-h-0 grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* LEFT */}
-            <div className="min-h-0 flex flex-col gap-4">
-              <div className="shrink-0">
-                <NowPlaying />
-              </div>
-
-              <div className="min-h-0 overflow-auto">
-                <PartyQueuePanel className="h-full" />
-              </div>
+          {/* Desktop: Now Playing + (Queue <-> Settings) panel */}
+          <div className="hidden lg:grid h-full min-h-0 grid-cols-2 gap-4 overflow-hidden">
+            <div className="min-h-0 overflow-hidden">
+              <NowPlaying />
             </div>
 
-            {/* RIGHT */}
-            <div className="min-h-0 overflow-auto flex flex-col gap-4 overscroll-contain scrollbar-thin pr-1 pb-[calc(84px+env(safe-area-inset-bottom,0)+28px)]">
-              <VolumeControls />
-              <MixControls />
-              <TempoControls />
+            <div className="min-h-0 rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm overflow-hidden flex flex-col">
+              <div className="p-2 shrink-0">
+                <div className="flex items-center gap-1 p-1 rounded-xl bg-white/5">
+                  <button
+                    onClick={() => setActivePanel('queue')}
+                    className={cn(
+                      'flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all',
+                      activePanel === 'queue'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                    type="button"
+                  >
+                    <ListMusic className="w-3.5 h-3.5" />
+                    Queue
+                    {upcomingCount > 0 && (
+                      <span className="ml-1 px-1.5 py-0.5 rounded-full bg-white/20 text-[10px]">
+                        {upcomingCount}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setActivePanel('settings')}
+                    className={cn(
+                      'flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all',
+                      activePanel === 'settings'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                    type="button"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                    Settings
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 min-h-0 overflow-hidden px-4 pb-4">
+                {activePanel === 'queue' ? (
+                  <PartyQueuePanel
+                    className="h-full rounded-none border-0 bg-transparent backdrop-blur-none p-0"
+                  />
+                ) : (
+                  <div className="h-full overflow-auto overscroll-contain scrollbar-thin pr-1 pb-[calc(84px+env(safe-area-inset-bottom,0)+28px)]">
+                    <div className="space-y-4 pt-2">
+                      <VolumeControls />
+                      <MixControls />
+                      <TempoControls />
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
