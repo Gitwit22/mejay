@@ -55,174 +55,130 @@ export function PartyModeView() {
   };
 
   return (
-    <div className="flex flex-col h-full min-h-0">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3 flex-shrink-0">
-        <div>
-          <h2 className="text-[22px] sm:text-[24px] font-bold text-gradient-accent">Party Mode</h2>
-          {isPartyMode && partySource && (
-            <div className="flex items-center gap-1.5 mt-1">
-              {partySource.type === 'import' ? (
-                <Library className="w-3 h-3 text-muted-foreground" />
-              ) : (
-                <Music className="w-3 h-3 text-muted-foreground" />
-              )}
-              <span className="text-[10px] text-muted-foreground">
-                Playing from: {getSourceLabel()}
-              </span>
-            </div>
-          )}
-        </div>
-        {/* Panel Toggle */}
-        {isPartyMode && (
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
-            <div className="flex flex-wrap items-center gap-2 px-3 py-2 rounded-xl bg-white/5 w-full sm:w-auto">
-              <span className="text-[10px] text-muted-foreground">Source</span>
-              <Select
-                value={selectedSourceValue}
-                onValueChange={async (value) => {
-                  if (value === selectedSourceValue) return;
-                  if (value === 'import') {
-                    await switchPartySourceSmooth({ type: 'import' });
-                    return;
-                  }
-                  await switchPartySourceSmooth({ type: 'playlist', playlistId: value });
-                }}
-              >
-                <SelectTrigger className="h-8 w-full sm:w-[190px] bg-white/5 border-white/10 text-xs">
-                  <SelectValue placeholder="Choose source" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="import">Import List</SelectItem>
-                  {playlists.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              {partySource?.type === 'import' && (
-                <Dialog open={saveOpen} onOpenChange={setSaveOpen}>
-                  <DialogTrigger asChild>
-                    <button
-                      type="button"
-                      className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-                      title="Save the current import list as a playlist"
-                    >
-                      Save
-                    </button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Save as Playlist</DialogTitle>
-                      <DialogDescription>
-                        Save your current Import List so you can reuse it later.
-                      </DialogDescription>
-                    </DialogHeader>
-
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">Playlist name</label>
-                      <Input
-                        value={playlistName}
-                        onChange={(e) => setPlaylistName(e.target.value)}
-                        placeholder="e.g. Friday Night Set"
-                      />
-                    </div>
-
-                    <DialogFooter>
-                      <Button variant="secondary" onClick={() => setSaveOpen(false)} type="button">
-                        Cancel
-                      </Button>
-                      <Button
-                        onClick={async () => {
-                          const id = await saveCurrentPartyAsPlaylist(playlistName);
-                          if (!id) {
-                            toast({
-                              title: 'Could not save playlist',
-                              description: 'Enter a name and make sure Party Mode has tracks.',
-                              variant: 'destructive',
-                            });
-                            return;
-                          }
-                          toast({
-                            title: 'Playlist saved',
-                            description: `Saved as “${playlistName.trim()}”.`,
-                          });
-                          setPlaylistName('');
-                          setSaveOpen(false);
-                        }}
-                        disabled={!playlistName.trim()}
-                        type="button"
-                      >
-                        Save Playlist
-                      </Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-              )}
-            </div>
-
-            <div className="hidden lg:flex items-center gap-1 p-1 rounded-xl bg-white/5 w-full sm:w-auto">
-              {/* Desktop: switch inline panels. */}
-              <button
-                onClick={() => setActivePanel('queue')}
-                className={cn(
-                  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
-                  activePanel === 'queue'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-                type="button"
-              >
-                Queue
-                {upcomingCount > 0 && (
-                  <span className="ml-1 px-1.5 py-0.5 rounded-full bg-white/20 text-[10px]">
-                    {upcomingCount}
+    <div className="flex flex-col h-full min-h-0 overflow-hidden">
+      {/* Single scroll owner for Party Mode (prevents double-scroll with app shell). */}
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain scrollbar-thin pb-[calc(84px+env(safe-area-inset-bottom,0)+28px)]">
+        {/* Header (sticky within the Party Mode scroll container) */}
+        <div className="sticky top-0 z-20 bg-background/80 backdrop-blur border-b border-white/10">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 py-3">
+            <div>
+              <h2 className="text-[22px] sm:text-[24px] font-bold text-gradient-accent">Party Mode</h2>
+              {isPartyMode && partySource && (
+                <div className="flex items-center gap-1.5 mt-1">
+                  {partySource.type === 'import' ? (
+                    <Library className="w-3 h-3 text-muted-foreground" />
+                  ) : (
+                    <Music className="w-3 h-3 text-muted-foreground" />
+                  )}
+                  <span className="text-[10px] text-muted-foreground">
+                    Playing from: {getSourceLabel()}
                   </span>
-                )}
-              </button>
-              <button
-                onClick={() => setActivePanel('settings')}
-                className={cn(
-                  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
-                  activePanel === 'settings'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-                type="button"
-              >
-                Settings
-              </button>
+                </div>
+              )}
             </div>
-          </div>
-        )}
-      </div>
 
-      {/* Main Content */}
-      {!isPartyMode ? (
-        <PartySourceChooser />
-      ) : (
-        <div className="flex-1 min-h-0">
-          {/* Mobile: single-column scroll with collapsible sections. */}
-          <div className="lg:hidden space-y-4 pb-[calc(env(safe-area-inset-bottom,0)+28px)]">
-            <NowPlaying />
+            {/* Panel Toggle */}
+            {isPartyMode && (
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+                <div className="flex flex-wrap items-center gap-2 px-3 py-2 rounded-xl bg-white/5 w-full sm:w-auto">
+                  <span className="text-[10px] text-muted-foreground">Source</span>
+                  <Select
+                    value={selectedSourceValue}
+                    onValueChange={async (value) => {
+                      if (value === selectedSourceValue) return;
+                      if (value === 'import') {
+                        await switchPartySourceSmooth({ type: 'import' });
+                        return;
+                      }
+                      await switchPartySourceSmooth({ type: 'playlist', playlistId: value });
+                    }}
+                  >
+                    <SelectTrigger className="h-8 w-full sm:w-[190px] bg-white/5 border-white/10 text-xs">
+                      <SelectValue placeholder="Choose source" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="import">Import List</SelectItem>
+                      {playlists.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
 
-            <div className="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm overflow-hidden mb-4">
-              {/* Mobile panel switcher: Queue <-> Settings */}
-              <div className="p-2">
-                <div className="flex items-center gap-1 p-1 rounded-xl bg-white/5">
+                  {partySource?.type === 'import' && (
+                    <Dialog open={saveOpen} onOpenChange={setSaveOpen}>
+                      <DialogTrigger asChild>
+                        <button
+                          type="button"
+                          className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                          title="Save the current import list as a playlist"
+                        >
+                          Save
+                        </button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Save as Playlist</DialogTitle>
+                          <DialogDescription>
+                            Save your current Import List so you can reuse it later.
+                          </DialogDescription>
+                        </DialogHeader>
+
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium">Playlist name</label>
+                          <Input
+                            value={playlistName}
+                            onChange={(e) => setPlaylistName(e.target.value)}
+                            placeholder="e.g. Friday Night Set"
+                          />
+                        </div>
+
+                        <DialogFooter>
+                          <Button variant="secondary" onClick={() => setSaveOpen(false)} type="button">
+                            Cancel
+                          </Button>
+                          <Button
+                            onClick={async () => {
+                              const id = await saveCurrentPartyAsPlaylist(playlistName);
+                              if (!id) {
+                                toast({
+                                  title: 'Could not save playlist',
+                                  description: 'Enter a name and make sure Party Mode has tracks.',
+                                  variant: 'destructive',
+                                });
+                                return;
+                              }
+                              toast({
+                                title: 'Playlist saved',
+                                description: `Saved as “${playlistName.trim()}”.`,
+                              });
+                              setPlaylistName('');
+                              setSaveOpen(false);
+                            }}
+                            disabled={!playlistName.trim()}
+                            type="button"
+                          >
+                            Save Playlist
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+                  )}
+                </div>
+
+                <div className="hidden lg:flex items-center gap-1 p-1 rounded-xl bg-white/5 w-full sm:w-auto">
+                  {/* Desktop: switch inline panels. */}
                   <button
                     onClick={() => setActivePanel('queue')}
                     className={cn(
-                      'flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all',
+                      'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
                       activePanel === 'queue'
                         ? 'bg-primary text-primary-foreground'
                         : 'text-muted-foreground hover:text-foreground'
                     )}
                     type="button"
                   >
-                    <ListMusic className="w-3.5 h-3.5" />
                     Queue
                     {upcomingCount > 0 && (
                       <span className="ml-1 px-1.5 py-0.5 rounded-full bg-white/20 text-[10px]">
@@ -233,58 +189,100 @@ export function PartyModeView() {
                   <button
                     onClick={() => setActivePanel('settings')}
                     className={cn(
-                      'flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all',
+                      'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
                       activePanel === 'settings'
                         ? 'bg-primary text-primary-foreground'
                         : 'text-muted-foreground hover:text-foreground'
                     )}
                     type="button"
                   >
-                    <Settings className="w-3.5 h-3.5" />
                     Settings
                   </button>
                 </div>
               </div>
+            )}
+          </div>
+        </div>
 
-              {/* Fixed-height panel so layout stays stable (inner content scrolls) */}
-              <div className="h-[38dvh] min-h-[260px] max-h-[420px] overflow-hidden px-4 pb-[calc(env(safe-area-inset-bottom,0)+40px)]">
-                {activePanel === 'queue' ? (
-                  <PartyQueuePanel
-                    className="h-full rounded-none border-0 bg-transparent backdrop-blur-none p-0"
-                  />
-                ) : (
-                  <div className="h-full overflow-y-auto overscroll-contain scrollbar-thin pr-1">
-                    <div className="space-y-4 pt-2">
-                      <VolumeControls />
-                      <MixControls />
-                      <TempoControls />
+        {/* Main Content */}
+        <div className="pt-3">
+          {!isPartyMode ? (
+            <PartySourceChooser />
+          ) : (
+            <>
+              {/* Mobile: single column (outer container scrolls). */}
+              <div className="lg:hidden space-y-4">
+                <NowPlaying />
+
+                <div className="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm overflow-hidden">
+                  {/* Mobile panel switcher: Queue <-> Settings */}
+                  <div className="p-2">
+                    <div className="flex items-center gap-1 p-1 rounded-xl bg-white/5">
+                      <button
+                        onClick={() => setActivePanel('queue')}
+                        className={cn(
+                          'flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all',
+                          activePanel === 'queue'
+                            ? 'bg-primary text-primary-foreground'
+                            : 'text-muted-foreground hover:text-foreground'
+                        )}
+                        type="button"
+                      >
+                        <ListMusic className="w-3.5 h-3.5" />
+                        Queue
+                        {upcomingCount > 0 && (
+                          <span className="ml-1 px-1.5 py-0.5 rounded-full bg-white/20 text-[10px]">
+                            {upcomingCount}
+                          </span>
+                        )}
+                      </button>
+                      <button
+                        onClick={() => setActivePanel('settings')}
+                        className={cn(
+                          'flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all',
+                          activePanel === 'settings'
+                            ? 'bg-primary text-primary-foreground'
+                            : 'text-muted-foreground hover:text-foreground'
+                        )}
+                        type="button"
+                      >
+                        <Settings className="w-3.5 h-3.5" />
+                        Settings
+                      </button>
                     </div>
+                  </div>
+
+                  <div className="px-4 pb-4">
+                    {activePanel === 'queue' ? (
+                      <PartyQueuePanel className="rounded-none border-0 bg-transparent backdrop-blur-none p-0" />
+                    ) : (
+                      <div className="space-y-4 pt-2">
+                        <VolumeControls />
+                        <MixControls />
+                        <TempoControls />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Desktop: two-column layout (outer container scrolls). */}
+              <div className="hidden lg:grid grid-cols-2 gap-4 items-start">
+                <NowPlaying />
+                {activePanel === 'queue' ? (
+                  <PartyQueuePanel />
+                ) : (
+                  <div className="space-y-4">
+                    <VolumeControls />
+                    <MixControls />
+                    <TempoControls />
                   </div>
                 )}
               </div>
-            </div>
-          </div>
-
-          {/* Desktop: split layout with internal scrolling columns. */}
-          <div className="hidden lg:flex h-full min-h-0 gap-4 overflow-hidden">
-            <div className="flex-1 min-h-0 overflow-y-scroll scrollbar-thin pr-1">
-              <NowPlaying />
-            </div>
-
-            <div className="flex-1 min-h-0 overflow-y-scroll scrollbar-thin pr-1">
-              {activePanel === 'queue' ? (
-                <PartyQueuePanel />
-              ) : (
-                <>
-                  <VolumeControls />
-                  <MixControls />
-                  <TempoControls />
-                </>
-              )}
-            </div>
-          </div>
+            </>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

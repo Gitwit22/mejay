@@ -1,4 +1,4 @@
-import { Play, Pause, SkipBack, SkipForward, Music, Shuffle, Repeat, Volume2 } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Music, Shuffle, RotateCcw, Volume2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useDJStore } from '@/stores/djStore';
 import { cn } from '@/lib/utils';
@@ -84,29 +84,9 @@ export function NowPlaying() {
     };
   }, []);
 
-  const backPressTimerRef = React.useRef<number | null>(null);
-  const backLongPressFiredRef = React.useRef(false);
-  const clearBackTimer = () => {
-    if (backPressTimerRef.current !== null) {
-      window.clearTimeout(backPressTimerRef.current);
-      backPressTimerRef.current = null;
-    }
-  };
-
-  const onBackPointerDown = () => {
-    backLongPressFiredRef.current = false;
-    clearBackTimer();
-    backPressTimerRef.current = window.setTimeout(() => {
-      backLongPressFiredRef.current = true;
-      restartCurrentTrack();
-    }, 450);
-  };
-
-  const onBackPointerUp = () => {
-    const wasLongPress = backLongPressFiredRef.current;
-    clearBackTimer();
-    if (!wasLongPress) smartBack();
-  };
+  const BACK_RESTART_THRESHOLD = 3;
+  const elapsedSinceStart = Math.max(0, currentDeck.currentTime - startAt);
+  const backTitle = elapsedSinceStart > BACK_RESTART_THRESHOLD ? 'Restart track' : 'Previous track';
 
   const handleSkip = () => {
     if (!hasMoreTracks) return;
@@ -270,13 +250,9 @@ export function NowPlaying() {
         </button>
 
         <button
-          onPointerDown={onBackPointerDown}
-          onPointerUp={onBackPointerUp}
-          onPointerCancel={clearBackTimer}
-          onPointerLeave={clearBackTimer}
-          onContextMenu={(e) => e.preventDefault()}
+          onClick={() => smartBack()}
           className="ctrl-btn ctrl-secondary"
-          title="Back (tap) / Restart (hold)"
+          title={backTitle}
           type="button"
         >
           <SkipBack className="w-4 h-4" />
@@ -303,17 +279,14 @@ export function NowPlaying() {
         >
           <SkipForward className="w-4 h-4" />
         </button>
-        
+
         <button
-          onClick={() => updateUserSettings({ loopPlaylist: !settings.loopPlaylist })}
-          className={cn(
-            'ctrl-btn ctrl-secondary',
-            settings.loopPlaylist && 'ring-2 ring-accent'
-          )}
-          title={settings.loopPlaylist ? 'Loop On' : 'Loop Off'}
+          onClick={() => restartCurrentTrack()}
+          className="ctrl-btn ctrl-secondary"
+          title="Restart track"
           type="button"
         >
-          <Repeat className="w-4 h-4" />
+          <RotateCcw className="w-4 h-4" />
         </button>
       </div>
 

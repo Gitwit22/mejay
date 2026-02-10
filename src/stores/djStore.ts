@@ -35,6 +35,10 @@ interface DJState {
   nowPlayingIndex: number; // Current position in partyTrackIds
   pendingNextIndex: number | null; // For "Play Next" without immediate jump
 
+  // History stack for Back behavior (shuffle-safe, no recompute).
+  // Stores previously-played track IDs in the order they were visited.
+  playHistoryTrackIds: string[];
+
   // Pending smooth source switch (applied after the mix completes)
   pendingSourceSwitch: { source: PartySource; trackIds: string[] } | null;
 
@@ -161,6 +165,22 @@ export const useDJStore = create<DJState>()(
   };
 
   const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+  const shuffleArray = <T,>(items: T[]): T[] => {
+    const arr = [...items];
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  };
+
+  const pushHistory = (history: string[], trackId: string | null | undefined): string[] => {
+    if (!trackId) return history;
+    const last = history[history.length - 1];
+    if (last === trackId) return history;
+    return [...history, trackId];
+  };
 
   const resetTempoToNormal = () => {
     try {
@@ -570,6 +590,7 @@ export const useDJStore = create<DJState>()(
     partyTrackIds: [],
     nowPlayingIndex: 0,
     pendingNextIndex: null,
+    playHistoryTrackIds: [],
     pendingSourceSwitch: null,
     queuedSourceSwitch: null,
     settings: defaultSettings,
@@ -1068,10 +1089,18 @@ export const useDJStore = create<DJState>()(
         return;
       }
 
-      const previousIndex = state.nowPlayingIndex > 0
+      const currentTrackId = state.partyTrackIds[state.nowPlayingIndex] ?? null;
+      const history = state.playHistoryTrackIds;
+      const historyCandidate = history.length > 0 ? history[history.length - 1] : null;
+
+      const computedFallbackIndex = state.nowPlayingIndex > 0
         ? state.nowPlayingIndex - 1
         : (state.settings.loopPlaylist ? state.partyTrackIds.length - 1 : 0);
 
+      const fallbackTrackId = state.partyTrackIds[computedFallbackIndex] ?? null;
+      const targetTrackId = (historyCandidate && historyCandidate !== currentTrackId) ? historyCandidate : fallbackTrackId;
+
+      const previousIndex = targetTrackId ? Math.max(0, state.partyTrackIds.indexOf(targetTrackId)) : computedFallbackIndex;
       const previousTrackId = state.partyTrackIds[previousIndex];
       const previousTrack = state.tracks.find(t => t.id === previousTrackId);
       if (!previousTrack?.fileBlob) return;
@@ -1117,6 +1146,9 @@ export const useDJStore = create<DJState>()(
         activeDeck: targetDeck,
         nowPlayingIndex: previousIndex,
         pendingNextIndex: null,
+        playHistoryTrackIds: (historyCandidate && historyCandidate !== currentTrackId)
+          ? history.slice(0, -1)
+          : history,
         crossfadeValue: targetDeck === 'A' ? 0 : 1,
       });
       audioEngine.setCrossfade(targetDeck === 'A' ? 0 : 1);
@@ -1140,10 +1172,14 @@ export const useDJStore = create<DJState>()(
     smartBack: (deck?: DeckId) => {
       const state = get();
       const targetDeck = deck || state.activeDeck;
-      const currentTime = getDeckCurrentTime(state, targetDeck);
-      const threshold = 2.5;
+      const threshold = 3;
 
-      if (currentTime > threshold) {
+      const track = getDeckTrack(state, targetDeck);
+      const currentTime = getDeckCurrentTime(state, targetDeck);
+      const startAt = track ? getEffectiveStartTimeSec(track, state.settings) : 0;
+      const elapsed = Math.max(0, currentTime - startAt);
+
+      if (elapsed > threshold) {
         get().restartCurrentTrack(targetDeck);
         return;
       }
@@ -1166,19 +1202,6 @@ export const useDJStore = create<DJState>()(
       if (pendingNextIndex !== null) {
         nextIndex = pendingNextIndex;
         set({ pendingNextIndex: null });
-      } else if (settings.shuffleEnabled) {
-        // Random from remaining tracks
-        const remaining = partyTrackIds.length - nowPlayingIndex - 1;
-        if (remaining <= 0) {
-          if (settings.loopPlaylist) {
-            nextIndex = 0;
-          } else {
-            get().stopPartyMode();
-            return;
-          }
-        } else {
-          nextIndex = nowPlayingIndex + 1 + Math.floor(Math.random() * remaining);
-        }
       } else {
         nextIndex = nowPlayingIndex + 1;
       }
@@ -1199,6 +1222,7 @@ export const useDJStore = create<DJState>()(
       const currentDeck = activeDeck;
       const currentDeckState = activeDeck === 'A' ? state.deckA : state.deckB;
       const currentTrack = tracks.find(t => t.id === currentDeckState.trackId);
+      const outgoingTrackId = currentDeckState.trackId;
 
       if (!nextTrack?.fileBlob) return;
 
@@ -1335,11 +1359,12 @@ export const useDJStore = create<DJState>()(
         scheduledTimeouts.push(window.setTimeout(() => {
           get().pause(currentDeck);
           audioEngine.resetMixTrigger();
-          set({
+          set((s) => ({
             activeDeck: nextDeck,
             nowPlayingIndex: nextIndex,
             mixInProgress: false,
-          });
+            playHistoryTrackIds: pushHistory(s.playHistoryTrackIds, outgoingTrackId),
+          }));
 
           // Apply any pending source switch by rewriting the queue to the new source.
           const afterMix = get();
@@ -1350,6 +1375,7 @@ export const useDJStore = create<DJState>()(
               nowPlayingIndex: 0,
               pendingNextIndex: null,
               pendingSourceSwitch: null,
+              playHistoryTrackIds: [],
             });
           }
 
@@ -1401,7 +1427,7 @@ export const useDJStore = create<DJState>()(
       }
       
       if (state.settings.shuffleEnabled) {
-        trackIds = [...trackIds].sort(() => Math.random() - 0.5);
+        trackIds = shuffleArray(trackIds);
       }
 
       if (trackIds.length === 0) {
@@ -1453,6 +1479,7 @@ export const useDJStore = create<DJState>()(
         pendingNextIndex: null,
         pendingSourceSwitch: null,
         queuedSourceSwitch: null,
+        playHistoryTrackIds: [],
         activeDeck: 'A',
         crossfadeValue: 0,
       });
@@ -1499,6 +1526,7 @@ export const useDJStore = create<DJState>()(
         pendingNextIndex: null,
         pendingSourceSwitch: null,
         queuedSourceSwitch: null,
+        playHistoryTrackIds: [],
         mixInProgress: false,
         activeDeck: 'A',
         crossfadeValue: 0,
@@ -1542,7 +1570,7 @@ export const useDJStore = create<DJState>()(
 
       let trackIds = getTrackIdsForPartySource(state, source);
       if (state.settings.shuffleEnabled) {
-        trackIds = [...trackIds].sort(() => Math.random() - 0.5);
+        trackIds = shuffleArray(trackIds);
       }
       if (trackIds.length === 0) return;
 
@@ -1562,6 +1590,7 @@ export const useDJStore = create<DJState>()(
         nowPlayingIndex: 0,
         pendingNextIndex: 1,
         pendingSourceSwitch: { source, trackIds },
+        playHistoryTrackIds: [],
       });
 
       get().skip('switch');
@@ -1631,8 +1660,8 @@ export const useDJStore = create<DJState>()(
         const currentTrackId = state.partyTrackIds[state.nowPlayingIndex];
         const beforeCurrent = state.partyTrackIds.slice(0, state.nowPlayingIndex);
         const afterCurrent = state.partyTrackIds.slice(state.nowPlayingIndex + 1);
-        
-        const shuffled = [...afterCurrent].sort(() => Math.random() - 0.5);
+
+        const shuffled = shuffleArray(afterCurrent);
         
         return {
           partyTrackIds: [...beforeCurrent, currentTrackId, ...shuffled],
@@ -1678,6 +1707,13 @@ export const useDJStore = create<DJState>()(
 
     updateUserSettings: async (updates: Partial<Settings>) => {
       const before = get();
+
+      // If shuffle is being enabled in Party Mode, shuffle the upcoming play order once.
+      const shouldShuffleUpcomingNow =
+        updates.shuffleEnabled === true &&
+        before.settings.shuffleEnabled !== true &&
+        before.isPartyMode &&
+        before.partyTrackIds.length > 1;
 
       // Snap Lock Tolerance to bigger 5% increments for stronger impact.
       if (updates.lockTolerancePct !== undefined) {
@@ -1831,6 +1867,10 @@ export const useDJStore = create<DJState>()(
             p.id === playlistId ? { ...p, trackIds: newTrackIds } : p
           ),
         }));
+      }
+
+      if (shouldShuffleUpcomingNow) {
+        get().shufflePartyTracks();
       }
     },
 
