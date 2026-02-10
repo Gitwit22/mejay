@@ -655,7 +655,8 @@ class AudioEngine {
     if (!this.audioContext) return;
     const deckState = this.decks[deck];
 
-    const clampedDurationMs = Math.max(150, Math.min(12000, durationMs));
+    // Allow longer ramps so tempo changes can be tied to crossfades (up to ~20s).
+    const clampedDurationMs = Math.max(150, Math.min(20000, durationMs));
     const startTime = Math.max(this.audioContext.currentTime, startAtTime);
     const endTime = startTime + clampedDurationMs / 1000;
 

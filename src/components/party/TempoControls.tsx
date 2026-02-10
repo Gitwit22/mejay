@@ -17,6 +17,9 @@ export function TempoControls() {
 
   const afterTransition = settings.partyTempoAfterTransition ?? 'hold'
 
+  const crossfadeSec = Math.max(1, Math.min(20, settings.crossfadeSeconds ?? 8))
+  const tempoRampSec = Math.max(4, Math.min(20, crossfadeSec * 2))
+
   const allowedDriftBpm = (() => {
     const pct = Math.max(0, Math.min(100, settings.lockTolerancePct ?? 10))
     if (pct <= 0) return 0
@@ -36,7 +39,13 @@ export function TempoControls() {
         autoBaseBpm: baseBpm,
         autoOffsetBpm: 0,
       });
-      setTempo(activeDeck, 1);
+
+      const nowCtx = audioEngine.getAudioContextTime();
+      if (nowCtx !== null) {
+        audioEngine.rampTempo(activeDeck, 1, nowCtx + 0.02, tempoRampSec * 1000);
+      } else {
+        setTempo(activeDeck, 1);
+      }
       return;
     }
 

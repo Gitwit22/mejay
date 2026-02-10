@@ -236,23 +236,23 @@ export function PartyModeView() {
           </div>
 
           {/* Desktop: two columns; Queue + Settings scroll internally */}
-          <div className="hidden lg:grid h-full min-h-0 grid-cols-2 gap-4 overflow-hidden">
-            <div className="min-h-0 flex flex-col gap-4 overflow-hidden">
+          <div className="hidden lg:grid h-full min-h-0 grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* LEFT */}
+            <div className="min-h-0 flex flex-col gap-4">
               <div className="shrink-0">
                 <NowPlaying />
               </div>
 
-              <div className="min-h-0 overflow-hidden">
+              <div className="min-h-0 overflow-auto">
                 <PartyQueuePanel className="h-full" />
               </div>
             </div>
 
-            <div className="min-h-0 overflow-auto overscroll-contain scrollbar-thin pr-1 pb-[calc(84px+env(safe-area-inset-bottom,0)+28px)]">
-              <div className="space-y-4">
-                <VolumeControls />
-                <MixControls />
-                <TempoControls />
-              </div>
+            {/* RIGHT */}
+            <div className="min-h-0 overflow-auto flex flex-col gap-4 overscroll-contain scrollbar-thin pr-1 pb-[calc(84px+env(safe-area-inset-bottom,0)+28px)]">
+              <VolumeControls />
+              <MixControls />
+              <TempoControls />
             </div>
           </div>
         </div>
