@@ -114,7 +114,7 @@ export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
       {/* Track List */}
       <div
         ref={listRef}
-        className="space-y-1 pb-1"
+        className="flex-1 min-h-0 overflow-y-auto overscroll-contain space-y-1 scrollbar-thin pr-1 pb-[calc(84px+env(safe-area-inset-bottom,0)+28px)]"
       >
         {partyTracks.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground text-sm">

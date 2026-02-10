@@ -199,14 +199,14 @@ export const useDJStore = create<DJState>()(
   // If the plan becomes Free, don't leave pitch/tempo altered.
   if (typeof window !== 'undefined') {
     try {
-      usePlanStore.subscribe(
-        (s) => s.plan,
-        (plan, prevPlan) => {
-          if (plan === 'free' && prevPlan !== 'free') {
-            resetTempoToNormal();
-          }
-        },
-      );
+      let lastPlan = usePlanStore.getState().plan;
+      usePlanStore.subscribe((s) => {
+        const plan = s.plan;
+        if (plan === 'free' && lastPlan !== 'free') {
+          resetTempoToNormal();
+        }
+        lastPlan = plan;
+      });
 
       if (usePlanStore.getState().plan === 'free') {
         resetTempoToNormal();
@@ -480,10 +480,36 @@ export const useDJStore = create<DJState>()(
     const deckState = deck === 'A' ? state.deckA : state.deckB;
     if (!deckState.trackId) return;
 
+    // Contract: Auto Match slider at 0 means original tempo.
+    if (state.settings.tempoMode === 'auto' && (state.settings.autoOffsetBpm ?? 0) === 0) {
+      get().setTempo(deck, 1);
+      return;
+    }
+
     const targetBpm = computeTargetBpm(state.settings);
     if (targetBpm === null) return;
     const ratio = audioEngine.calculateTempoRatio(deck, targetBpm, state.settings.maxTempoPercent);
     get().setTempo(deck, ratio);
+  };
+
+  const ensureGainDbForTrack = async (track: Track, settings: Settings): Promise<number | undefined> => {
+    if (!settings.autoVolumeMatch) return undefined;
+    if (typeof track.gainDb === 'number' && Number.isFinite(track.gainDb)) return track.gainDb;
+    if (!track.fileBlob) return undefined;
+
+    try {
+      const loudnessResult = await audioEngine.analyzeLoudness(track.fileBlob);
+      const targetDb = -20 + (settings.targetLoudness * 12);
+      const gainDb = audioEngine.calculateGain(loudnessResult.loudnessDb, targetDb);
+      const updates = { loudnessDb: loudnessResult.loudnessDb, gainDb };
+      await updateTrack(track.id, updates);
+      set((s) => ({
+        tracks: s.tracks.map((t) => (t.id === track.id ? { ...t, ...updates } : t)),
+      }));
+      return gainDb;
+    } catch {
+      return undefined;
+    }
   };
 
   const applyImmediateTempoToPlayingDecks = (state: DJState) => {
@@ -992,8 +1018,8 @@ export const useDJStore = create<DJState>()(
       const track = state.tracks.find(t => t.id === trackId);
       if (!track?.fileBlob) return;
 
-      // Apply track gain if auto volume match is enabled
-      const gainDb = state.settings.autoVolumeMatch ? track.gainDb : undefined;
+      // Apply track gain if auto volume match is enabled (compute on-demand if missing)
+      const gainDb = await ensureGainDbForTrack(track, state.settings);
       
       const duration = offsetSeconds !== undefined
         ? await audioEngine.loadTrackWithOffset(deck, track.fileBlob, offsetSeconds, track.bpm, gainDb)
@@ -1092,13 +1118,15 @@ export const useDJStore = create<DJState>()(
       const currentTrackId = state.partyTrackIds[state.nowPlayingIndex] ?? null;
       const history = state.playHistoryTrackIds;
       const historyCandidate = history.length > 0 ? history[history.length - 1] : null;
+      const historyIndex = historyCandidate ? state.partyTrackIds.indexOf(historyCandidate) : -1;
 
       const computedFallbackIndex = state.nowPlayingIndex > 0
         ? state.nowPlayingIndex - 1
         : (state.settings.loopPlaylist ? state.partyTrackIds.length - 1 : 0);
 
       const fallbackTrackId = state.partyTrackIds[computedFallbackIndex] ?? null;
-      const targetTrackId = (historyCandidate && historyCandidate !== currentTrackId) ? historyCandidate : fallbackTrackId;
+      const useHistory = historyCandidate && historyCandidate !== currentTrackId && historyIndex >= 0;
+      const targetTrackId = useHistory ? historyCandidate : fallbackTrackId;
 
       const previousIndex = targetTrackId ? Math.max(0, state.partyTrackIds.indexOf(targetTrackId)) : computedFallbackIndex;
       const previousTrackId = state.partyTrackIds[previousIndex];
@@ -1129,7 +1157,7 @@ export const useDJStore = create<DJState>()(
       const preservedTempo = tempoControlEnabled
         ? Math.max(0.25, audioEngine.getTempo(targetDeck) || currentDeckState.playbackRate || 1)
         : 1;
-      const gainDb = state.settings.autoVolumeMatch ? previousTrack.gainDb : undefined;
+      const gainDb = await ensureGainDbForTrack(previousTrack, state.settings);
 
       const startAt = getEffectiveStartTimeSec(previousTrack, state.settings);
       const duration = await audioEngine.loadTrackWithOffset(targetDeck, previousTrack.fileBlob, startAt, previousTrack.bpm, gainDb);
@@ -1146,7 +1174,7 @@ export const useDJStore = create<DJState>()(
         activeDeck: targetDeck,
         nowPlayingIndex: previousIndex,
         pendingNextIndex: null,
-        playHistoryTrackIds: (historyCandidate && historyCandidate !== currentTrackId)
+        playHistoryTrackIds: useHistory
           ? history.slice(0, -1)
           : history,
         crossfadeValue: targetDeck === 'A' ? 0 : 1,
@@ -1233,7 +1261,8 @@ export const useDJStore = create<DJState>()(
         : (currentTrack?.bpm || 120);
 
       // Get track gain for volume matching
-      const gainDb = settings.autoVolumeMatch ? nextTrack.gainDb : undefined;
+      // Gain can be undefined for older imports; compute lazily if needed.
+      const gainDbPromise = nextTrack ? ensureGainDbForTrack(nextTrack, settings) : Promise.resolve(undefined);
 
       const ctxNow = audioEngine.getAudioContextTime();
       if (ctxNow === null) return;
@@ -1307,8 +1336,12 @@ export const useDJStore = create<DJState>()(
         nextTrack.fileBlob,
         startOffsetSeconds,
         nextTrack.bpm,
-        gainDb
+        undefined
       ).then((duration) => {
+        void gainDbPromise.then((gainDb) => {
+          if (gainDb !== undefined) audioEngine.setTrackGain(nextDeck, gainDb);
+          else audioEngine.setTrackGain(nextDeck, 0);
+        });
         const tempoControlEnabled = usePlanStore.getState().hasFeature('tempoControl');
         const baseBpm = nextTrack.bpm || 120;
 
@@ -1320,13 +1353,14 @@ export const useDJStore = create<DJState>()(
           get().setTempo(nextDeck, 1);
         } else {
           // Tempo ramp + settle scheduling.
-          const targetRatio = audioEngine.calculateTempoRatio(nextDeck, targetBpm, settings.maxTempoPercent);
+          const autoOffsetIsZero = settings.tempoMode === 'auto' && (settings.autoOffsetBpm ?? 0) === 0;
+          const targetRatio = autoOffsetIsZero ? 1 : audioEngine.calculateTempoRatio(nextDeck, targetBpm, settings.maxTempoPercent);
 
           // Start at natural tempo (1x) then ramp to target.
           audioEngine.setTempo(nextDeck, 1);
 
           // Chill 2-step: ramp halfway, wait 1 bar, ramp remainder.
-          if (energy.stepLargeDeltas && Math.abs(targetBpm - baseBpm) > 6) {
+          if (!autoOffsetIsZero && energy.stepLargeDeltas && Math.abs(targetBpm - baseBpm) > 6) {
             const halfwayBpm = baseBpm + (targetBpm - baseBpm) / 2;
             const halfRatio = audioEngine.calculateTempoRatio(nextDeck, halfwayBpm, settings.maxTempoPercent);
             audioEngine.rampTempo(nextDeck, halfRatio, incomingStartAt, energy.tempoRampMs);
@@ -1334,7 +1368,9 @@ export const useDJStore = create<DJState>()(
             const secondRampAt = incomingStartAt + rampSec + barSec;
             audioEngine.rampTempo(nextDeck, targetRatio, secondRampAt, energy.tempoRampMs);
           } else {
-            audioEngine.rampTempo(nextDeck, targetRatio, incomingStartAt, energy.tempoRampMs);
+            if (!autoOffsetIsZero) {
+              audioEngine.rampTempo(nextDeck, targetRatio, incomingStartAt, energy.tempoRampMs);
+            }
           }
         }
 
@@ -1466,7 +1502,12 @@ export const useDJStore = create<DJState>()(
       // Apply Auto Match tempo if baseline exists (or was just captured).
       const afterBaseline = get().settings;
       const autoTarget = computeTargetBpm(afterBaseline);
-      if (usePlanStore.getState().hasFeature('tempoControl') && afterBaseline.tempoMode === 'auto' && autoTarget !== null) {
+      if (
+        usePlanStore.getState().hasFeature('tempoControl') &&
+        afterBaseline.tempoMode === 'auto' &&
+        autoTarget !== null &&
+        (afterBaseline.autoOffsetBpm ?? 0) !== 0
+      ) {
         const ratio = audioEngine.calculateTempoRatio('A', autoTarget, afterBaseline.maxTempoPercent);
         audioEngine.setTempo('A', ratio);
       }
@@ -1869,9 +1910,15 @@ export const useDJStore = create<DJState>()(
         }));
       }
 
-      if (shouldShuffleUpcomingNow) {
-        get().shufflePartyTracks();
-      }
+      const state = get();
+      const shouldShuffleUpcomingNow =
+        state.isPartyMode &&
+        state.settings.shuffleEnabled &&
+        state.partySource?.type === 'playlist' &&
+        state.partySource.playlistId === playlistId &&
+        state.partyTrackIds.length > 1;
+
+      if (shouldShuffleUpcomingNow) get().shufflePartyTracks();
     },
 
     removeTrackFromPlaylist: async (playlistId: string, trackId: string) => {

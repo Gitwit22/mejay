@@ -31,6 +31,8 @@ interface PlanState {
   /** Server auth status (cookie session). */
   authStatus: 'unknown' | 'authenticated' | 'anonymous';
   user: {id: string; email: string} | null;
+  /** Optimistically mark auth state after a successful auth API call. */
+  markAuthenticated: (user?: {id?: string; email?: string} | null) => void;
   /** Allows entering /app without a server session (dev/demo only). */
   authBypassEnabled: boolean;
   /** Whether UI is allowed to toggle auth bypass at runtime. */
@@ -406,6 +408,16 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     })
 
     return true
+  },
+
+  markAuthenticated: (user) => {
+    const nextUser =
+      user && typeof user.email === 'string'
+        ? { id: typeof user.id === 'string' ? user.id : (get().user?.id ?? 'unknown'), email: user.email }
+        : get().user;
+    if (get().authStatus !== 'authenticated' || nextUser !== get().user) {
+      set({authStatus: 'authenticated', user: nextUser ?? null})
+    }
   },
 
   setDevPlan: (plan) => {

@@ -18,22 +18,9 @@ export default function PricingPage() {
   const backLabel = 'Back'
 
   const handleBack = () => {
-    const current = `${location.pathname}${location.search}${location.hash}`
     if (isInApp) {
-      // If we were routed here from within /app, prefer that explicit origin.
-      if (fromPath && fromPath.trim() && fromPath !== current) {
-        navigate(fromPath)
-        return
-      }
-
-      // Otherwise act like a normal back button.
-      if (typeof window !== 'undefined' && window.history.length > 1) {
-        navigate(-1)
-        return
-      }
-
-      // Safety: keep users inside the app shell.
-      navigate('/app')
+      // Avoid going “back” to Stripe (external history). Always return to Party.
+      navigate('/app?tab=party', {replace: true})
       return
     }
 

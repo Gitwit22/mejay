@@ -476,6 +476,9 @@ class AudioEngine {
     // Apply track gain if provided
     if (gainDb !== undefined) {
       this.setTrackGain(deck, gainDb);
+    } else {
+      // Reset to neutral when not applying auto-volume.
+      this.setTrackGain(deck, 0);
     }
 
     return audioBuffer.duration;

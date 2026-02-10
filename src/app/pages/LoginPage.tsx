@@ -50,12 +50,17 @@ export default function LoginPage() {
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
+        credentials: 'include',
         headers: {'content-type': 'application/json'},
         body: JSON.stringify({email, password}),
       })
       const data = (await res.json().catch(() => null)) as any
       if (res.ok && data?.ok) {
         toast({title: 'Signed in', description: 'Welcome back.'})
+        // Avoid /app redirect loop by marking authenticated immediately.
+        usePlanStore.getState().markAuthenticated({email})
+        // Best-effort: hydrate user + entitlements from the server.
+        void usePlanStore.getState().refreshFromServer({reason: 'postLogin'})
         navigate(returnTo, {replace: true})
         return
       }
@@ -158,6 +163,7 @@ export default function LoginPage() {
     try {
       const res = await fetch('/api/auth/set-password', {
         method: 'POST',
+        credentials: 'include',
         headers: {'content-type': 'application/json'},
         body: JSON.stringify({email, verifiedToken, password}),
       })
@@ -167,6 +173,8 @@ export default function LoginPage() {
       }
 
       toast({title: 'Signed in', description: 'Welcome back.'})
+      usePlanStore.getState().markAuthenticated({email})
+      void usePlanStore.getState().refreshFromServer({reason: 'postSetPassword'})
       navigate(returnTo, {replace: true})
     } catch (e) {
       toast({
