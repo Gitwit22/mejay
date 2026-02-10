@@ -3,7 +3,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
-import { BrowserRouter, Routes, Route, Outlet, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Outlet, useNavigate, Navigate } from "react-router-dom";
 import { audioEngine } from "@/lib/audioEngine";
 import { useDJStore } from "@/stores/djStore";
 import { usePlanStore } from "@/stores/planStore";
@@ -17,6 +17,7 @@ import WelcomePage from "./app/pages/WelcomePage";
 import LoginPage from "./app/pages/LoginPage";
 import AboutPage from "./app/pages/AboutPage";
 import PricingPage from "./app/pages/PricingPage";
+import BillingPage from "./app/pages/BillingPage";
 import TermsPage from "./app/pages/TermsPage";
 import ContactPage from "./app/pages/ContactPage";
 import PrivacyPage from "./app/pages/PrivacyPage";
@@ -291,6 +292,37 @@ const AppBillingBootstrap = () => {
             });
           } else {
             const sessionId = sessionIdFromUrl;
+
+            // 1a) Fast-path activation: ask the server to sync+persist from Stripe once.
+            // This updates D1 so the subsequent refreshFromServer() reflects the new plan immediately.
+            try {
+              const syncRes = await fetch('/api/billing/sync', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {'content-type': 'application/json'},
+                body: JSON.stringify({sessionId}),
+              })
+              if (syncRes.ok) {
+                const payload = (await syncRes.json().catch(() => null)) as null | {accessType?: unknown; hasFullAccess?: unknown}
+                const accessType = payload?.accessType
+                const hasFullAccess = payload?.hasFullAccess
+                if ((accessType === 'pro' || accessType === 'full_program') && hasFullAccess === true) {
+                  await applySuccessfulUpgrade({
+                    sessionId,
+                    accessType: accessType as 'pro' | 'full_program',
+                  })
+                  activatingToast.update({
+                    title: 'Upgrade complete',
+                    description: accessType === 'pro' ? 'Pro is now active.' : 'Full Program is now active.',
+                  })
+                  window.setTimeout(() => activatingToast.dismiss(), 2500)
+                  return
+                }
+              }
+            } catch {
+              // ignore; fall back to checkout-status verification loop
+            }
+
             const activationDeadline = Date.now() + 10_000;
             const delaysMs = [1000, 1000, 1500, 1500, 2000, 2000];
             const maxAttempts = delaysMs.length;
@@ -416,12 +448,14 @@ const App = () => (
           <Route path="/login" element={<LoginPage />} />
           <Route path="/about" element={<AboutPage />} />
           <Route path="/pricing" element={<PricingPage />} />
+          <Route path="/billing" element={<Navigate to="/app/billing" replace />} />
           <Route path="/terms" element={<TermsPage />} />
           <Route path="/privacy" element={<PrivacyPage />} />
           <Route path="/contact" element={<ContactPage />} />
           <Route path="/app" element={<AppShellLayout />}>
             <Route index element={<Index />} />
             <Route path="pricing" element={<PricingPage />} />
+            <Route path="billing" element={<BillingPage />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Route>

@@ -1790,12 +1790,21 @@
 }
 
 .mejay-pricing .pricing-card.featured {
+  /* Visual emphasis (Most Popular), but do NOT imply it's the user's current plan. */
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.mejay-pricing .pricing-card.featured::before {
+  opacity: 1;
+}
+
+.mejay-pricing .pricing-card.current {
   border: 2px solid;
   border-image: linear-gradient(135deg, #ff006e, #8338ec) 1;
   background: rgba(255, 0, 110, 0.05);
 }
 
-.mejay-pricing .pricing-card.featured::before {
+.mejay-pricing .pricing-card.current::before {
   opacity: 1;
 }
 
@@ -1810,6 +1819,12 @@
   letter-spacing: 1px;
   border-radius: 20px;
   margin-bottom: 1.5rem;
+}
+
+.mejay-pricing .plan-badge.current {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #ffffff;
 }
 
 .mejay-pricing .plan-name {

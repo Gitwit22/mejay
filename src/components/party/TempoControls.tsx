@@ -15,6 +15,8 @@ export function TempoControls() {
     ? Math.round((settings.autoBaseBpm + (settings.autoOffsetBpm ?? 0)) * 10) / 10
     : null;
 
+  const afterTransition = settings.partyTempoAfterTransition ?? 'hold'
+
   const allowedDriftBpm = (() => {
     const pct = Math.max(0, Math.min(100, settings.lockTolerancePct ?? 10))
     if (pct <= 0) return 0
@@ -173,6 +175,39 @@ export function TempoControls() {
               <span>
                 Target: {autoTargetBpm !== null ? Math.round(autoTargetBpm) : '—'} BPM
               </span>
+            </div>
+
+            <div className="mt-4">
+              <span className="text-xs text-muted-foreground block mb-2">After transition</span>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => updateUserSettings({partyTempoAfterTransition: 'hold'})}
+                  className={cn(
+                    'w-full px-3 py-2 rounded-xl text-xs font-medium transition-all',
+                    afterTransition === 'hold'
+                      ? 'bg-accent text-accent-foreground'
+                      : 'bg-white/5 text-muted-foreground hover:bg-white/10'
+                  )}
+                >
+                  Hold matched tempo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateUserSettings({partyTempoAfterTransition: 'revert'})}
+                  className={cn(
+                    'w-full px-3 py-2 rounded-xl text-xs font-medium transition-all',
+                    afterTransition === 'revert'
+                      ? 'bg-accent text-accent-foreground'
+                      : 'bg-white/5 text-muted-foreground hover:bg-white/10'
+                  )}
+                >
+                  Return to original
+                </button>
+              </div>
+              <p className="text-[9px] text-muted-foreground mt-2">
+                Choose whether the next track stays tempo-matched after the crossfade.
+              </p>
             </div>
           </div>
         )}

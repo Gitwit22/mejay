@@ -6,15 +6,25 @@ import { toast } from '@/hooks/use-toast';
 import { startCheckout } from '@/lib/checkout';
 
 export function UpgradeModal() {
-  const { upgradeModalOpen, closeUpgradeModal, billingEnabled, setDevPlan, authBypassEnabled } = usePlanStore();
+  const { upgradeModalOpen, closeUpgradeModal, billingEnabled, setDevPlan, authBypassEnabled, plan } = usePlanStore();
   const navigate = useNavigate();
   const location = useLocation();
+
+  const isFullProgramOwner = plan === 'full_program'
+  const isProOwner = plan === 'pro'
+  const isUpgraded = isProOwner || isFullProgramOwner
 
   const goToPricing = () => {
     closeUpgradeModal();
     const from = `${location.pathname}${location.search}`;
-    navigate('/app/pricing', { state: { from } });
+    navigate(`/app/pricing?returnTo=${encodeURIComponent(from)}`, { state: { from } });
   };
+
+  const goToManagePlan = () => {
+    closeUpgradeModal()
+    const from = `${location.pathname}${location.search}`
+    navigate(`/app/billing?returnTo=${encodeURIComponent(from)}`, {state: {from}})
+  }
 
   const beginCheckout = async (plan: 'pro' | 'full_program') => {
     if (!billingEnabled) {
@@ -87,8 +97,14 @@ export function UpgradeModal() {
                 <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-primary to-secondary mb-4">
                   <Sparkles className="w-7 h-7 text-white" />
                 </div>
-                <h2 className="text-xl font-bold text-foreground mb-1">Unlock Pro Features</h2>
-                <p className="text-sm text-muted-foreground">Pro or Full Program unlocks advanced tools</p>
+                <h2 className="text-xl font-bold text-foreground mb-1">
+                  {isFullProgramOwner ? 'Full Program unlocked' : 'Unlock Pro Features'}
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  {isFullProgramOwner
+                    ? 'Everything is unlocked on your account.'
+                    : 'Pro or Full Program unlocks advanced tools'}
+                </p>
               </div>
 
               {/* Features List */}
@@ -104,32 +120,52 @@ export function UpgradeModal() {
                 ))}
               </div>
 
-              {/* Pricing Buttons */}
-              <div className="space-y-2">
-                <button
-                  onClick={() => beginCheckout('pro')}
-                  className="w-full py-3.5 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold text-sm hover:opacity-90 transition-opacity"
-                >
-                  Upgrade to Pro — $5/month
-                </button>
-                <button
-                  onClick={() => beginCheckout('full_program')}
-                  className="w-full py-3.5 rounded-xl bg-white/10 text-foreground font-medium text-sm hover:bg-white/15 transition-colors"
-                >
-                  Buy Full Program — Own It Forever
-                </button>
-                <button
-                  onClick={goToPricing}
-                  className="w-full py-3.5 rounded-xl bg-transparent text-muted-foreground font-medium text-sm hover:text-foreground transition-colors"
-                >
-                  View pricing details
-                </button>
-              </div>
+              {/* Actions */}
+              {isFullProgramOwner ? (
+                <div className="space-y-2">
+                  <button
+                    onClick={goToManagePlan}
+                    className="w-full py-3.5 rounded-xl bg-white/10 text-foreground font-medium text-sm hover:bg-white/15 transition-colors"
+                  >
+                    Manage plan
+                  </button>
+                  <button
+                    onClick={closeUpgradeModal}
+                    className="w-full py-3.5 rounded-xl bg-transparent text-muted-foreground font-medium text-sm hover:text-foreground transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <button
+                      onClick={() => beginCheckout('pro')}
+                      className="w-full py-3.5 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold text-sm hover:opacity-90 transition-opacity"
+                      disabled={isUpgraded}
+                    >
+                      {isFullProgramOwner ? 'Full Program active' : isProOwner ? 'Pro active' : 'Upgrade to Pro — $5/month'}
+                    </button>
+                    <button
+                      onClick={() => beginCheckout('full_program')}
+                      className="w-full py-3.5 rounded-xl bg-white/10 text-foreground font-medium text-sm hover:bg-white/15 transition-colors"
+                      disabled={isFullProgramOwner}
+                    >
+                      {isFullProgramOwner ? 'Full Program active' : 'Buy Full Program — Own It Forever'}
+                    </button>
+                    <button
+                      onClick={goToPricing}
+                      className="w-full py-3.5 rounded-xl bg-transparent text-muted-foreground font-medium text-sm hover:text-foreground transition-colors"
+                    >
+                      View pricing details
+                    </button>
+                  </div>
 
-              {/* Footer */}
-              <p className="text-center text-[11px] text-muted-foreground mt-4">
-                Pro is subscription. Full Program is a one-time purchase.
-              </p>
+                  <p className="text-center text-[11px] text-muted-foreground mt-4">
+                    Pro is subscription. Full Program is a one-time purchase.
+                  </p>
+                </>
+              )}
             </div>
           </motion.div>
         </>

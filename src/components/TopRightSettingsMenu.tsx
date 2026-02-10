@@ -48,7 +48,7 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   const [licenseKey, setLicenseKey] = useState('')
   const [resetAlsoClearLicense, setResetAlsoClearLicense] = useState(false)
 
-  const {plan} = usePlanStore()
+  const {plan, authStatus} = usePlanStore()
 
   const {
     token,
@@ -75,6 +75,8 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
     if (plan === 'pro') return 'Pro'
     return 'Free'
   }, [plan])
+
+  const hasPaidPlan = authStatus === 'authenticated' && plan !== 'free'
 
   const logoutButtonClassName = useMemo(
     () =>
@@ -107,6 +109,11 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   }
 
   const from = `${location.pathname}${location.search}`
+
+  const planDestination = hasPaidPlan ? `/app/billing?returnTo=${encodeURIComponent(from)}` : `/app/pricing?returnTo=${encodeURIComponent(from)}`
+  const planLabelInMenu = hasPaidPlan ? 'Manage plan' : 'View pricing'
+  const planLabelInSupport = hasPaidPlan ? 'Manage Plan' : 'Pricing'
+  const showManageBillingButton = plan !== 'full_program'
 
   const handleResetLocalData = async () => {
     setOpen(false)
@@ -414,32 +421,34 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                       )}
 
                       <Separator />
+                      {showManageBillingButton && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="w-full"
+                          onClick={async () => {
+                            try {
+                              await openBillingPortal()
+                            } catch (e) {
+                              const msg = e instanceof Error ? e.message : 'Could not open billing portal.'
+                              toast({
+                                title: 'Billing',
+                                description: msg,
+                                variant: 'destructive',
+                              })
+                            }
+                          }}
+                        >
+                          Manage billing
+                        </Button>
+                      )}
                       <Button
                         type="button"
                         variant="outline"
                         className="w-full"
-                        onClick={async () => {
-                          try {
-                            await openBillingPortal()
-                          } catch (e) {
-                            const msg = e instanceof Error ? e.message : 'Could not open billing portal.'
-                            toast({
-                              title: 'Billing',
-                              description: msg,
-                              variant: 'destructive',
-                            })
-                          }
-                        }}
+                        onClick={() => closeAndNavigate(planDestination, {state: {from}})}
                       >
-                        Manage billing
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="w-full"
-                        onClick={() => closeAndNavigate('/app/pricing', {state: {from}})}
-                      >
-                        View pricing
+                        {planLabelInMenu}
                       </Button>
                     </div>
                   </div>
@@ -588,9 +597,9 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                       type="button"
                       variant="outline"
                       className="w-full justify-start"
-                      onClick={() => closeAndNavigate('/app/pricing', {state: {from}})}
+                      onClick={() => closeAndNavigate(planDestination, {state: {from}})}
                     >
-                      Pricing
+                      {planLabelInSupport}
                     </Button>
                     <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/terms')}>
                       Terms of Service

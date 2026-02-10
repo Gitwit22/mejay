@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react'
+import {useEffect, useMemo, useState} from 'react'
 import {Link, useLocation, useNavigate} from 'react-router-dom'
 
 import {toast} from '@/hooks/use-toast'
@@ -10,26 +10,43 @@ export default function PricingPage() {
   const location = useLocation()
   const navigate = useNavigate()
   const [isCheckingOut, setIsCheckingOut] = useState<'pro' | 'full_program' | null>(null)
-  const {billingEnabled, setDevPlan, authBypassEnabled} = usePlanStore()
+  const billingEnabled = usePlanStore((s) => s.billingEnabled)
+  const setDevPlan = usePlanStore((s) => s.setDevPlan)
+  const authBypassEnabled = usePlanStore((s) => s.authBypassEnabled)
+  const authStatus = usePlanStore((s) => s.authStatus)
+  const plan = usePlanStore((s) => s.plan)
 
   const from = (location.state as any)?.from
   const fromPath = typeof from === 'string' ? from : null
   const isInApp = (fromPath?.startsWith('/app') ?? false) || location.pathname.startsWith('/app')
   const backLabel = 'Back'
 
+  const safeReturnTo = useMemo(() => {
+    const sp = new URLSearchParams(location.search)
+    const raw = (sp.get('returnTo') ?? '').trim()
+    if (!raw) return null
+    if (!raw.startsWith('/')) return null
+    if (raw.startsWith('//')) return null
+    if (raw.includes('://')) return null
+    return raw
+  }, [location.search])
+
+  const currentPlanId = authStatus === 'authenticated' ? plan : null
+  const hasFullProgram = currentPlanId === 'full_program'
+
   const handleBack = () => {
+    // Never use browser history here (can bounce to Stripe).
+    if (safeReturnTo) {
+      navigate(safeReturnTo, {replace: true})
+      return
+    }
+
     if (isInApp) {
-      // Avoid going “back” to Stripe (external history). Always return to Party.
       navigate('/app?tab=party', {replace: true})
       return
     }
 
-    // Marketing site: normal back, then home fallback.
-    if (typeof window !== 'undefined' && window.history.length > 1) {
-      navigate(-1)
-      return
-    }
-    navigate('/')
+    navigate('/', {replace: true})
   }
 
   useEffect(() => {
@@ -103,7 +120,8 @@ export default function PricingPage() {
         </section>
 
         <div className="pricing-grid">
-          <div className="pricing-card">
+          <div className={`pricing-card${currentPlanId === 'free' ? ' current' : ''}`}>
+            {currentPlanId === 'free' ? <span className="plan-badge current">Current plan</span> : null}
             <div className="plan-name">Free (Demo)</div>
             <div className="plan-description">Test MEJay in your browser</div>
             <div className="plan-price">
@@ -115,13 +133,19 @@ export default function PricingPage() {
               <li>Import your own music</li>
               <li>Basic playback features</li>
             </ul>
-            <Link to="/app" className="plan-cta secondary">
-              Try MEJay Free
-            </Link>
+            {currentPlanId === 'free' ? (
+              <button type="button" className="plan-cta secondary" disabled>
+                You're on this plan
+              </button>
+            ) : (
+              <Link to="/app" className="plan-cta secondary">
+                Try MEJay Free
+              </Link>
+            )}
           </div>
 
-          <div className="pricing-card featured">
-            <span className="plan-badge">Most Popular</span>
+          <div className={`pricing-card featured${currentPlanId === 'pro' ? ' current' : ''}`}>
+            {currentPlanId === 'pro' ? <span className="plan-badge current">Current plan</span> : <span className="plan-badge">Most Popular</span>}
             <div className="plan-name">MEJay Pro</div>
             <div className="plan-description">Advanced features while you subscribe</div>
             <div className="plan-price">
@@ -138,14 +162,18 @@ export default function PricingPage() {
               type="button"
               className="plan-cta"
               onClick={() => handleCheckout('pro')}
-              disabled={isCheckingOut !== null}
+              disabled={currentPlanId === 'pro' || hasFullProgram || isCheckingOut !== null}
             >
-              {isCheckingOut === 'pro' ? 'Starting checkout…' : 'Upgrade to Pro'}
+              {currentPlanId === 'pro' || hasFullProgram
+                ? "You're already upgraded"
+                : isCheckingOut === 'pro'
+                  ? 'Starting checkout…'
+                  : 'Upgrade to Pro'}
             </button>
           </div>
 
-          <div className="pricing-card">
-            <span className="plan-badge">Lifetime</span>
+          <div className={`pricing-card${currentPlanId === 'full_program' ? ' current' : ''}`}>
+            {currentPlanId === 'full_program' ? <span className="plan-badge current">Current plan</span> : <span className="plan-badge">Lifetime</span>}
             <div className="plan-name">Full Program</div>
             <div className="plan-description">One-time purchase, own it forever</div>
             <div className="plan-price">
@@ -161,9 +189,13 @@ export default function PricingPage() {
               type="button"
               className="plan-cta secondary"
               onClick={() => handleCheckout('full_program')}
-              disabled={isCheckingOut !== null}
+              disabled={currentPlanId === 'full_program' || isCheckingOut !== null}
             >
-              {isCheckingOut === 'full_program' ? 'Starting checkout…' : 'Buy Full Program'}
+              {currentPlanId === 'full_program'
+                ? "You're on this plan"
+                : isCheckingOut === 'full_program'
+                  ? 'Starting checkout…'
+                  : 'Buy Full Program'}
             </button>
           </div>
         </div>

@@ -406,6 +406,7 @@ export const useDJStore = create<DJState>()(
     lockTolerancePct: 10,
     autoBaseBpm: null,
     autoOffsetBpm: 0,
+    partyTempoAfterTransition: 'hold',
     autoVolumeMatch: true,
     targetLoudness: 0.7,
     limiterEnabled: true,
@@ -452,7 +453,11 @@ export const useDJStore = create<DJState>()(
 
     const fallbackBpm = (outgoingTrack?.bpm ?? audioEngine.getBaseBpm(outgoingDeck) ?? 120) * outgoingRate;
     const tempoControlEnabled = usePlanStore.getState().hasFeature('tempoControl');
-    const targetBpm = tempoControlEnabled ? (computeTargetBpm(state.settings) ?? fallbackBpm) : fallbackBpm;
+    const targetBpm = tempoControlEnabled
+      ? (state.isPartyMode && state.settings.tempoMode === 'auto'
+          ? fallbackBpm
+          : (computeTargetBpm(state.settings) ?? fallbackBpm))
+      : fallbackBpm;
 
     const beatSec = 60 / Math.max(1, targetBpm);
     const barSec = beatSec * 4;
@@ -1254,11 +1259,28 @@ export const useDJStore = create<DJState>()(
 
       if (!nextTrack?.fileBlob) return;
 
-      // Calculate target BPM
+      // Party Mode Tempo Match (crossfade-synced):
+      // - Choose a shared target BPM based on the incoming track BPM (plus optional offset)
+      // - Ramp the outgoing deck into that BPM leading into the crossfade
+      // - Start the incoming deck already set to its matched playbackRate
+      // - Keep the new track at that matched tempo after transition (Option A)
       const tempoControlEnabled = usePlanStore.getState().hasFeature('tempoControl');
-      const targetBpm = tempoControlEnabled
-        ? (computeTargetBpm(settings) ?? (currentTrack?.bpm || 120))
-        : (currentTrack?.bpm || 120);
+      const nextBaseBpm = nextTrack?.bpm || 120;
+
+      const computeTransitionTargetBpm = (): number => {
+        if (!tempoControlEnabled) return nextBaseBpm;
+        if (settings.tempoMode === 'locked') {
+          return Number.isFinite(settings.lockedBpm) && settings.lockedBpm > 0 ? settings.lockedBpm : nextBaseBpm;
+        }
+        if (settings.tempoMode === 'auto') {
+          const offset = Number.isFinite(settings.autoOffsetBpm) ? settings.autoOffsetBpm : 0;
+          const target = nextBaseBpm + offset;
+          return Number.isFinite(target) && target > 1 ? target : nextBaseBpm;
+        }
+        return nextBaseBpm;
+      };
+
+      const targetBpm = computeTransitionTargetBpm();
 
       // Get track gain for volume matching
       // Gain can be undefined for older imports; compute lazily if needed.
@@ -1301,8 +1323,10 @@ export const useDJStore = create<DJState>()(
       const rampSec = clamp(energy.tempoRampMs, 300, 800) / 1000;
       const settleSec = beatSec * energy.settleBeats;
 
-      const nextBaseBpm = nextTrack?.bpm || 120;
-      const bpmDelta = Math.abs(targetBpm - nextBaseBpm);
+      const outgoingBaseBpm = currentTrack?.bpm || audioEngine.getBaseBpm(currentDeck) || 120;
+      const bpmDeltaIncoming = Math.abs(targetBpm - nextBaseBpm);
+      const bpmDeltaOutgoing = Math.abs(targetBpm - outgoingBaseBpm);
+      const bpmDelta = Math.max(bpmDeltaIncoming, bpmDeltaOutgoing);
 
       // Pre-roll needed to ramp + settle before crossfade begins.
       const preRollSec = energy.stepLargeDeltas && bpmDelta > 6
@@ -1312,19 +1336,32 @@ export const useDJStore = create<DJState>()(
       let incomingStartAt: number;
       let fadeAt: number;
 
+      // Compute the outgoing deck's matched playbackRate (used for beat quantization + ramp scheduling).
+      const outgoingTargetRatio = tempoControlEnabled
+        ? audioEngine.calculateTempoRatio(currentDeck, targetBpm, settings.maxTempoPercent)
+        : 1;
+
       if (isManualImmediate) {
         const startCandidate = ctxNow + 0.05;
-        incomingStartAt = audioEngine.getNextBeatTimeFrom(currentDeck, startCandidate, energy.startQuantBeats) ?? startCandidate;
-        fadeAt = audioEngine.getNextBeatTimeFrom(currentDeck, incomingStartAt, energy.fadeQuantBeats) ?? incomingStartAt;
+        incomingStartAt =
+          audioEngine.getNextBeatTimeFrom(currentDeck, startCandidate, energy.startQuantBeats, outgoingTargetRatio) ??
+          startCandidate;
+        fadeAt =
+          audioEngine.getNextBeatTimeFrom(currentDeck, incomingStartAt, energy.fadeQuantBeats, outgoingTargetRatio) ??
+          incomingStartAt;
       } else {
         // Incoming can start earlier (muted by crossfade position) to allow ramp+settle.
         const earliestIncomingStart = Math.max(ctxNow + 0.05, safeLatestCrossfadeStart - preRollSec);
-        const quantIncomingStart = audioEngine.getNextBeatTimeFrom(currentDeck, earliestIncomingStart, energy.startQuantBeats) ?? earliestIncomingStart;
+        const quantIncomingStart =
+          audioEngine.getNextBeatTimeFrom(currentDeck, earliestIncomingStart, energy.startQuantBeats, outgoingTargetRatio) ??
+          earliestIncomingStart;
         incomingStartAt = quantIncomingStart > safeLatestCrossfadeStart ? safeLatestCrossfadeStart : quantIncomingStart;
 
         // Compute crossfade start as soon as we're "ready" (after pre-roll), but never after latestCrossfadeStart.
         const fadeCandidate = incomingStartAt + preRollSec;
-        const quantFade = audioEngine.getNextBeatTimeFrom(currentDeck, fadeCandidate, energy.fadeQuantBeats) ?? fadeCandidate;
+        const quantFade =
+          audioEngine.getNextBeatTimeFrom(currentDeck, fadeCandidate, energy.fadeQuantBeats, outgoingTargetRatio) ??
+          fadeCandidate;
         fadeAt = Math.min(quantFade, safeLatestCrossfadeStart);
       }
 
@@ -1343,36 +1380,28 @@ export const useDJStore = create<DJState>()(
           else audioEngine.setTrackGain(nextDeck, 0);
         });
         const tempoControlEnabled = usePlanStore.getState().hasFeature('tempoControl');
-        const baseBpm = nextTrack.bpm || 120;
 
         // Start incoming early (inaudible until crossfade begins).
-        audioEngine.playAt(nextDeck, incomingStartAt);
-
         if (!tempoControlEnabled) {
           // Free mode: keep pitch/BPM normal.
           get().setTempo(nextDeck, 1);
         } else {
-          // Tempo ramp + settle scheduling.
-          const autoOffsetIsZero = settings.tempoMode === 'auto' && (settings.autoOffsetBpm ?? 0) === 0;
-          const targetRatio = autoOffsetIsZero ? 1 : audioEngine.calculateTempoRatio(nextDeck, targetBpm, settings.maxTempoPercent);
+          // Incoming deck starts already matched to the shared target BPM.
+          const incomingTargetRatio = audioEngine.calculateTempoRatio(nextDeck, targetBpm, settings.maxTempoPercent);
+          get().setTempo(nextDeck, incomingTargetRatio);
 
-          // Start at natural tempo (1x) then ramp to target.
-          audioEngine.setTempo(nextDeck, 1);
-
-          // Chill 2-step: ramp halfway, wait 1 bar, ramp remainder.
-          if (!autoOffsetIsZero && energy.stepLargeDeltas && Math.abs(targetBpm - baseBpm) > 6) {
-            const halfwayBpm = baseBpm + (targetBpm - baseBpm) / 2;
-            const halfRatio = audioEngine.calculateTempoRatio(nextDeck, halfwayBpm, settings.maxTempoPercent);
-            audioEngine.rampTempo(nextDeck, halfRatio, incomingStartAt, energy.tempoRampMs);
-
-            const secondRampAt = incomingStartAt + rampSec + barSec;
-            audioEngine.rampTempo(nextDeck, targetRatio, secondRampAt, energy.tempoRampMs);
-          } else {
-            if (!autoOffsetIsZero) {
-              audioEngine.rampTempo(nextDeck, targetRatio, incomingStartAt, energy.tempoRampMs);
-            }
+          // Ramp outgoing deck toward the target leading into the crossfade.
+          // Aim to finish at fadeAt (crossfade start). If there's not enough time, it'll overlap slightly.
+          const rampStartAt = Math.max(ctxNow + 0.05, fadeAt - rampSec);
+          try {
+            audioEngine.rampTempo(currentDeck, outgoingTargetRatio, rampStartAt, energy.tempoRampMs);
+          } catch {
+            // ignore
           }
         }
+
+        // Start incoming early (inaudible until crossfade begins).
+        audioEngine.playAt(nextDeck, incomingStartAt);
 
         // Equal-power crossfade.
         audioEngine.scheduleCrossfade(effectiveCrossfadeSeconds, fadeAt);
@@ -1401,6 +1430,25 @@ export const useDJStore = create<DJState>()(
             mixInProgress: false,
             playHistoryTrackIds: pushHistory(s.playHistoryTrackIds, outgoingTrackId),
           }));
+
+          // Option B: return the *new* track to original tempo after the transition.
+          // (Only applies to Party Mode + Auto Match; Locked BPM remains authoritative.)
+          try {
+            const after = get();
+            const wantsRevert = (after.settings.partyTempoAfterTransition ?? 'hold') === 'revert';
+            const shouldRevert = wantsRevert && after.isPartyMode && after.settings.tempoMode === 'auto';
+            if (shouldRevert && usePlanStore.getState().hasFeature('tempoControl')) {
+              const nowCtx = audioEngine.getAudioContextTime();
+              if (nowCtx !== null) {
+                // Smooth, short ramp to avoid a jarring jump.
+                audioEngine.rampTempo(nextDeck, 1, nowCtx + 0.02, 500);
+              } else {
+                get().setTempo(nextDeck, 1);
+              }
+            }
+          } catch {
+            // ignore
+          }
 
           // Apply any pending source switch by rewriting the queue to the new source.
           const afterMix = get();
@@ -1783,6 +1831,11 @@ export const useDJStore = create<DJState>()(
         const raw = Number(updates.maxTempoPercent);
         const clampedPct = clamp(Number.isFinite(raw) ? raw : before.settings.maxTempoPercent, 0, 300);
         updates.maxTempoPercent = Math.round(clampedPct);
+      }
+
+      if (updates.partyTempoAfterTransition !== undefined) {
+        const v = updates.partyTempoAfterTransition;
+        updates.partyTempoAfterTransition = v === 'revert' ? 'revert' : 'hold';
       }
 
       // When enabling Auto Match, capture a baseline from the currently playing deck

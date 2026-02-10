@@ -276,7 +276,7 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
       const downloadUrl = `${origin}/api/download/full-program`
       const alreadyHadFull = userId ? await wasAlreadyFullProgram(env.DB, userId) : false
 
-      if (customerId && userId) {
+      if (userId) {
         try {
           await upsertEntitlementsInD1({
             db: env.DB,
@@ -318,7 +318,7 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
             : null
       const email = (session?.customer_details?.email ?? session?.customer_email ?? null) as string | null
 
-      if (customerId && userId) {
+      if (userId) {
         try {
           await upsertEntitlementsInD1({
             db: env.DB,

@@ -16,6 +16,11 @@ type Env = {
   SESSION_PEPPER?: string;
 };
 
+type EntitlementsRow = {
+  access_type: string;
+  has_full_access: number;
+} | null
+
 async function sha256Hex(input: string) {
   const enc = new TextEncoder().encode(input);
   const hashBuf = await crypto.subtle.digest('SHA-256', enc);
@@ -46,6 +51,28 @@ async function getSessionUserId(req: Request, env: Pick<Env, 'DB' | 'SESSION_PEP
   if (!row) return null;
   if (row.expires_at < new Date().toISOString()) return null;
   return row.user_id;
+}
+
+async function getUserEmailById(db: any, userId: string): Promise<string | null> {
+  const row = (await db
+    .prepare('SELECT email FROM users WHERE id = ?1 LIMIT 1')
+    .bind(userId)
+    .first()) as {email: string | null} | null
+  const email = typeof row?.email === 'string' ? row.email.trim() : ''
+  return email ? email : null
+}
+
+async function getEntitlements(db: any, userId: string): Promise<EntitlementsRow> {
+  return (await db
+    .prepare('SELECT access_type, has_full_access FROM entitlements WHERE user_id = ?1 LIMIT 1')
+    .bind(userId)
+    .first()) as EntitlementsRow
+}
+
+function normalizeDbAccessType(raw: unknown): 'free' | 'pro' | 'full_program' {
+  if (raw === 'pro') return 'pro'
+  if (raw === 'full' || raw === 'full_program') return 'full_program'
+  return 'free'
 }
 
 function json(data: unknown, status = 200) {
@@ -147,7 +174,27 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
     return json({ error: 'Login required' }, 401);
   }
 
+  // Prevent repeat purchases / redundant checkouts.
   try {
+    const ent = await getEntitlements(env.DB, userId)
+    const current = normalizeDbAccessType(ent?.access_type)
+    const hasFullAccess = !!ent?.has_full_access
+    if (hasFullAccess) {
+      if (plan === 'full_program' && current === 'full_program') {
+        return json({error: 'Already purchased Full Program.'}, 409)
+      }
+      // Full Program includes Pro features.
+      if (plan === 'pro' && (current === 'pro' || current === 'full_program')) {
+        return json({error: current === 'full_program' ? 'Full Program is already active.' : 'Pro is already active.'}, 409)
+      }
+    }
+  } catch {
+    // Best-effort check; don't block checkout if D1 is down.
+  }
+
+  try {
+    const userEmail = await getUserEmailById(env.DB, userId).catch(() => null)
+
     const params = new URLSearchParams();
     params.set("mode", mode);
     params.set("line_items[0][price]", priceId);
@@ -159,6 +206,20 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
     params.set("metadata[plan]", plan);
     params.set('client_reference_id', userId);
     params.set('metadata[userId]', userId);
+
+    // Ensure `session.customer` exists so activation can persist reliably.
+    // (In payment mode, Stripe may otherwise leave `customer` null.)
+    if (mode === 'payment') {
+      params.set('customer_creation', 'always')
+      if (userEmail) params.set('customer_email', userEmail)
+    }
+
+    // Propagate user binding into subscription webhooks (customer.subscription.*).
+    if (mode === 'subscription') {
+      params.set('subscription_data[metadata][userId]', userId)
+      params.set('subscription_data[metadata][plan]', plan)
+    }
+
     if (checkoutToken) {
       params.set('metadata[checkoutToken]', checkoutToken);
     }

@@ -48,6 +48,8 @@ export interface Settings {
   // Auto tempo baseline + offset (Auto Match)
   autoBaseBpm: number | null;
   autoOffsetBpm: number;
+  /** Party Mode: what happens after a tempo-matched transition (auto mode only). */
+  partyTempoAfterTransition?: 'hold' | 'revert';
   // Volume matching
   autoVolumeMatch: boolean;
   targetLoudness: number; // 0-1 scale (quiet to club)
@@ -264,6 +266,7 @@ export async function getSettings(): Promise<Settings> {
     lockTolerancePct: 10,
     autoBaseBpm: null,
     autoOffsetBpm: 0,
+    partyTempoAfterTransition: 'hold',
     autoVolumeMatch: true,
     targetLoudness: 0.7,
     limiterEnabled: true,
