@@ -1,6 +1,6 @@
-name = "mejay-api"
-main = "src/worker.ts"
+name = "mejay"
 compatibility_date = "2026-02-07"
+pages_build_output_dir = "dist"
 
 [[d1_databases]]
 binding = "DB"
