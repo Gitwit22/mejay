@@ -166,7 +166,7 @@ async function upsertEntitlementsInD1(args: {
     return userId
   })()
   const dbAccessType = mapToDbAccessType(accessType)
-  const hasFull = dbAccessType === 'full' ? 1 : 0
+  const hasFull = hasFullAccess ? 1 : 0
 
   const statements = [
     db.prepare(

@@ -162,6 +162,40 @@ export const useDJStore = create<DJState>()(
 
   const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
+  const resetTempoToNormal = () => {
+    try {
+      audioEngine.setTempo('A', 1);
+      audioEngine.setTempo('B', 1);
+    } catch {
+      // ignore
+    }
+
+    set((state) => ({
+      deckA: {...state.deckA, playbackRate: 1},
+      deckB: {...state.deckB, playbackRate: 1},
+    }));
+  };
+
+  // If the plan becomes Free, don't leave pitch/tempo altered.
+  if (typeof window !== 'undefined') {
+    try {
+      usePlanStore.subscribe(
+        (s) => s.plan,
+        (plan, prevPlan) => {
+          if (plan === 'free' && prevPlan !== 'free') {
+            resetTempoToNormal();
+          }
+        },
+      );
+
+      if (usePlanStore.getState().plan === 'free') {
+        resetTempoToNormal();
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   const lockTolerancePctToAllowedDriftBpm = (pctRaw: number | undefined | null): number => {
     const pct = clamp(Number.isFinite(pctRaw as number) ? (pctRaw as number) : 10, 0, 100);
     // Piecewise mapping aligned with the product spec examples:
@@ -181,6 +215,7 @@ export const useDJStore = create<DJState>()(
 
   const lastLockCorrectionAtCtx: Record<DeckId, number> = { A: -Infinity, B: -Infinity };
   const maybeCorrectTempoLockDrift = (deck: DeckId) => {
+    if (!usePlanStore.getState().hasFeature('tempoControl')) return;
     const state = get();
     if (state.settings.tempoMode !== 'locked') return;
     if (!audioEngine.isPlaying(deck)) return;
@@ -395,8 +430,9 @@ export const useDJStore = create<DJState>()(
 
     const outgoingRate = Math.max(0.25, audioEngine.getTempo(outgoingDeck) || 1);
 
-    const targetBpm = computeTargetBpm(state.settings)
-      ?? ((outgoingTrack?.bpm ?? audioEngine.getBaseBpm(outgoingDeck) ?? 120) * outgoingRate);
+    const fallbackBpm = (outgoingTrack?.bpm ?? audioEngine.getBaseBpm(outgoingDeck) ?? 120) * outgoingRate;
+    const tempoControlEnabled = usePlanStore.getState().hasFeature('tempoControl');
+    const targetBpm = tempoControlEnabled ? (computeTargetBpm(state.settings) ?? fallbackBpm) : fallbackBpm;
 
     const beatSec = 60 / Math.max(1, targetBpm);
     const barSec = beatSec * 4;
@@ -420,6 +456,7 @@ export const useDJStore = create<DJState>()(
   };
 
   const applyImmediateTempoToDeck = (state: DJState, deck: DeckId) => {
+    if (!usePlanStore.getState().hasFeature('tempoControl')) return;
     const deckState = deck === 'A' ? state.deckA : state.deckB;
     if (!deckState.trackId) return;
 
@@ -1059,13 +1096,16 @@ export const useDJStore = create<DJState>()(
 
       const currentDeckState = getDeckState(state, targetDeck);
       const wasPlaying = audioEngine.isPlaying(targetDeck) || currentDeckState.isPlaying;
-      const preservedTempo = Math.max(0.25, audioEngine.getTempo(targetDeck) || currentDeckState.playbackRate || 1);
+      const tempoControlEnabled = usePlanStore.getState().hasFeature('tempoControl');
+      const preservedTempo = tempoControlEnabled
+        ? Math.max(0.25, audioEngine.getTempo(targetDeck) || currentDeckState.playbackRate || 1)
+        : 1;
       const gainDb = state.settings.autoVolumeMatch ? previousTrack.gainDb : undefined;
 
       const startAt = getEffectiveStartTimeSec(previousTrack, state.settings);
       const duration = await audioEngine.loadTrackWithOffset(targetDeck, previousTrack.fileBlob, startAt, previousTrack.bpm, gainDb);
       if (previousTrack.bpm) audioEngine.setBaseBpm(targetDeck, previousTrack.bpm);
-      audioEngine.setTempo(targetDeck, preservedTempo);
+      get().setTempo(targetDeck, preservedTempo);
 
       if (targetDeck === 'A') {
         set({ deckA: { ...initialDeckState, trackId: previousTrackId, duration, currentTime: startAt, playbackRate: preservedTempo } });
@@ -1163,7 +1203,10 @@ export const useDJStore = create<DJState>()(
       if (!nextTrack?.fileBlob) return;
 
       // Calculate target BPM
-      const targetBpm = computeTargetBpm(settings) ?? (currentTrack?.bpm || 120);
+      const tempoControlEnabled = usePlanStore.getState().hasFeature('tempoControl');
+      const targetBpm = tempoControlEnabled
+        ? (computeTargetBpm(settings) ?? (currentTrack?.bpm || 120))
+        : (currentTrack?.bpm || 120);
 
       // Get track gain for volume matching
       const gainDb = settings.autoVolumeMatch ? nextTrack.gainDb : undefined;
@@ -1242,26 +1285,33 @@ export const useDJStore = create<DJState>()(
         nextTrack.bpm,
         gainDb
       ).then((duration) => {
-        // Tempo ramp + settle scheduling.
-        const targetRatio = audioEngine.calculateTempoRatio(nextDeck, targetBpm, settings.maxTempoPercent);
+        const tempoControlEnabled = usePlanStore.getState().hasFeature('tempoControl');
         const baseBpm = nextTrack.bpm || 120;
 
         // Start incoming early (inaudible until crossfade begins).
         audioEngine.playAt(nextDeck, incomingStartAt);
 
-        // Start at natural tempo (1x) then ramp to target.
-        audioEngine.setTempo(nextDeck, 1);
-
-        // Chill 2-step: ramp halfway, wait 1 bar, ramp remainder.
-        if (energy.stepLargeDeltas && Math.abs(targetBpm - baseBpm) > 6) {
-          const halfwayBpm = baseBpm + (targetBpm - baseBpm) / 2;
-          const halfRatio = audioEngine.calculateTempoRatio(nextDeck, halfwayBpm, settings.maxTempoPercent);
-          audioEngine.rampTempo(nextDeck, halfRatio, incomingStartAt, energy.tempoRampMs);
-
-          const secondRampAt = incomingStartAt + rampSec + barSec;
-          audioEngine.rampTempo(nextDeck, targetRatio, secondRampAt, energy.tempoRampMs);
+        if (!tempoControlEnabled) {
+          // Free mode: keep pitch/BPM normal.
+          get().setTempo(nextDeck, 1);
         } else {
-          audioEngine.rampTempo(nextDeck, targetRatio, incomingStartAt, energy.tempoRampMs);
+          // Tempo ramp + settle scheduling.
+          const targetRatio = audioEngine.calculateTempoRatio(nextDeck, targetBpm, settings.maxTempoPercent);
+
+          // Start at natural tempo (1x) then ramp to target.
+          audioEngine.setTempo(nextDeck, 1);
+
+          // Chill 2-step: ramp halfway, wait 1 bar, ramp remainder.
+          if (energy.stepLargeDeltas && Math.abs(targetBpm - baseBpm) > 6) {
+            const halfwayBpm = baseBpm + (targetBpm - baseBpm) / 2;
+            const halfRatio = audioEngine.calculateTempoRatio(nextDeck, halfwayBpm, settings.maxTempoPercent);
+            audioEngine.rampTempo(nextDeck, halfRatio, incomingStartAt, energy.tempoRampMs);
+
+            const secondRampAt = incomingStartAt + rampSec + barSec;
+            audioEngine.rampTempo(nextDeck, targetRatio, secondRampAt, energy.tempoRampMs);
+          } else {
+            audioEngine.rampTempo(nextDeck, targetRatio, incomingStartAt, energy.tempoRampMs);
+          }
         }
 
         // Equal-power crossfade.
@@ -1382,7 +1432,7 @@ export const useDJStore = create<DJState>()(
       }
       
       // Apply locked tempo if set
-      if (state.settings.tempoMode === 'locked' && firstTrack?.bpm) {
+      if (usePlanStore.getState().hasFeature('tempoControl') && state.settings.tempoMode === 'locked' && firstTrack?.bpm) {
         const ratio = audioEngine.calculateTempoRatio('A', state.settings.lockedBpm, state.settings.maxTempoPercent);
         audioEngine.setTempo('A', ratio);
       }
@@ -1390,7 +1440,7 @@ export const useDJStore = create<DJState>()(
       // Apply Auto Match tempo if baseline exists (or was just captured).
       const afterBaseline = get().settings;
       const autoTarget = computeTargetBpm(afterBaseline);
-      if (afterBaseline.tempoMode === 'auto' && autoTarget !== null) {
+      if (usePlanStore.getState().hasFeature('tempoControl') && afterBaseline.tempoMode === 'auto' && autoTarget !== null) {
         const ratio = audioEngine.calculateTempoRatio('A', autoTarget, afterBaseline.maxTempoPercent);
         audioEngine.setTempo('A', ratio);
       }
@@ -1604,11 +1654,12 @@ export const useDJStore = create<DJState>()(
     },
 
     setTempo: (deck: DeckId, ratio: number) => {
-      audioEngine.setTempo(deck, ratio);
+      const allowedRatio = usePlanStore.getState().hasFeature('tempoControl') ? ratio : 1;
+      audioEngine.setTempo(deck, allowedRatio);
       if (deck === 'A') {
-        set(state => ({ deckA: { ...state.deckA, playbackRate: ratio } }));
+        set(state => ({ deckA: { ...state.deckA, playbackRate: allowedRatio } }));
       } else {
-        set(state => ({ deckB: { ...state.deckB, playbackRate: ratio } }));
+        set(state => ({ deckB: { ...state.deckB, playbackRate: allowedRatio } }));
       }
     },
 

@@ -15,16 +15,31 @@ export default function PricingPage() {
   const from = (location.state as any)?.from
   const fromPath = typeof from === 'string' ? from : null
   const isInApp = (fromPath?.startsWith('/app') ?? false) || location.pathname.startsWith('/app')
-  const backLabel = isInApp ? 'Back to MeJay' : 'Return to home'
+  const backLabel = 'Back'
 
   const handleBack = () => {
     const current = `${location.pathname}${location.search}${location.hash}`
-    if (fromPath && fromPath.trim() && fromPath !== current) {
-      navigate(fromPath)
+    if (isInApp) {
+      // If we were routed here from within /app, prefer that explicit origin.
+      if (fromPath && fromPath.trim() && fromPath !== current) {
+        navigate(fromPath)
+        return
+      }
+
+      // Otherwise act like a normal back button.
+      if (typeof window !== 'undefined' && window.history.length > 1) {
+        navigate(-1)
+        return
+      }
+
+      // Safety: keep users inside the app shell.
+      navigate('/app')
       return
     }
-    if (isInApp) {
-      navigate('/app')
+
+    // Marketing site: normal back, then home fallback.
+    if (typeof window !== 'undefined' && window.history.length > 1) {
+      navigate(-1)
       return
     }
     navigate('/')
