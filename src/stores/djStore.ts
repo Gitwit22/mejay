@@ -180,9 +180,9 @@ const djStoreNoopStorage = {
 export const useDJStore = create<DJState>()(
   persist(
     (set, get) => {
-  let scheduledTimeouts: number[] = [];
-  let masterVolumeSaveTimeout: number | null = null;
-  let settingsSaveTimeout: number | null = null;
+  let scheduledTimeouts: Array<ReturnType<typeof setTimeout>> = [];
+  let masterVolumeSaveTimeout: ReturnType<typeof setTimeout> | null = null;
+  let settingsSaveTimeout: ReturnType<typeof setTimeout> | null = null;
   let queuedSettingsUpdates: Partial<Settings> = {};
 
   const FREE_UPLOAD_LIMIT_SECONDS = 30 * 60;
@@ -869,7 +869,36 @@ export const useDJStore = create<DJState>()(
     },
 
     importTracks: async (files: FileList) => {
-      const supportedTypes = ['audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/wav', 'audio/x-m4a'];
+      const supportedMimeTypes = new Set([
+        'audio/mpeg',
+        'audio/mp4',
+        'audio/aac',
+        'audio/wav',
+        'audio/x-m4a',
+        // Non-standard but seen in the wild (especially mobile browsers)
+        'audio/mp3',
+        'audio/x-mp3',
+        'audio/x-mpeg',
+        'audio/m4a',
+      ]);
+
+      const supportedExtensions = new Set(['mp3', 'm4a', 'aac', 'wav', 'mp4']);
+
+      const isSupportedAudioFile = (file: File) => {
+        const mime = (file.type || '').toLowerCase().trim();
+        if (mime) {
+          if (supportedMimeTypes.has(mime)) return true;
+          // If browser reports a generic audio/* but not one of our exact types, still allow.
+          if (mime.startsWith('audio/')) return true;
+          return false;
+        }
+
+        // iOS Safari / Files can return an empty MIME type; fall back to extension.
+        const name = (file.name || '').toLowerCase();
+        const ext = name.includes('.') ? name.split('.').pop() : '';
+        if (!ext) return false;
+        return supportedExtensions.has(ext);
+      };
 
       const planState = usePlanStore.getState();
       const isFree = planState.plan === 'free';
@@ -898,7 +927,7 @@ export const useDJStore = create<DJState>()(
       }
       
       for (const file of Array.from(files)) {
-        if (!supportedTypes.some(type => file.type.includes(type.split('/')[1]))) {
+        if (!isSupportedAudioFile(file)) {
           continue;
         }
 
@@ -1686,7 +1715,7 @@ export const useDJStore = create<DJState>()(
         const startDelayMs = Math.max(0, (incomingStartAt - now) * 1000);
         const stopDelayMs = Math.max(0, (stopAt - now) * 1000);
 
-        scheduledTimeouts.push(window.setTimeout(() => {
+        scheduledTimeouts.push(setTimeout(() => {
           if (nextDeck === 'A') {
             set(s => ({ deckA: { ...s.deckA, isPlaying: true } }));
           } else {
@@ -1694,7 +1723,7 @@ export const useDJStore = create<DJState>()(
           }
         }, startDelayMs));
 
-        scheduledTimeouts.push(window.setTimeout(() => {
+        scheduledTimeouts.push(setTimeout(() => {
           get().pause(currentDeck);
           audioEngine.resetMixTrigger();
           set((s) => ({
@@ -2058,7 +2087,7 @@ export const useDJStore = create<DJState>()(
       if (masterVolumeSaveTimeout !== null) {
         clearTimeout(masterVolumeSaveTimeout);
       }
-      masterVolumeSaveTimeout = window.setTimeout(() => {
+      masterVolumeSaveTimeout = setTimeout(() => {
         void updateSettings({ masterVolume: v });
       }, 250);
     },
@@ -2196,7 +2225,7 @@ export const useDJStore = create<DJState>()(
       if (settingsSaveTimeout !== null) {
         clearTimeout(settingsSaveTimeout);
       }
-      settingsSaveTimeout = window.setTimeout(() => {
+      settingsSaveTimeout = setTimeout(() => {
         const toSave = queuedSettingsUpdates;
         queuedSettingsUpdates = {};
         settingsSaveTimeout = null;

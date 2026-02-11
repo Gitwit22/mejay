@@ -52,6 +52,11 @@ export class CheckoutStatusError extends Error {
 }
 
 export async function startCheckout(plan: 'pro' | 'full_program') {
+  const fullProgramCheckoutEnabled = String(import.meta.env.VITE_ENABLE_FULL_PROGRAM_CHECKOUT || '').toLowerCase() === 'true'
+  if (plan === 'full_program' && !fullProgramCheckoutEnabled) {
+    throw new Error('Full Program is coming soon.')
+  }
+
   const {billingEnabled, setDevPlan, authBypassEnabled, refreshFromServer} = usePlanStore.getState()
   if (!billingEnabled) {
     setDevPlan(plan)

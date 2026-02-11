@@ -138,9 +138,9 @@ export function LibraryView() {
         ref={fileInputRef}
         id={fileInputId}
         type="file"
-        // Keep this simple for iOS Safari: using extensions here can cause it to ignore the filter
-        // and show photo/video sources in the picker.
-        accept="audio/*"
+        // iOS Safari can report empty/odd MIME types and sometimes greys out files if the filter
+        // is too strict. Allow common audio MIME types plus extensions.
+        accept="audio/*,audio/mpeg,audio/mp4,audio/aac,audio/wav,audio/x-m4a,.mp3,.m4a,.aac,.wav,.mp4"
         multiple
         onChange={handleFileSelect}
         // iOS Safari won’t open the picker reliably when the input is display:none.

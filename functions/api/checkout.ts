@@ -14,6 +14,8 @@ type Env = {
   STRIPE_PRICE_FULL_PROGRAM: string;
   DB: any;
   SESSION_PEPPER?: string;
+  /** Optional: allow enabling Full Program checkout explicitly. */
+  ALLOW_FULL_PROGRAM_CHECKOUT?: string;
 };
 
 type EntitlementsRow = {
@@ -133,6 +135,21 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
   const plan = body?.plan as Plan | undefined;
   if (plan !== "pro" && plan !== "full_program") {
     return json({ error: `Invalid plan. Use "pro" | "full_program".` }, 400);
+  }
+
+  // Packaging switch: Full Program is not ready for purchase yet.
+  // Keep an escape hatch for controlled enablement.
+  try {
+    const url = new URL(request.url)
+    const isLocal = url.hostname === '127.0.0.1' || url.hostname === 'localhost'
+    const allowFullProgram = isLocal || String(env.ALLOW_FULL_PROGRAM_CHECKOUT || '').toLowerCase() === 'true'
+    if (plan === 'full_program' && !allowFullProgram) {
+      return json({ error: 'Full Program is coming soon.' }, 403);
+    }
+  } catch {
+    if (plan === 'full_program') {
+      return json({ error: 'Full Program is coming soon.' }, 403);
+    }
   }
 
   const checkoutToken = typeof body?.checkoutToken === 'string' ? body.checkoutToken.trim() : '';

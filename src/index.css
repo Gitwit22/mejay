@@ -1937,8 +1937,15 @@
 }
 
 .mejay-pricing .coming-soon {
-  opacity: 0.6;
-  pointer-events: none;
+  opacity: 0.55;
+  filter: grayscale(0.35) saturate(0.6);
+}
+
+.mejay-pricing .pricing-card.coming-soon:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .mejay-pricing .coming-soon-badge {

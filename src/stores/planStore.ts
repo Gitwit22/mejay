@@ -365,10 +365,6 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       return true
     }
 
-    // Respect dev override and billing-off mode.
-    if (!get().billingEnabled) return false
-    if (get().planSource === 'dev') return false
-
     const res = await fetch('/api/account/me', {
       method: 'GET',
       cache: 'no-store',
@@ -400,12 +396,16 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       set({authStatus: 'authenticated', user: null})
     }
 
-    get().applyEntitlements({
-      accessType: accessType as 'free' | 'pro' | 'full_program',
-      hasFullAccess,
-      source: 'server',
-      reason: reason ?? 'refreshFromServer',
-    })
+    // Entitlements are only meaningful when billing is enabled and there is no dev override.
+    // Auth status is always hydrated regardless, so refresh doesn't force re-login.
+    if (get().billingEnabled && get().planSource !== 'dev') {
+      get().applyEntitlements({
+        accessType: accessType as 'free' | 'pro' | 'full_program',
+        hasFullAccess,
+        source: 'server',
+        reason: reason ?? 'refreshFromServer',
+      })
+    }
 
     return true
   },

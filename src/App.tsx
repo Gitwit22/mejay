@@ -86,10 +86,30 @@ const AppShellLayout = () => {
   useEffect(() => {
     // User request: refresh should land on the Welcome page.
     // We only do this on *hard reload* of /app, not normal in-app navigation.
-    if (!didRedirectFromAppReloadThisDocument && shouldRedirectToWelcomeOnMount()) {
-      didRedirectFromAppReloadThisDocument = true;
-      navigate("/", { replace: true });
+    if (didRedirectFromAppReloadThisDocument) return
+    if (!shouldRedirectToWelcomeOnMount()) return
+
+    const run = async () => {
+      const isBypassEnabled = usePlanStore.getState().authBypassEnabled
+      // If we have not yet checked the server session, do a best-effort check first.
+      // This prevents authenticated users from being bounced to / and thinking they got logged out.
+      if (!isBypassEnabled && usePlanStore.getState().authStatus === 'unknown') {
+        try {
+          await usePlanStore.getState().refreshFromServer({reason: 'reloadGate'})
+        } catch {
+          // ignore
+        }
+      }
+
+      // Only redirect to Welcome if the server says we are actually anonymous.
+      // If authenticated, keep the user in the app on refresh.
+      if (!isBypassEnabled && usePlanStore.getState().authStatus === 'anonymous') {
+        didRedirectFromAppReloadThisDocument = true
+        navigate('/', {replace: true})
+      }
     }
+
+    void run()
   }, [navigate]);
 
   useEffect(() => {

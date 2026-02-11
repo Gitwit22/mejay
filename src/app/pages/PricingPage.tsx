@@ -10,6 +10,7 @@ export default function PricingPage() {
   const location = useLocation()
   const navigate = useNavigate()
   const [isCheckingOut, setIsCheckingOut] = useState<'pro' | 'full_program' | null>(null)
+  const fullProgramCheckoutEnabled = String(import.meta.env.VITE_ENABLE_FULL_PROGRAM_CHECKOUT || '').toLowerCase() === 'true'
   const billingEnabled = usePlanStore((s) => s.billingEnabled)
   const setDevPlan = usePlanStore((s) => s.setDevPlan)
   const authBypassEnabled = usePlanStore((s) => s.authBypassEnabled)
@@ -33,6 +34,7 @@ export default function PricingPage() {
 
   const currentPlanId = authStatus === 'authenticated' ? plan : null
   const hasFullProgram = currentPlanId === 'full_program'
+  const isFullProgramComingSoon = currentPlanId !== 'full_program' && !fullProgramCheckoutEnabled
 
   const handleBack = () => {
     // Never use browser history here (can bounce to Stripe).
@@ -54,6 +56,10 @@ export default function PricingPage() {
   }, [])
 
   const handleCheckout = async (plan: 'pro' | 'full_program') => {
+    if (plan === 'full_program' && !fullProgramCheckoutEnabled) {
+      toast({title: 'Coming soon', description: 'Full Program is not available yet.'})
+      return
+    }
     if (!billingEnabled) {
       setDevPlan(plan === 'pro' ? 'pro' : 'full_program')
       toast({title: 'Billing disabled (dev)', description: 'Unlocked locally.'})
@@ -116,7 +122,7 @@ export default function PricingPage() {
       <main className="main-content">
         <section className="hero">
           <h1>Choose Your Plan</h1>
-          <p className="hero-subtitle">Start free, upgrade when you're ready. Pro is monthly. Full Program is lifetime.</p>
+          <p className="hero-subtitle">Start free, upgrade when you're ready. Pro is monthly. Full Program is coming soon.</p>
         </section>
 
         <div className="pricing-grid">
@@ -172,8 +178,9 @@ export default function PricingPage() {
             </button>
           </div>
 
-          <div className={`pricing-card${currentPlanId === 'full_program' ? ' current' : ''}`}>
-            {currentPlanId === 'full_program' ? <span className="plan-badge current">Current plan</span> : <span className="plan-badge">Lifetime</span>}
+          <div className={`pricing-card${currentPlanId === 'full_program' ? ' current' : ''}${isFullProgramComingSoon ? ' coming-soon' : ''}`}>
+            {isFullProgramComingSoon ? <span className="coming-soon-badge">Coming soon</span> : null}
+            {currentPlanId === 'full_program' ? <span className="plan-badge current">Current plan</span> : null}
             <div className="plan-name">Full Program</div>
             <div className="plan-description">One-time purchase, own it forever</div>
             <div className="plan-price">
@@ -189,10 +196,12 @@ export default function PricingPage() {
               type="button"
               className="plan-cta secondary"
               onClick={() => handleCheckout('full_program')}
-              disabled={currentPlanId === 'full_program' || isCheckingOut !== null}
+              disabled={currentPlanId === 'full_program' || !fullProgramCheckoutEnabled || isCheckingOut !== null}
             >
               {currentPlanId === 'full_program'
                 ? "You're on this plan"
+                : !fullProgramCheckoutEnabled
+                  ? 'Coming soon'
                 : isCheckingOut === 'full_program'
                   ? 'Starting checkout…'
                   : 'Buy Full Program'}
