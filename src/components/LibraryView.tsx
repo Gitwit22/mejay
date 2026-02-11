@@ -138,9 +138,10 @@ export function LibraryView() {
         ref={fileInputRef}
         id={fileInputId}
         type="file"
-        // iOS Safari can report empty/odd MIME types and sometimes greys out files if the filter
-        // is too strict. Allow common audio MIME types plus extensions.
-        accept="audio/*,audio/mpeg,audio/mp4,audio/aac,audio/wav,audio/x-m4a,.mp3,.m4a,.aac,.wav,.mp4"
+        // iOS Safari + Gmail downloads can label MP3 attachments as `application/octet-stream`,
+        // which makes them appear greyed out if we only accept `audio/*`.
+        // Keep this audio-only (no image/video) to avoid iOS offering camera/photo sources.
+        accept=".mp3,.m4a,.aac,.wav,.mp4,audio/*,video/*,audio/mpeg,audio/mp3,audio/x-m4a,audio/aac,audio/wav,application/octet-stream"
         multiple
         onChange={handleFileSelect}
         // iOS Safari won’t open the picker reliably when the input is display:none.

@@ -886,16 +886,34 @@ export const useDJStore = create<DJState>()(
 
       const isSupportedAudioFile = (file: File) => {
         const mime = (file.type || '').toLowerCase().trim();
+
+        const name = (file.name || '').toLowerCase();
+        const ext = name.includes('.') ? name.split('.').pop() : '';
+        const hasSupportedExt = !!ext && supportedExtensions.has(ext);
+
+        // Prefer extension checks first. On iOS, MIME can be empty or wrong.
+        // Gmail attachments are often `application/octet-stream` even for MP3.
+        if (hasSupportedExt) {
+          if (!mime) return true;
+          if (mime === 'application/octet-stream') return true;
+          if (supportedMimeTypes.has(mime)) return true;
+          if (mime.startsWith('audio/')) return true;
+          // Some providers incorrectly label audio files as video/*.
+          // Only allow video/* when the extension clearly indicates audio.
+          if (mime.startsWith('video/')) return true;
+          return false;
+        }
+
         if (mime) {
           if (supportedMimeTypes.has(mime)) return true;
           // If browser reports a generic audio/* but not one of our exact types, still allow.
           if (mime.startsWith('audio/')) return true;
+          // Some providers incorrectly label audio as octet-stream.
+          if (mime === 'application/octet-stream') return true;
           return false;
         }
 
         // iOS Safari / Files can return an empty MIME type; fall back to extension.
-        const name = (file.name || '').toLowerCase();
-        const ext = name.includes('.') ? name.split('.').pop() : '';
         if (!ext) return false;
         return supportedExtensions.has(ext);
       };
