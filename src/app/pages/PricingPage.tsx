@@ -29,6 +29,9 @@ export default function PricingPage() {
     if (!raw.startsWith('/')) return null
     if (raw.startsWith('//')) return null
     if (raw.includes('://')) return null
+    // Never send users back to login from the pricing "Back" button.
+    // If returnTo is polluted (e.g. nested returnTo), fall back to in-app default.
+    if (raw.startsWith('/login')) return null
     return raw
   }, [location.search])
 

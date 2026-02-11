@@ -24,6 +24,8 @@ export default function BillingPage() {
     if (!raw.startsWith('/')) return '/app?tab=party'
     if (raw.startsWith('//')) return '/app?tab=party'
     if (raw.includes('://')) return '/app?tab=party'
+    // Never send users back to login from the billing "Back" button.
+    if (raw.startsWith('/login')) return '/app?tab=party'
     return raw
   }, [location.search])
 

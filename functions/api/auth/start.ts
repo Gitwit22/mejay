@@ -21,6 +21,10 @@ type Env = {
   // Email (Resend) for login codes
   RESEND_API_KEY?: string
   RESEND_FROM?: string
+  // Fallback names (some hosting dashboards use these)
+  EMAIL_FROM?: string
+  FROM_EMAIL?: string
+  MAIL_FROM?: string
 }
 
 const json = (body: unknown, init?: ResponseInit) =>
@@ -96,8 +100,25 @@ async function applyIpRateLimit(args: {env: Env; request: Request; purpose: Purp
 async function sendLoginCodeEmail(args: {env: Env; to: string; code: string; origin: string}) {
   const {env, to, code, origin} = args
 
+  const resolveFrom = () => {
+    const candidates: Array<[key: string, value: string]> = [
+      ['RESEND_FROM', (env.RESEND_FROM ?? '').trim()],
+      ['EMAIL_FROM', (env.EMAIL_FROM ?? '').trim()],
+      ['FROM_EMAIL', (env.FROM_EMAIL ?? '').trim()],
+      ['MAIL_FROM', (env.MAIL_FROM ?? '').trim()],
+    ]
+    const chosen = candidates.find(([, v]) => !!v)
+    return {
+      from: chosen?.[1] ?? '',
+      fromKey: chosen?.[0] ?? null,
+      checkedKeys: candidates.map(([k]) => k),
+      presentByKey: Object.fromEntries(candidates.map(([k, v]) => [k, !!v])) as Record<string, boolean>,
+    }
+  }
+
   const apiKey = (env.RESEND_API_KEY ?? '').trim()
-  const from = (env.RESEND_FROM ?? '').trim()
+  const fromInfo = resolveFrom()
+  const from = fromInfo.from
   if (!apiKey || !from) {
     return {
       sent: false as const,
@@ -105,6 +126,9 @@ async function sendLoginCodeEmail(args: {env: Env; to: string; code: string; ori
       details: {
         apiKeyPresent: !!apiKey,
         fromPresent: !!from,
+        fromKeyUsed: fromInfo.fromKey,
+        fromKeysChecked: fromInfo.checkedKeys,
+        fromPresentByKey: fromInfo.presentByKey,
       },
     }
   }

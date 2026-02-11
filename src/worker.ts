@@ -12,6 +12,10 @@ export interface Env {
   // Email (Resend) for login codes
   RESEND_API_KEY?: string;
   RESEND_FROM?: string;
+  // Fallback names (some hosting dashboards use these)
+  EMAIL_FROM?: string;
+  FROM_EMAIL?: string;
+  MAIL_FROM?: string;
 }
 
 type AccessType = "free" | "pro" | "full_program";
@@ -96,7 +100,12 @@ async function sendLoginCodeEmail(args: { env: Env; to: string; code: string; or
   const { env, to, code, origin } = args;
 
   const apiKey = (env.RESEND_API_KEY ?? "").trim();
-  const from = (env.RESEND_FROM ?? "").trim();
+  const from = (
+    (env.RESEND_FROM ?? "").trim() ||
+    (env.EMAIL_FROM ?? "").trim() ||
+    (env.FROM_EMAIL ?? "").trim() ||
+    (env.MAIL_FROM ?? "").trim()
+  );
   if (!apiKey || !from) return { sent: false as const, reason: "resend_not_configured" as const };
 
   const subject = "Your MEJay sign-in code";

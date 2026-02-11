@@ -182,6 +182,8 @@ To enable this, configure these environment variables in Cloudflare Pages (Proje
 - `RESEND_API_KEY`
 - `RESEND_FROM` (must be a verified sender in Resend, e.g. `MEJay <support@yourdomain.com>`)
 
+Sender fallback: the backend will also accept `EMAIL_FROM`, `FROM_EMAIL`, or `MAIL_FROM` if `RESEND_FROM` is not set (but `RESEND_FROM` is the recommended canonical name).
+
 ## Login code email (Resend)
 
 The login flow uses email verification codes:
@@ -197,6 +199,8 @@ To enable login emails in production, set these environment variables in the env
 
 - `RESEND_API_KEY`
 - `RESEND_FROM` (verified sender in Resend)
+
+Sender fallback: the backend will also accept `EMAIL_FROM`, `FROM_EMAIL`, or `MAIL_FROM` if `RESEND_FROM` is not set.
 
 If you are using Cloudflare Pages Functions (the default in this repo), set them in Cloudflare Pages (Project → Settings → Environment variables).
 

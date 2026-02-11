@@ -1,12 +1,13 @@
 {
   "extends": "./tsconfig.app.json",
   "compilerOptions": {
-    "types": ["vitest/globals"],
+    "types": ["vite/client", "vitest/globals"],
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "noEmit": true
   },
   "exclude": [],
   "include": [
+    "src/vite-env.d.ts",
     "src/**/*.test.*",
     "src/**/*.spec.*",
     "src/test/**/*"

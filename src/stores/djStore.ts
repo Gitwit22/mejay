@@ -142,6 +142,7 @@ interface DJState {
   createPlaylist: (name: string) => Promise<void>;
   addTrackToPlaylist: (playlistId: string, trackId: string) => Promise<void>;
   removeTrackFromPlaylist: (playlistId: string, trackId: string) => Promise<void>;
+  clearPlaylistTracks: (playlistId: string) => Promise<void>;
   reorderPlaylistTracks: (playlistId: string, fromIndex: number, toIndex: number) => Promise<void>;
   deletePlaylistById: (id: string) => Promise<void>;
   
@@ -2343,6 +2344,29 @@ export const useDJStore = create<DJState>()(
     removeTrackFromPlaylist: async (playlistId: string, trackId: string) => {
       // Back-compat: treat as "remove from this playlist" with queue + currently-playing handling.
       await get().removeFromPlaylist(playlistId, trackId);
+    },
+
+    clearPlaylistTracks: async (playlistId: string) => {
+      const stateBefore = get();
+      const playlist = stateBefore.playlists.find((p) => p.id === playlistId);
+      if (!playlist) return;
+      if (playlist.trackIds.length === 0) return;
+
+      await updatePlaylist(playlistId, {trackIds: []});
+      set((state) => ({
+        playlists: state.playlists.map((p) => (p.id === playlistId ? {...p, trackIds: []} : p)),
+      }));
+
+      const stateMid = get();
+      if (stateMid.isPartyMode && stateMid.partySource?.type === 'playlist' && stateMid.partySource.playlistId === playlistId) {
+        // Clearing the active playlist source implies there is nothing left to play.
+        get().stopPartyMode();
+      }
+
+      toast({
+        title: 'Playlist cleared',
+        description: `Removed all tracks from "${playlist.name}".`,
+      });
     },
 
     reorderPlaylistTracks: async (playlistId: string, fromIndex: number, toIndex: number) => {
