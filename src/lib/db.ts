@@ -35,6 +35,8 @@ export interface Settings {
   crossfadeSeconds: number;
   maxTempoPercent: number;
   shuffleEnabled: boolean;
+  /** When false, imported audio is kept in-memory only (not persisted to IndexedDB). */
+  keepImportsOnDevice: boolean;
   // Master output
   masterVolume: number; // 0..1
   // Mix timing controls
@@ -260,6 +262,7 @@ export async function getSettings(): Promise<Settings> {
     crossfadeSeconds: 8,
     maxTempoPercent: DEFAULT_MAX_SHIFT_PCT,
     shuffleEnabled: false,
+    keepImportsOnDevice: true,
     masterVolume: 0.9,
     nextSongStartOffset: 15,
     endEarlySeconds: 5,

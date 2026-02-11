@@ -48,6 +48,9 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   const [licenseKey, setLicenseKey] = useState('')
   const [resetAlsoClearLicense, setResetAlsoClearLicense] = useState(false)
 
+  const keepImportsOnDevice = useDJStore((s) => s.settings.keepImportsOnDevice)
+  const updateUserSettings = useDJStore((s) => s.updateUserSettings)
+
   const {plan, authStatus} = usePlanStore()
 
   const {
@@ -471,6 +474,29 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                 <CollapsibleContent>
                   <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm">
                     <div className="p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium">Keep imported songs on this device</div>
+                          <div className="text-xs text-muted-foreground">Keeps your imports after refresh (recommended)</div>
+                        </div>
+                        <Checkbox
+                          id="keep-imports-on-device"
+                          checked={keepImportsOnDevice !== false}
+                          onCheckedChange={(v) => {
+                            void updateUserSettings({keepImportsOnDevice: Boolean(v)})
+                              .catch(() => {
+                                toast({
+                                  title: 'Could not save setting',
+                                  description: 'Your browser blocked saving device settings.',
+                                  variant: 'destructive',
+                                })
+                              })
+                          }}
+                        />
+                      </div>
+
+                      <div className="h-4" />
+
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
                           <Button type="button" variant="outline" className="w-full">

@@ -505,6 +505,7 @@ export const useDJStore = create<DJState>()(
     // Default 8%; hard cap enforced elsewhere.
     maxTempoPercent: 8,
     shuffleEnabled: false,
+    keepImportsOnDevice: true,
     masterVolume: 0.9,
     nextSongStartOffset: 15,
     endEarlySeconds: 5,
@@ -923,6 +924,8 @@ export const useDJStore = create<DJState>()(
 
       if (!files || files.length === 0) return;
 
+      const keepImportsOnDevice = get().settings.keepImportsOnDevice !== false;
+
       // Track total imported duration to enforce quota. (Only counts tracks with file blobs.)
       const computeLibrarySeconds = () => {
         const state = get();
@@ -949,8 +952,6 @@ export const useDJStore = create<DJState>()(
       let importedCount = 0;
       let skippedUnsupportedCount = 0;
       let failedCount = 0;
-      let idbFailed = false;
-      let idbErrorMessage: string | null = null;
       
       for (const file of Array.from(files)) {
         try {
@@ -1002,15 +1003,13 @@ export const useDJStore = create<DJState>()(
           }
         }
 
-        try {
-          await addTrack(track);
-        } catch (e) {
-          failedCount += 1;
-          idbFailed = true;
-          const message = e instanceof Error ? e.message : String(e);
-          idbErrorMessage = idbErrorMessage ?? message;
-          console.error('[DJ Store] Failed to persist imported track to IndexedDB:', e);
-          // Fallback: still add to in-memory state so the user can play it in this session.
+        if (keepImportsOnDevice) {
+          try {
+            await addTrack(track);
+          } catch (e) {
+            console.error('[DJ Store] Failed to persist imported track to IndexedDB:', e);
+            // Fallback: still add to in-memory state so the user can play it in this session.
+          }
         }
 
         importedCount += 1;
@@ -1081,7 +1080,9 @@ export const useDJStore = create<DJState>()(
             gainDb,
           };
           
-          await updateTrack(id, updates);
+          if (keepImportsOnDevice) {
+            await updateTrack(id, updates);
+          }
           set(state => ({
             tracks: state.tracks.map(t =>
               t.id === id ? { ...t, ...updates } : t
@@ -1089,7 +1090,9 @@ export const useDJStore = create<DJState>()(
           }));
         } catch (e) {
           console.error('BPM analysis failed:', e);
-          await updateTrack(id, { analysisStatus: 'basic' });
+          if (keepImportsOnDevice) {
+            await updateTrack(id, { analysisStatus: 'basic' });
+          }
           set(state => ({
             tracks: state.tracks.map(t =>
               t.id === id ? { ...t, analysisStatus: 'basic' as const } : t
@@ -1122,16 +1125,6 @@ export const useDJStore = create<DJState>()(
         title: `Imported ${importedCount} track${importedCount === 1 ? '' : 's'}`,
         description: parts.length > 0 ? parts.join(' • ') : 'Analyzing BPM in the background.',
       });
-
-      if (idbFailed) {
-        toast({
-          title: 'Storage warning',
-          description:
-            'Your device blocked saving imports for offline use (IndexedDB). You can still play them now, but they may disappear after refresh. ' +
-            (idbErrorMessage ? `Details: ${idbErrorMessage}` : ''),
-          variant: 'destructive',
-        });
-      }
     },
 
     deleteTrackById: async (id: string) => {
