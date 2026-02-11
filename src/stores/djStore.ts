@@ -921,6 +921,8 @@ export const useDJStore = create<DJState>()(
       const planState = usePlanStore.getState();
       const isFree = planState.plan === 'free';
 
+      if (!files || files.length === 0) return;
+
       // Track total imported duration to enforce quota. (Only counts tracks with file blobs.)
       const computeLibrarySeconds = () => {
         const state = get();
@@ -943,11 +945,19 @@ export const useDJStore = create<DJState>()(
         showLimitToast();
         return;
       }
+
+      let importedCount = 0;
+      let skippedUnsupportedCount = 0;
+      let failedCount = 0;
+      let idbFailed = false;
+      let idbErrorMessage: string | null = null;
       
       for (const file of Array.from(files)) {
-        if (!isSupportedAudioFile(file)) {
-          continue;
-        }
+        try {
+          if (!isSupportedAudioFile(file)) {
+            skippedUnsupportedCount += 1;
+            continue;
+          }
 
         const id = generateId();
         const track: Track = {
@@ -992,7 +1002,18 @@ export const useDJStore = create<DJState>()(
           }
         }
 
-        await addTrack(track);
+        try {
+          await addTrack(track);
+        } catch (e) {
+          failedCount += 1;
+          idbFailed = true;
+          const message = e instanceof Error ? e.message : String(e);
+          idbErrorMessage = idbErrorMessage ?? message;
+          console.error('[DJ Store] Failed to persist imported track to IndexedDB:', e);
+          // Fallback: still add to in-memory state so the user can play it in this session.
+        }
+
+        importedCount += 1;
         set(state => {
           const nextTracks = [...state.tracks, track];
 
@@ -1075,6 +1096,41 @@ export const useDJStore = create<DJState>()(
             ),
           }));
         }
+        } catch (e) {
+          failedCount += 1;
+          console.error('[DJ Store] Import failed for file:', file?.name, e);
+        }
+      }
+
+      if (importedCount === 0) {
+        if (skippedUnsupportedCount > 0) {
+          toast({
+            title: 'No supported audio files',
+            description: 'Those files were skipped. Try .mp3, .m4a, .aac, .wav, or .mp4 (audio).',
+            variant: 'destructive',
+          });
+        }
+        return;
+      }
+
+      const parts: string[] = [];
+      if (skippedUnsupportedCount > 0) parts.push(`${skippedUnsupportedCount} skipped`);
+      // failedCount includes IDB failures + per-file exceptions; keep it as a hint.
+      if (failedCount > 0) parts.push(`${failedCount} issue${failedCount === 1 ? '' : 's'}`);
+
+      toast({
+        title: `Imported ${importedCount} track${importedCount === 1 ? '' : 's'}`,
+        description: parts.length > 0 ? parts.join(' • ') : 'Analyzing BPM in the background.',
+      });
+
+      if (idbFailed) {
+        toast({
+          title: 'Storage warning',
+          description:
+            'Your device blocked saving imports for offline use (IndexedDB). You can still play them now, but they may disappear after refresh. ' +
+            (idbErrorMessage ? `Details: ${idbErrorMessage}` : ''),
+          variant: 'destructive',
+        });
       }
     },
 

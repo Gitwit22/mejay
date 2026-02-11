@@ -58,7 +58,16 @@ export function LibraryView() {
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files && files.length > 0) {
-      await importTracks(files);
+      try {
+        await importTracks(files);
+      } catch (error) {
+        console.error('[Library] Import failed:', error);
+        toast({
+          title: 'Import failed',
+          description: 'Something blocked the import on this device. Try again, or try a different browser (Safari) and ensure Private Browsing is off.',
+          variant: 'destructive',
+        });
+      }
     }
     // Reset input
     e.target.value = '';
