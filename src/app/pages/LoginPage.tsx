@@ -17,7 +17,14 @@ export default function LoginPage() {
 
   const returnTo = useMemo(() => {
     const rt = searchParams.get('returnTo')
-    return rt && rt.startsWith('/') ? rt : '/app'
+    const raw = (rt ?? '').trim()
+    if (!raw) return '/app'
+    if (!raw.startsWith('/')) return '/app'
+    if (raw.startsWith('//')) return '/app'
+    if (raw.includes('://')) return '/app'
+    // Never redirect *to* login after a successful login.
+    if (raw.startsWith('/login') || raw.includes('/login')) return '/app'
+    return raw
   }, [searchParams])
 
   const [mode, setMode] = useState<Mode>('password')

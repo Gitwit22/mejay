@@ -31,7 +31,7 @@ export default function PricingPage() {
     if (raw.includes('://')) return null
     // Never send users back to login from the pricing "Back" button.
     // If returnTo is polluted (e.g. nested returnTo), fall back to in-app default.
-    if (raw.startsWith('/login')) return null
+    if (raw.startsWith('/login') || raw.includes('/login')) return null
     return raw
   }, [location.search])
 
@@ -46,7 +46,9 @@ export default function PricingPage() {
       return
     }
 
-    if (isInApp) {
+    // If the user is authenticated, prefer keeping them inside the app shell.
+    // This also handles the public /pricing route used from the marketing pages.
+    if (isInApp || authStatus === 'authenticated') {
       navigate('/app?tab=party', {replace: true})
       return
     }
@@ -155,11 +157,19 @@ export default function PricingPage() {
 
           <div className={`pricing-card featured${currentPlanId === 'pro' ? ' current' : ''}`}>
             {currentPlanId === 'pro' ? <span className="plan-badge current">Current plan</span> : <span className="plan-badge">Most Popular</span>}
-            <div className="plan-name">MEJay Pro</div>
+            <div className="plan-name">
+              Early Access Pro – Limited Time
+              <span className="plan-badge" style={{marginLeft: '0.5rem', verticalAlign: 'middle'}}>
+                Founders Rate
+              </span>
+            </div>
             <div className="plan-description">Advanced features while you subscribe</div>
             <div className="plan-price">
               <span className="price-amount">$5</span>
               <span className="price-period">/month</span>
+            </div>
+            <div className="plan-description" style={{marginTop: '-0.5rem'}}>
+              Lock in this price before public release.
             </div>
             <ul className="plan-features">
               <li>All Pro DJ features unlocked</li>
