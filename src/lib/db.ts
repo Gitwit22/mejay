@@ -254,9 +254,11 @@ export async function clearTracksAndPlaylists(): Promise<void> {
 export async function getSettings(): Promise<Settings> {
   const db = await getDB();
   const settings = await db.get('settings', 'default');
+  const DEFAULT_MAX_SHIFT_PCT = 8;
+  const ABSOLUTE_MAX_SHIFT_PCT = 12;
   const defaults: Settings = {
     crossfadeSeconds: 8,
-    maxTempoPercent: 150,
+    maxTempoPercent: DEFAULT_MAX_SHIFT_PCT,
     shuffleEnabled: false,
     masterVolume: 0.9,
     nextSongStartOffset: 15,
@@ -280,7 +282,7 @@ export async function getSettings(): Promise<Settings> {
   // Normalize tempo safety clamp.
   const rawMaxTempoPercent = Number((merged as any).maxTempoPercent);
   const clampedMaxTempoPercent = Number.isFinite(rawMaxTempoPercent)
-    ? Math.max(0, Math.min(300, rawMaxTempoPercent))
+    ? Math.max(0, Math.min(ABSOLUTE_MAX_SHIFT_PCT, rawMaxTempoPercent))
     : defaults.maxTempoPercent;
   const snappedMaxTempoPercent = Math.round(clampedMaxTempoPercent);
 

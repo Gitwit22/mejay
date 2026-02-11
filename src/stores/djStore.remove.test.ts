@@ -8,6 +8,7 @@ vi.mock('@/stores/planStore', () => ({
   usePlanStore: {
     getState: () => ({
       plan: 'pro',
+      hasFeature: vi.fn(() => true),
       openUpgradeModal: vi.fn(),
     }),
   },
@@ -18,24 +19,69 @@ vi.mock('@/lib/bpmDetector', () => ({
 }))
 
 vi.mock('@/lib/audioEngine', () => {
+  let _onTimeUpdate: any;
+  let _onTrackEnd: any;
+  let _onMixTrigger: any;
+
   const audioEngine = {
     pause: vi.fn(),
     play: vi.fn(),
+    playAt: vi.fn(),
     stop: vi.fn(),
     destroy: vi.fn(),
 
     isPlaying: vi.fn(() => false),
+    getAudioContextTime: vi.fn(() => 0),
+    getDuration: vi.fn(() => 180),
+    getCurrentTime: vi.fn(() => 0),
     getTempo: vi.fn(() => 1),
+    getEffectiveTempo: vi.fn(() => 1),
     setTempo: vi.fn(),
+    rampTempo: vi.fn(),
 
     seek: vi.fn(),
     setCrossfade: vi.fn(),
+    scheduleCrossfade: vi.fn(),
+    scheduleStop: vi.fn(),
     enableMixCheck: vi.fn(),
     setMixTriggerConfig: vi.fn(),
+    resetMixTrigger: vi.fn(),
 
     loadTrack: vi.fn(async () => 180),
     loadTrackWithOffset: vi.fn(async () => 180),
     setBaseBpm: vi.fn(),
+    getBaseBpm: vi.fn(() => 120),
+
+    setLimiterEnabled: vi.fn(),
+    setLimiterStrength: vi.fn(),
+    setMasterVolume: vi.fn(),
+
+    setTrackGain: vi.fn(),
+
+    getNextBeatTimeFrom: vi.fn(() => null),
+
+    setOnTimeUpdate: vi.fn((cb: any) => {
+      _onTimeUpdate = cb;
+    }),
+    setOnTrackEnd: vi.fn((cb: any) => {
+      _onTrackEnd = cb;
+    }),
+    setOnMixTrigger: vi.fn((cb: any) => {
+      _onMixTrigger = cb;
+    }),
+
+    // Expose captured callbacks for potential future tests.
+    __test: {
+      get onTimeUpdate() {
+        return _onTimeUpdate;
+      },
+      get onTrackEnd() {
+        return _onTrackEnd;
+      },
+      get onMixTrigger() {
+        return _onMixTrigger;
+      },
+    },
 
     analyzeLoudness: vi.fn(async () => ({ loudnessDb: -14 })),
     calculateGain: vi.fn(() => 0),
@@ -68,8 +114,8 @@ vi.mock('@/lib/db', () => ({
 }))
 
 import { useDJStore } from './djStore'
-import { audioEngine } from '../lib/audioEngine'
-import { deleteTrack, updatePlaylist } from '../lib/db'
+import { audioEngine } from '@/lib/audioEngine'
+import { deleteTrack, updatePlaylist } from '@/lib/db'
 
 const makeTrack = (id: string) => ({
   id,

@@ -3,6 +3,7 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { Track, Settings, getAllTracks, getSettings, addTrack, updateTrack, deleteTrack, updateSettings, generateId, getAllPlaylists, Playlist, addPlaylist, updatePlaylist, deletePlaylist, PartySource, resetLocalDatabase, clearTracksAndPlaylists } from '@/lib/db';
 import { audioEngine, DeckId } from '@/lib/audioEngine';
 import { analyzeBPM } from '@/lib/bpmDetector';
+import { computeRequiredTempoShiftPercent, isOverTempoCap, resolveMaxTempoPercent } from '@/lib/tempoMatch';
 // Note: Energy Mode automation removed; mixing uses manual sliders only.
 import { usePlanStore } from '@/stores/planStore';
 import { toast } from '@/hooks/use-toast';
@@ -53,6 +54,37 @@ interface DJState {
 
   // Internal guard to prevent overlapping mixes
   mixInProgress: boolean;
+
+  // UI hint when tempo matching is disabled for a transition.
+  lastTransitionTempoMatchDisabled: boolean;
+  lastTransitionTempoMatchRequiredPct: number | null;
+  lastTransitionTempoMatchCeilingPct: number | null;
+
+  // Debuggable snapshot of the last transition tempo plan.
+  lastTransitionTempoPlan: {
+    mode: 'party' | 'autoMatch' | 'locked' | 'original';
+    nextBaseBpmUsed: number | null;
+    outgoingBaseBpmUsed: number | null;
+    targetBpmUsed: number | null;
+    targetBpm: number | null;
+    outgoingTargetRatio: number;
+    incomingTargetRatio: number;
+    requiredIncomingPercent: number | null;
+    requiredOutgoingPercent: number | null;
+    requiredPercent: number | null;
+    capPctUsed: number | null;
+    overCap: boolean | null;
+    tempoMatchDisabled: boolean;
+    disabledReason: 'over_cap' | 'missing_bpm' | 'user_disabled' | null;
+    possibleHalfDouble: boolean;
+    altTargetBpm: number | null;
+    postTransitionPolicy: 'hold' | 'revert' | 'neutralTo1.0';
+    rampStartAt: number | null;
+    rampEndAt: number | null;
+    rampSecWanted: number | null;
+    rampSecActual: number | null;
+    quantizedTo: '16bar' | '8bar' | '4bar' | '1bar' | null;
+  } | null;
   
   // Actions
   loadTracks: () => Promise<void>;
@@ -171,6 +203,72 @@ export const useDJStore = create<DJState>()(
   const computeTempoRampSecFromCrossfade = (crossfadeSec: number): number => {
     const x = clamp(Number.isFinite(crossfadeSec) ? crossfadeSec : 8, 1, 20);
     return clamp(x * 2, 4, 20);
+  };
+
+  const barsToBeats = (bars: number) => Math.max(1, Math.round(bars)) * 4;
+
+  const quantizeNextUpTo = (
+    deck: DeckId,
+    fromTime: number,
+    beatMultiples: number[],
+    playbackRateOverride: number | undefined,
+    latestAllowedTime: number
+  ): number => {
+    for (const beats of beatMultiples) {
+      const t = audioEngine.getNextBeatTimeFrom(deck, fromTime, beats, playbackRateOverride) ?? fromTime;
+      if (t <= latestAllowedTime + 1e-6) return t;
+    }
+    return Math.min(latestAllowedTime, audioEngine.getNextBeatTimeFrom(deck, fromTime, beatMultiples[beatMultiples.length - 1] ?? 4, playbackRateOverride) ?? fromTime);
+  };
+
+  const quantizeNextUpToWithInfo = (
+    deck: DeckId,
+    fromTime: number,
+    beatMultiples: number[],
+    playbackRateOverride: number | undefined,
+    latestAllowedTime: number
+  ): { time: number; beatMultipleUsed: number } => {
+    for (const beats of beatMultiples) {
+      const t = audioEngine.getNextBeatTimeFrom(deck, fromTime, beats, playbackRateOverride) ?? fromTime;
+      if (t <= latestAllowedTime + 1e-6) return { time: t, beatMultipleUsed: beats };
+    }
+    const fallbackBeats = beatMultiples[beatMultiples.length - 1] ?? 4;
+    const t = Math.min(
+      latestAllowedTime,
+      audioEngine.getNextBeatTimeFrom(deck, fromTime, fallbackBeats, playbackRateOverride) ?? fromTime
+    );
+    return { time: t, beatMultipleUsed: fallbackBeats };
+  };
+
+  const beatMultipleToQuantizedLabel = (beats: number): '16bar' | '8bar' | '4bar' | '1bar' => {
+    const b = Math.max(1, Math.round(beats));
+    if (b >= barsToBeats(16)) return '16bar';
+    if (b >= barsToBeats(8)) return '8bar';
+    if (b >= barsToBeats(4)) return '4bar';
+    return '1bar';
+  };
+
+  const chooseBeatAlignedTimeInRange = (
+    deck: DeckId,
+    idealTime: number,
+    beatMultiple: number,
+    minTime: number,
+    maxTime: number,
+    playbackRateOverride: number | undefined
+  ): number => {
+    // Prefer snapping EARLIER (prev) so we don't start late,
+    // but keep it inside the allowed window.
+    const inRange = (t: number | null) => t !== null && t >= minTime - 1e-6 && t <= maxTime + 1e-6;
+
+    const prev = audioEngine.getPrevBeatTimeFrom(deck, idealTime, beatMultiple, playbackRateOverride);
+    if (inRange(prev)) return prev as number;
+
+    // If prev is too early, try the next boundary at/after the window start.
+    const nextFromMin = audioEngine.getNextBeatTimeFrom(deck, minTime, beatMultiple, playbackRateOverride);
+    if (inRange(nextFromMin)) return nextFromMin as number;
+
+    // Last resort: clamp. (Should be rare; mainly protects against missing context time.)
+    return clamp(idealTime, minTime, maxTime);
   };
 
   const shuffleArray = <T,>(items: T[]): T[] => {
@@ -403,7 +501,9 @@ export const useDJStore = create<DJState>()(
 
   const defaultSettings: Settings = {
     crossfadeSeconds: 8,
-    maxTempoPercent: 150,
+    // Tempo stretch safety rails (percent away from 1.0×).
+    // Default 8%; hard cap enforced elsewhere.
+    maxTempoPercent: 8,
     shuffleEnabled: false,
     masterVolume: 0.9,
     nextSongStartOffset: 15,
@@ -471,10 +571,10 @@ export const useDJStore = create<DJState>()(
     // Tempo ramp + settle + quantization window (worst-case) — in REAL seconds.
     const rampSec = computeTempoRampSecFromCrossfade(effectiveCrossfadeSeconds);
     const settleSec = beatSec * energy.settleBeats;
-    const quantWindowSec = Math.max(
-      energy.startQuantBeats >= 4 ? barSec : beatSec,
-      energy.fadeQuantBeats >= 4 ? barSec : beatSec
-    );
+    // Phrase-aware quantization window: we may align to 4/8/16 bars depending on timing.
+    // Use a conservative worst-case so auto-mix triggers early enough.
+    const maxPhraseBars = effectiveCrossfadeSeconds >= 10 ? 16 : 8;
+    const quantWindowSec = barSec * maxPhraseBars;
 
     // Chill 2-step can include an extra 1-bar wait.
     const bpmDelta = Math.abs((outgoingTrack?.bpm ?? 120) - targetBpm);
@@ -633,6 +733,10 @@ export const useDJStore = create<DJState>()(
     settings: defaultSettings,
     crossfadeValue: 0,
     mixInProgress: false,
+    lastTransitionTempoMatchDisabled: false,
+    lastTransitionTempoMatchRequiredPct: null,
+    lastTransitionTempoMatchCeilingPct: null,
+    lastTransitionTempoPlan: null,
 
     loadTracks: async () => {
       set({ isLoadingTracks: true });
@@ -1272,6 +1376,30 @@ export const useDJStore = create<DJState>()(
       // - Keep the new track at that matched tempo after transition (Option A)
       const tempoControlEnabled = usePlanStore.getState().hasFeature('tempoControl');
       const nextBaseBpm = nextTrack?.bpm || 120;
+      const outgoingBaseBpm = currentTrack?.bpm || audioEngine.getBaseBpm(currentDeck) || 120;
+
+      const nudge = Number.isFinite(settings.autoOffsetBpm) ? (settings.autoOffsetBpm ?? 0) : 0;
+      const nudgeNeutral = settings.tempoMode === 'auto' && Math.abs(nudge) < 1e-4;
+
+      const hasIncomingBpm = Number.isFinite(nextTrack?.bpm) && (nextTrack?.bpm as number) > 0;
+      const hasOutgoingBpm = Number.isFinite(outgoingBaseBpm) && outgoingBaseBpm > 0;
+
+      const halfDoubleTelemetry = (() => {
+        const incoming = Number.isFinite(nextBaseBpm) ? nextBaseBpm : 0;
+        const outgoing = Number.isFinite(outgoingBaseBpm) ? outgoingBaseBpm : 0;
+        if (!incoming || !outgoing) return { possibleHalfDouble: false, altTargetBpm: null as number | null };
+
+        // Telemetry-only heuristic: BPM analyzers frequently land at 1/2× or 2×.
+        // Flag cases where the two tracks are close under a 2× relationship.
+        const thresholdBpm = 2;
+        if (Math.abs(outgoing - incoming * 2) <= thresholdBpm) {
+          return { possibleHalfDouble: true, altTargetBpm: incoming * 2 };
+        }
+        if (Math.abs(incoming - outgoing * 2) <= thresholdBpm) {
+          return { possibleHalfDouble: true, altTargetBpm: outgoing * 2 };
+        }
+        return { possibleHalfDouble: false, altTargetBpm: null as number | null };
+      })();
 
       const computeTransitionTargetBpm = (): number => {
         if (!tempoControlEnabled) return nextBaseBpm;
@@ -1279,8 +1407,9 @@ export const useDJStore = create<DJState>()(
           return Number.isFinite(settings.lockedBpm) && settings.lockedBpm > 0 ? settings.lockedBpm : nextBaseBpm;
         }
         if (settings.tempoMode === 'auto') {
-          const offset = Number.isFinite(settings.autoOffsetBpm) ? settings.autoOffsetBpm : 0;
-          const target = nextBaseBpm + offset;
+          // Party Mode behavior: match into the *incoming track's BPM* (+ nudge).
+          // Auto Match baseline is still used outside Party Mode (deck-level control).
+          const target = nextBaseBpm + nudge;
           return Number.isFinite(target) && target > 1 ? target : nextBaseBpm;
         }
         return nextBaseBpm;
@@ -1302,8 +1431,6 @@ export const useDJStore = create<DJState>()(
 
       // Fixed "normal" profile for quantization/ramp/settle behavior.
       const energy = {
-        startQuantBeats: 1,
-        fadeQuantBeats: 1,
         settleBeats: 2,
         stepLargeDeltas: false,
       };
@@ -1325,50 +1452,132 @@ export const useDJStore = create<DJState>()(
 
       const beatSec = 60 / Math.max(1, targetBpm);
       const barSec = beatSec * 4;
-      const rampSec = computeTempoRampSecFromCrossfade(effectiveCrossfadeSeconds);
-      const rampMs = Math.round(rampSec * 1000);
+      const rampSecWanted = computeTempoRampSecFromCrossfade(effectiveCrossfadeSeconds);
       const settleSec = beatSec * energy.settleBeats;
-
-      const outgoingBaseBpm = currentTrack?.bpm || audioEngine.getBaseBpm(currentDeck) || 120;
       const bpmDeltaIncoming = Math.abs(targetBpm - nextBaseBpm);
       const bpmDeltaOutgoing = Math.abs(targetBpm - outgoingBaseBpm);
       const bpmDelta = Math.max(bpmDeltaIncoming, bpmDeltaOutgoing);
 
       // Pre-roll needed to ramp + settle before crossfade begins.
       const preRollSec = energy.stepLargeDeltas && bpmDelta > 6
-        ? (rampSec + barSec + rampSec + settleSec)
-        : (rampSec + settleSec);
+        ? (rampSecWanted + barSec + rampSecWanted + settleSec)
+        : (rampSecWanted + settleSec);
 
       let incomingStartAt: number;
       let fadeAt: number;
 
       // Compute the outgoing deck's matched playbackRate (used for beat quantization + ramp scheduling).
-      const outgoingTargetRatio = tempoControlEnabled
+      const tempoMatchSafeModeEnabled = tempoControlEnabled && settings.tempoMode === 'auto';
+      // Product: Auto-sync is a safety feature.
+      // Soft default is handled via settings defaults (8%). Hard cap is maxTempoPercent (clamped to 12%).
+      const safeModeShiftCeilingPct = Math.max(0, resolveMaxTempoPercent(settings?.maxTempoPercent, 8));
+      const requiredIncomingShiftPct = computeRequiredTempoShiftPercent(nextBaseBpm, targetBpm);
+      const requiredOutgoingShiftPct = computeRequiredTempoShiftPercent(outgoingBaseBpm, targetBpm);
+      const requiredShiftPct = Math.max(requiredIncomingShiftPct, requiredOutgoingShiftPct);
+      const missingBpmDisables = tempoMatchSafeModeEnabled && (!hasIncomingBpm || !hasOutgoingBpm);
+      const overCap = tempoMatchSafeModeEnabled && isOverTempoCap(requiredShiftPct, safeModeShiftCeilingPct);
+      const shouldDisableTempoMatchThisTransition = missingBpmDisables || overCap;
+
+      const disabledReason: 'over_cap' | 'missing_bpm' | 'user_disabled' | null = (() => {
+        if (!tempoControlEnabled) return 'user_disabled';
+        if (missingBpmDisables) return 'missing_bpm';
+        if (overCap) return 'over_cap';
+        return null;
+      })();
+
+      // If nudge is neutral and tempo match is disabled (large gap), force original speed.
+      // This keeps the "0 = original" contract intact even during Party Mode transitions.
+      const forceOriginalSpeedThisTransition = nudgeNeutral && shouldDisableTempoMatchThisTransition;
+
+      set({
+        lastTransitionTempoMatchDisabled: shouldDisableTempoMatchThisTransition,
+        lastTransitionTempoMatchRequiredPct: Number.isFinite(requiredShiftPct) ? requiredShiftPct : null,
+        lastTransitionTempoMatchCeilingPct: Number.isFinite(safeModeShiftCeilingPct) ? safeModeShiftCeilingPct : null,
+        lastTransitionTempoPlan: {
+          mode: !tempoControlEnabled
+            ? 'original'
+            : settings.tempoMode === 'locked'
+              ? 'locked'
+              : settings.tempoMode === 'auto'
+                ? 'party'
+                : 'original',
+          nextBaseBpmUsed: Number.isFinite(nextBaseBpm) ? nextBaseBpm : null,
+          outgoingBaseBpmUsed: Number.isFinite(outgoingBaseBpm) ? outgoingBaseBpm : null,
+          targetBpmUsed: Number.isFinite(targetBpm) ? targetBpm : null,
+          targetBpm: Number.isFinite(targetBpm) ? targetBpm : null,
+          outgoingTargetRatio: 1,
+          incomingTargetRatio: 1,
+          requiredIncomingPercent: Number.isFinite(requiredIncomingShiftPct) ? requiredIncomingShiftPct : null,
+          requiredOutgoingPercent: Number.isFinite(requiredOutgoingShiftPct) ? requiredOutgoingShiftPct : null,
+          requiredPercent: Number.isFinite(requiredShiftPct) ? requiredShiftPct : null,
+          capPctUsed: Number.isFinite(safeModeShiftCeilingPct) ? safeModeShiftCeilingPct : null,
+          overCap: tempoMatchSafeModeEnabled ? overCap : null,
+          tempoMatchDisabled: shouldDisableTempoMatchThisTransition || !tempoControlEnabled,
+          disabledReason,
+          possibleHalfDouble: halfDoubleTelemetry.possibleHalfDouble,
+          altTargetBpm: halfDoubleTelemetry.altTargetBpm,
+          postTransitionPolicy: (!tempoControlEnabled || shouldDisableTempoMatchThisTransition || forceOriginalSpeedThisTransition)
+            ? 'neutralTo1.0'
+            : ((settings.partyTempoAfterTransition ?? 'hold') === 'revert' ? 'revert' : 'hold'),
+          rampStartAt: null,
+          rampEndAt: null,
+          rampSecWanted: rampSecWanted,
+          rampSecActual: null,
+          quantizedTo: null,
+        },
+      });
+
+      const outgoingTargetRatio = (tempoControlEnabled && !shouldDisableTempoMatchThisTransition && !forceOriginalSpeedThisTransition)
         ? audioEngine.calculateTempoRatio(currentDeck, targetBpm, settings.maxTempoPercent)
         : 1;
 
       if (isManualImmediate) {
         const startCandidate = ctxNow + 0.05;
-        incomingStartAt =
-          audioEngine.getNextBeatTimeFrom(currentDeck, startCandidate, energy.startQuantBeats, outgoingTargetRatio) ??
-          startCandidate;
-        fadeAt =
-          audioEngine.getNextBeatTimeFrom(currentDeck, incomingStartAt, energy.fadeQuantBeats, outgoingTargetRatio) ??
-          incomingStartAt;
+        // Manual: keep it snappy, but still bar-aligned.
+        incomingStartAt = audioEngine.getNextBeatTimeFrom(currentDeck, startCandidate, barsToBeats(1), outgoingTargetRatio) ?? startCandidate;
+        fadeAt = audioEngine.getNextBeatTimeFrom(currentDeck, incomingStartAt, barsToBeats(1), outgoingTargetRatio) ?? incomingStartAt;
+
+        set((s) => ({
+          lastTransitionTempoPlan: s.lastTransitionTempoPlan
+            ? { ...s.lastTransitionTempoPlan, outgoingTargetRatio, quantizedTo: '1bar' }
+            : s.lastTransitionTempoPlan,
+        }));
       } else {
+        // Auto: prefer phrase boundaries when there's time.
+        const phraseBarsPreferred = [16, 8, 4, 1];
+        const phraseBeatMultiples = phraseBarsPreferred.map(barsToBeats);
+
         // Incoming can start earlier (muted by crossfade position) to allow ramp+settle.
         const earliestIncomingStart = Math.max(ctxNow + 0.05, safeLatestCrossfadeStart - preRollSec);
-        const quantIncomingStart =
-          audioEngine.getNextBeatTimeFrom(currentDeck, earliestIncomingStart, energy.startQuantBeats, outgoingTargetRatio) ??
-          earliestIncomingStart;
-        incomingStartAt = quantIncomingStart > safeLatestCrossfadeStart ? safeLatestCrossfadeStart : quantIncomingStart;
+        const quantIncomingStart = quantizeNextUpToWithInfo(
+          currentDeck,
+          earliestIncomingStart,
+          phraseBeatMultiples,
+          outgoingTargetRatio,
+          safeLatestCrossfadeStart
+        );
+        incomingStartAt = quantIncomingStart.time > safeLatestCrossfadeStart ? safeLatestCrossfadeStart : quantIncomingStart.time;
 
         // Compute crossfade start as soon as we're "ready" (after pre-roll), but never after latestCrossfadeStart.
         const fadeCandidate = incomingStartAt + preRollSec;
-        const quantFade =
-          audioEngine.getNextBeatTimeFrom(currentDeck, fadeCandidate, energy.fadeQuantBeats, outgoingTargetRatio) ??
-          fadeCandidate;
-        fadeAt = Math.min(quantFade, safeLatestCrossfadeStart);
+        const fadeQuant = quantizeNextUpToWithInfo(
+          currentDeck,
+          fadeCandidate,
+          phraseBeatMultiples,
+          outgoingTargetRatio,
+          safeLatestCrossfadeStart
+        );
+
+        fadeAt = fadeQuant.time;
+        set((s) => ({
+          lastTransitionTempoPlan: s.lastTransitionTempoPlan
+            ? {
+                ...s.lastTransitionTempoPlan,
+                outgoingTargetRatio,
+                quantizedTo: beatMultipleToQuantizedLabel(fadeQuant.beatMultipleUsed),
+              }
+            : s.lastTransitionTempoPlan,
+        }));
       }
 
       set({ mixInProgress: true });
@@ -1388,7 +1597,7 @@ export const useDJStore = create<DJState>()(
         const tempoControlEnabled = usePlanStore.getState().hasFeature('tempoControl');
 
         // Start incoming early (inaudible until crossfade begins).
-        if (!tempoControlEnabled) {
+        if (!tempoControlEnabled || shouldDisableTempoMatchThisTransition) {
           // Free mode: keep pitch/BPM normal.
           get().setTempo(nextDeck, 1);
         } else {
@@ -1398,13 +1607,42 @@ export const useDJStore = create<DJState>()(
 
           // Ramp outgoing deck toward the target leading into the crossfade.
           // Start early so the ramp finishes at the end of the crossfade.
-          // rampStart = crossfadeStart - (rampSec - crossfadeSec)
-          const rampStartAt = Math.max(ctxNow + 0.05, fadeAt - (rampSec - effectiveCrossfadeSeconds));
+          // Rule: rampSecWanted = clamp(crossfadeSec*2, 4, 20), but snap to bars.
+          // Keep the start in a safe window so quantization doesn't make ramps feel random.
+          const rampEndAt = fadeAt + effectiveCrossfadeSeconds;
+          const minRampSec = 4;
+          const maxRampSec = 20;
+          const earliestStart = rampEndAt - maxRampSec;
+          const latestStart = rampEndAt - minRampSec;
+          const minStart = Math.max(ctxNow + 0.05, earliestStart);
+          const maxStart = Math.max(minStart, latestStart);
+          const idealStart = clamp(rampEndAt - rampSecWanted, minStart, maxStart);
+          const rampStartAt = chooseBeatAlignedTimeInRange(
+            currentDeck,
+            idealStart,
+            barsToBeats(1),
+            minStart,
+            maxStart,
+            outgoingTargetRatio
+          );
           try {
-            audioEngine.rampTempo(currentDeck, outgoingTargetRatio, rampStartAt, rampMs);
+            audioEngine.rampTempo(currentDeck, outgoingTargetRatio, rampStartAt, Math.round((rampEndAt - rampStartAt) * 1000));
           } catch {
             // ignore
           }
+
+          set((s) => ({
+            lastTransitionTempoPlan: s.lastTransitionTempoPlan
+              ? {
+                  ...s.lastTransitionTempoPlan,
+                  incomingTargetRatio,
+                  rampStartAt,
+                  rampEndAt,
+                  rampSecWanted,
+                  rampSecActual: Math.max(0, rampEndAt - rampStartAt),
+                }
+              : s.lastTransitionTempoPlan,
+          }));
         }
 
         // Start incoming early (inaudible until crossfade begins).
@@ -1415,9 +1653,24 @@ export const useDJStore = create<DJState>()(
         try {
           const wantsRevert = (get().settings.partyTempoAfterTransition ?? 'hold') === 'revert';
           const shouldRevert = wantsRevert && get().isPartyMode && get().settings.tempoMode === 'auto';
-          if (shouldRevert && usePlanStore.getState().hasFeature('tempoControl')) {
-            const rampStartAt = Math.max(ctxNow + 0.05, fadeAt - (rampSec - effectiveCrossfadeSeconds));
-            audioEngine.rampTempo(nextDeck, 1, rampStartAt, rampMs);
+          if (shouldRevert && usePlanStore.getState().hasFeature('tempoControl') && !shouldDisableTempoMatchThisTransition) {
+            const rampEndAt = fadeAt + effectiveCrossfadeSeconds;
+            const minRampSec = 4;
+            const maxRampSec = 20;
+            const earliestStart = rampEndAt - maxRampSec;
+            const latestStart = rampEndAt - minRampSec;
+            const minStart = Math.max(ctxNow + 0.05, earliestStart);
+            const maxStart = Math.max(minStart, latestStart);
+            const idealStart = clamp(rampEndAt - rampSecWanted, minStart, maxStart);
+            const rampStartAt = chooseBeatAlignedTimeInRange(
+              nextDeck,
+              idealStart,
+              barsToBeats(1),
+              minStart,
+              maxStart,
+              audioEngine.getTempo(nextDeck) || 1
+            );
+            audioEngine.rampTempo(nextDeck, 1, rampStartAt, Math.round((rampEndAt - rampStartAt) * 1000));
           }
         } catch {
           // ignore
@@ -1450,6 +1703,21 @@ export const useDJStore = create<DJState>()(
             mixInProgress: false,
             playHistoryTrackIds: pushHistory(s.playHistoryTrackIds, outgoingTrackId),
           }));
+
+          // Post-transition safety: force the new active deck tempo to the intended final value.
+          try {
+            const tempoControlEnabled = usePlanStore.getState().hasFeature('tempoControl');
+            const wantsRevert = (get().settings.partyTempoAfterTransition ?? 'hold') === 'revert';
+            const shouldRevert = wantsRevert && get().isPartyMode && get().settings.tempoMode === 'auto';
+
+            const finalRatio = (!tempoControlEnabled || shouldDisableTempoMatchThisTransition || forceOriginalSpeedThisTransition)
+              ? 1
+              : (shouldRevert ? 1 : (audioEngine.getTempo(nextDeck) || 1));
+
+            get().setTempo(nextDeck, finalRatio);
+          } catch {
+            // ignore
+          }
 
           // Apply any pending source switch by rewriting the queue to the new source.
           const afterMix = get();
@@ -1830,7 +2098,8 @@ export const useDJStore = create<DJState>()(
       // Allow large changes so big BPM ranges are audible, but keep it bounded.
       if (updates.maxTempoPercent !== undefined) {
         const raw = Number(updates.maxTempoPercent);
-        const clampedPct = clamp(Number.isFinite(raw) ? raw : before.settings.maxTempoPercent, 0, 300);
+        // Product: default 8%, absolute cap 12%.
+        const clampedPct = clamp(Number.isFinite(raw) ? raw : before.settings.maxTempoPercent, 0, 12);
         updates.maxTempoPercent = Math.round(clampedPct);
       }
 

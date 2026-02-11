@@ -198,6 +198,28 @@ class AudioEngine {
     return clampedFrom + remainingReal;
   }
 
+  /** Returns the previous beat-aligned AudioContext time at or before `fromTime`. */
+  getPrevBeatTimeFrom(deck: DeckId, fromTime: number, beatMultiple: number = 1, playbackRateOverride?: number): number | null {
+    if (!this.audioContext) return null;
+    const deckState = this.decks[deck];
+    const bpm = deckState.baseBpm || 120;
+    const rate = (playbackRateOverride ?? this.getEffectivePlaybackRateAt(deck, fromTime)) || 1;
+    if (!bpm || bpm <= 0 || rate <= 0) return fromTime;
+
+    const intervalTrack = (60 / bpm) * Math.max(1, Math.floor(beatMultiple));
+
+    // Compute track position at `fromTime` using the current piecewise model.
+    const baseTrackAtLast = deckState.isPlaying ? deckState.trackAtLastCtx : deckState.pausedAt;
+    const baseLastCtx = deckState.isPlaying ? deckState.lastCtx : fromTime;
+    const clampedFrom = Math.max(fromTime, baseLastCtx);
+    const trackTimeAtFrom = baseTrackAtLast + (clampedFrom - baseLastCtx) * rate;
+
+    const prevBoundaryTrack = Math.floor(trackTimeAtFrom / intervalTrack) * intervalTrack;
+    const elapsedTrack = trackTimeAtFrom - prevBoundaryTrack;
+    const elapsedReal = elapsedTrack / rate;
+    return clampedFrom - elapsedReal;
+  }
+
   private clearScheduledStart(deck: DeckId): void {
     const deckState = this.decks[deck];
     if (deckState.scheduledStartTimeoutId !== null) {
@@ -520,8 +542,26 @@ class AudioEngine {
   calculateTempoRatio(deck: DeckId, targetBpm: number, maxPercent: number): number {
     const baseBpm = this.decks[deck].baseBpm;
     if (!baseBpm || baseBpm === 0) return 1;
-    
-    const idealRatio = targetBpm / baseBpm;
+
+    // Half/double BPM recognition: some analyses land at 1/2× or 2× tempo.
+    // Pick the interpretation that requires the smallest shift (closest ratio to 1.0).
+    const candidates = [baseBpm, baseBpm * 0.5, baseBpm * 2]
+      .filter((bpm) => Number.isFinite(bpm) && bpm > 0 && bpm >= 40 && bpm <= 400);
+
+    const idealRatio = (() => {
+      let best = targetBpm / baseBpm;
+      let bestDelta = Math.abs(best - 1);
+      for (const bpm of candidates) {
+        const r = targetBpm / bpm;
+        const d = Math.abs(r - 1);
+        if (d < bestDelta) {
+          best = r;
+          bestDelta = d;
+        }
+      }
+      return best;
+    })();
+
     const safeMaxPercent = Number.isFinite(maxPercent) ? Math.max(0, maxPercent) : 0;
     const minRatioFloor = 0.25;
     const maxRatioCeil = 4;

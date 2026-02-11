@@ -3,6 +3,8 @@ import { useDJStore } from '@/stores/djStore';
 import { cn } from '@/lib/utils';
 import { formatDuration } from '@/lib/utils';
 import { useRef, useEffect } from 'react';
+import { computeTempoShiftInfo, getTempoCapDecision } from '@/lib/tempoMatch';
+import { usePlanStore } from '@/stores/planStore';
 
 type PartyQueuePanelProps = {
   className?: string;
@@ -17,6 +19,9 @@ export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
     playlists,
     partySource,
     settings,
+    activeDeck,
+    deckA,
+    deckB,
     shufflePartyTracks,
     playNow,
     playNext,
@@ -24,6 +29,24 @@ export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
     updateUserSettings,
     removeFromCurrentSource,
   } = useDJStore();
+
+  const tempoControlEnabled = usePlanStore((s) => s.hasFeature('tempoControl'));
+
+  const targetBpm = (() => {
+    if (settings.tempoMode === 'locked') return settings.lockedBpm;
+
+    if (settings.tempoMode === 'auto') {
+      if (settings.autoBaseBpm !== null && Number.isFinite(settings.autoBaseBpm)) {
+        const offset = Number.isFinite(settings.autoOffsetBpm) ? (settings.autoOffsetBpm ?? 0) : 0;
+        return settings.autoBaseBpm + offset;
+      }
+    }
+
+    const currentDeck = activeDeck === 'A' ? deckA : deckB;
+    const currentTrack = currentDeck.trackId ? tracks.find((t) => t.id === currentDeck.trackId) : undefined;
+    if (!currentTrack?.bpm) return null;
+    return currentTrack.bpm * (currentDeck.playbackRate || 1);
+  })();
 
   const playingFromLabel = (() => {
     if (partySource?.type === 'playlist' && partySource.playlistId) {
@@ -158,6 +181,49 @@ export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
                 <p className="text-xs font-medium truncate">{track!.displayName}</p>
                 <div className="flex items-center gap-2 text-[9px] text-muted-foreground">
                   {track!.bpm && <span>{Math.round(track!.bpm)} BPM</span>}
+                  {track!.bpm && targetBpm && Number.isFinite(targetBpm) && (
+                    (() => {
+                      const info = computeTempoShiftInfo(track!.bpm!, targetBpm);
+                      const hint = info.interpretation === 'half' ? '½×' : info.interpretation === 'double' ? '2×' : null;
+
+                      const cap = getTempoCapDecision({
+                        tempoControlEnabled,
+                        tempoMode: settings.tempoMode,
+                        requiredShiftPct: info.requiredShiftPct,
+                        rawMaxTempoPercent: settings.maxTempoPercent,
+                        nearCapFraction: 0.8,
+                      });
+
+                      const dotClasses = cap.variant === 'disabled'
+                        ? 'bg-white/30 ring-white/10'
+                        : (cap.variant === 'over_cap'
+                            ? 'bg-rose-500/80 ring-rose-500/30'
+                            : (cap.variant === 'near_cap'
+                                ? 'bg-yellow-500/80 ring-yellow-500/30'
+                                : 'bg-emerald-500/80 ring-emerald-500/30'));
+
+                      const tooltip = cap.variant === 'disabled'
+                        ? 'Tempo Control disabled (upgrade required)'
+                        : (cap.variant === 'over_cap'
+                            ? `Will NOT tempo-match (needs ~${Math.round(info.requiredShiftPct)}% > cap ${Math.round(cap.capPctUsed)}%). Still quantizes + crossfades.`
+                            : (cap.variant === 'near_cap'
+                                ? `Will tempo-match (near cap: ~${Math.round(info.requiredShiftPct)}% of ${Math.round(cap.capPctUsed)}%).`
+                                : `Will tempo-match (~${Math.round(info.requiredShiftPct)}% shift).`));
+
+                      return (
+                        <span className="inline-flex items-center gap-1">
+                          <span
+                            className={cn(
+                              'inline-block h-1.5 w-1.5 rounded-full ring-2 ring-offset-0 ring-transparent',
+                              dotClasses
+                            )}
+                            title={tooltip}
+                          />
+                          <span title={tooltip}>{Math.round(info.requiredShiftPct)}%{hint ? ` ${hint}` : ''}</span>
+                        </span>
+                      );
+                    })()
+                  )}
                   <span>{formatDuration(track!.duration)}</span>
                   {isPendingNext && <span className="text-accent font-medium">Up Next</span>}
                 </div>

@@ -6,7 +6,19 @@ import { GatedSection } from '@/components/ui/GatedControl';
 import { audioEngine } from '@/lib/audioEngine';
 
 export function TempoControls() {
-  const { settings, updateUserSettings, setTempo, deckA, deckB, activeDeck, tracks } = useDJStore();
+  const {
+    settings,
+    updateUserSettings,
+    setTempo,
+    deckA,
+    deckB,
+    activeDeck,
+    tracks,
+    lastTransitionTempoMatchDisabled,
+    lastTransitionTempoMatchRequiredPct,
+    lastTransitionTempoMatchCeilingPct,
+    lastTransitionTempoPlan,
+  } = useDJStore();
   
   const currentDeck = activeDeck === 'A' ? deckA : deckB;
   const currentTrack = tracks.find(t => t.id === currentDeck.trackId);
@@ -60,6 +72,28 @@ export function TempoControls() {
           Tempo Control
         </h3>
 
+        {settings.tempoMode === 'auto' && (lastTransitionTempoPlan?.tempoMatchDisabled || lastTransitionTempoMatchDisabled) && (
+          <div className="rounded-xl bg-white/5 px-3 py-2 text-[10px] text-muted-foreground">
+            {(() => {
+              const plan = lastTransitionTempoPlan;
+              const reason = plan?.disabledReason;
+              const needed = plan?.requiredPercent ?? lastTransitionTempoMatchRequiredPct;
+              const cap = lastTransitionTempoMatchCeilingPct;
+
+              const reasonText = reason === 'missing_bpm'
+                ? 'Tempo Match paused (missing BPM analysis)'
+                : reason === 'user_disabled'
+                  ? 'Tempo Match paused (feature disabled)'
+                  : 'Tempo Match paused (over cap)';
+
+              if (typeof needed === 'number' && typeof cap === 'number') {
+                return `${reasonText} — needed ~${Math.round(needed)}% > cap ${Math.round(cap)}%.`;
+              }
+              return `${reasonText}.`;
+            })()}
+          </div>
+        )}
+
         {/* Tempo Mode Toggle */}
         <div>
           <span className="text-xs text-muted-foreground block mb-2">Mode</span>
@@ -76,10 +110,10 @@ export function TempoControls() {
                 type="button"
               >
                 <Unlock className="w-3.5 h-3.5" />
-                Auto Match
+                Match Base BPM
               </button>
               <p className="text-[9px] text-muted-foreground leading-snug">
-                Tap again to reset to original speed (1.0×).
+                Nudge relative to Base (0 = original speed). Tap again to reset.
               </p>
             </div>
             <button
