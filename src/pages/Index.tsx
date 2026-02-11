@@ -74,8 +74,8 @@ const Index = () => {
           'relative z-10 flex flex-col flex-1 min-h-0 px-5',
           // Reserve space for the fixed tab bar.
           activeTab === 'party'
-            ? 'pt-3 overflow-hidden'
-            : 'pt-14 overflow-hidden'
+            ? 'pt-3 overflow-visible md:overflow-hidden'
+            : 'pt-14 overflow-visible md:overflow-hidden'
         )}
       >
         {/* Logo Header (hide in Party Mode to maximize usable viewport) */}
@@ -93,7 +93,8 @@ const Index = () => {
         <div
           className={cn(
             'flex-1 min-h-0',
-            activeTab === 'party' ? 'overflow-hidden' : 'overflow-hidden'
+            // On phones, allow full-page scroll; on md+ keep panel-based scrolling.
+            activeTab === 'party' ? 'overflow-visible md:overflow-hidden' : 'overflow-visible md:overflow-hidden'
           )}
         >
           {activeTab === 'library' && <LibraryView />}

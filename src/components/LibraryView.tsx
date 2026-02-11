@@ -44,9 +44,7 @@ export function LibraryView() {
     p.name.toLowerCase().includes(playlistSearchQuery.toLowerCase())
   );
 
-  const handleImport = () => {
-    fileInputRef.current?.click();
-  };
+  const fileInputId = 'mejay-import-audio';
 
   const handleClearAllImports = async () => {
     if (tracks.length === 0) return;
@@ -63,9 +61,7 @@ export function LibraryView() {
       await importTracks(files);
     }
     // Reset input
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
+    e.target.value = '';
   };
 
   const handleTrackClick = async (trackId: string) => {
@@ -140,19 +136,23 @@ export function LibraryView() {
       {/* Import Button */}
       <input
         ref={fileInputRef}
+        id={fileInputId}
         type="file"
+        // Keep this simple for iOS Safari: using extensions here can cause it to ignore the filter
+        // and show photo/video sources in the picker.
         accept="audio/*"
         multiple
         onChange={handleFileSelect}
-        className="hidden"
+        // iOS Safari won’t open the picker reliably when the input is display:none.
+        className="sr-only"
       />
-      <button
-        onClick={handleImport}
-        className="btn-primary-gradient flex items-center justify-center gap-2.5 w-full py-4 text-[15px] mb-5"
+      <label
+        htmlFor={fileInputId}
+        className="btn-primary-gradient flex items-center justify-center gap-2.5 w-full py-4 text-[15px] mb-5 cursor-pointer"
       >
         <Upload className="w-5 h-5" />
-        Import Music
-      </button>
+        Choose Files
+      </label>
 
       <button
         onClick={handleClearAllImports}
@@ -183,7 +183,7 @@ export function LibraryView() {
       </div>
 
       {/* Track List */}
-      <div className="flex flex-col gap-2 flex-1 overflow-y-auto pb-[calc(84px+env(safe-area-inset-bottom,0)+24px)]">
+      <div className="flex flex-col gap-2 flex-1 overflow-visible md:overflow-y-auto pb-[calc(84px+env(safe-area-inset-bottom,0)+24px)]">
         {isLoadingTracks ? (
           <div className="flex items-center justify-center py-10">
             <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />

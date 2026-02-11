@@ -55,7 +55,7 @@ export function PartyModeView() {
   };
 
   return (
-    <div className="flex flex-col h-full min-h-0 overflow-hidden">
+    <div className="flex flex-col h-full min-h-0 overflow-visible md:overflow-hidden">
       {/* Header (always visible) */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3 flex-shrink-0">
         <div>
@@ -172,14 +172,14 @@ export function PartyModeView() {
       {!isPartyMode ? (
         <PartySourceChooser />
       ) : (
-        <div className="flex-1 min-h-0 overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-visible md:overflow-hidden">
           {/* Mobile: stable panel (inner scroll) */}
-          <div className="lg:hidden h-full min-h-0 flex flex-col gap-4 overflow-hidden">
+          <div className="lg:hidden h-full min-h-0 flex flex-col gap-4 overflow-visible">
             <div className="shrink-0">
               <NowPlaying />
             </div>
 
-            <div className="min-h-0 rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm overflow-hidden">
+            <div className="min-h-0 rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm overflow-visible md:overflow-hidden">
               {/* Mobile panel switcher: Queue <-> Settings */}
               <div className="p-2">
                 <div className="flex items-center gap-1 p-1 rounded-xl bg-white/5">
@@ -217,13 +217,13 @@ export function PartyModeView() {
                 </div>
               </div>
 
-              <div className="h-full min-h-0 overflow-hidden px-4 pb-4">
+              <div className="h-full min-h-0 overflow-visible md:overflow-hidden px-4 pb-4">
                 {activePanel === 'queue' ? (
                   <PartyQueuePanel
                     className="h-full rounded-none border-0 bg-transparent backdrop-blur-none p-0"
                   />
                 ) : (
-                  <div className="h-full overflow-auto overscroll-contain scrollbar-thin pr-1 pb-[calc(84px+env(safe-area-inset-bottom,0)+28px)]">
+                  <div className="h-full overflow-visible md:overflow-auto md:overscroll-contain md:scrollbar-thin pr-1 pb-[calc(84px+env(safe-area-inset-bottom,0)+28px)]">
                     <div className="space-y-4 pt-2">
                       <VolumeControls />
                       <MixControls />

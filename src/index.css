@@ -289,9 +289,19 @@
 
   /* Full-screen app viewport with dvh override (mobile address bar safe). */
   .mejay-screen {
-    height: 100vh;
-    height: 100dvh;
-    overflow: hidden;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow-x: hidden;
+    overflow-y: visible;
+  }
+
+  /* On larger screens we keep an app-shell viewport and scroll within panels. */
+  @media (min-width: 768px) {
+    .mejay-screen {
+      height: 100vh;
+      height: 100dvh;
+      overflow: hidden;
+    }
   }
 
   .mejay-drawer {
