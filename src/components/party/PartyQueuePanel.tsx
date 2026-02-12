@@ -56,6 +56,22 @@ export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
     return 'Import List';
   })();
 
+  const repeatMode = settings.repeatMode;
+  const repeatTitle = repeatMode === 'off'
+    ? 'Repeat Off'
+    : repeatMode === 'track'
+      ? 'Repeat Track'
+      : 'Loop Playlist';
+
+  const handleRepeatToggle = () => {
+    const nextRepeatMode = repeatMode === 'off'
+      ? 'track'
+      : repeatMode === 'track'
+        ? 'playlist'
+        : 'off';
+    updateUserSettings({ repeatMode: nextRepeatMode });
+  };
+
   const listRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLDivElement>(null);
 
@@ -120,14 +136,16 @@ export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
             Shuffle Now
           </button>
           <button
-            onClick={() => updateUserSettings({ loopPlaylist: !settings.loopPlaylist })}
+            onClick={handleRepeatToggle}
             className={cn(
               'p-1.5 rounded-lg transition-colors',
-              settings.loopPlaylist 
-                ? 'bg-primary/20 text-primary' 
-                : 'text-muted-foreground hover:text-foreground'
+              repeatMode === 'playlist'
+                ? 'bg-primary/20 text-primary'
+                : repeatMode === 'track'
+                  ? 'bg-accent/20 text-accent'
+                  : 'text-muted-foreground hover:text-foreground'
             )}
-            title={settings.loopPlaylist ? 'Loop On' : 'Loop Off'}
+            title={repeatTitle}
           >
             <Repeat className="w-4 h-4" />
           </button>

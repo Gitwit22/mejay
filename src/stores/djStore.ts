@@ -117,7 +117,7 @@ interface DJState {
   pause: (deck?: DeckId) => void;
   togglePlayPause: (deck?: DeckId) => void;
   seek: (deck: DeckId, time: number) => void;
-  restartCurrentTrack: (deck?: DeckId) => void;
+  restartCurrentTrack: (arg?: DeckId | { deck?: DeckId; reason?: string; silent?: boolean }) => void;
   smartBack: (deck?: DeckId) => void;
   playPreviousTrack: (deck?: DeckId) => Promise<void>;
   skip: (reason?: 'user' | 'auto' | 'end' | 'switch') => void;
@@ -366,24 +366,15 @@ export const useDJStore = create<DJState>()(
     }
   }
 
-  const lockTolerancePctToAllowedDriftBpm = (pctRaw: number | undefined | null): number => {
+  const lockTolerancePctToAllowedDriftBpm = (pctRaw: number | undefined | null, targetBpm: number): number => {
     const pct = clamp(Number.isFinite(pctRaw as number) ? (pctRaw as number) : 10, 0, 100);
-    // Piecewise mapping aligned with the product spec examples:
-    // 0 -> 0.0 BPM
-    // 5 -> 0.2 BPM
-    // 10 -> 0.5 BPM
-    // 20 -> 1.0 BPM
-    // 30 -> 2.0 BPM
-    // 100 -> 4.0 BPM
-    if (pct <= 0) return 0;
-    if (pct <= 5) return (pct / 5) * 0.2;
-    if (pct <= 10) return 0.2 + ((pct - 5) / 5) * 0.3;
-    if (pct <= 20) return 0.5 + ((pct - 10) / 10) * 0.5;
-    if (pct <= 30) return 1.0 + ((pct - 20) / 10) * 1.0;
-    return 2.0 + ((pct - 30) / 70) * 2.0;
+    if (!Number.isFinite(targetBpm) || targetBpm <= 0) return 0;
+    if (pct >= 100) return Number.POSITIVE_INFINITY;
+    return (pct / 100) * targetBpm;
   };
 
   const lastLockCorrectionAtCtx: Record<DeckId, number> = { A: -Infinity, B: -Infinity };
+  const lastManualTempoChangeAtCtx: Record<DeckId, number> = { A: -Infinity, B: -Infinity };
   const maybeCorrectTempoLockDrift = (deck: DeckId) => {
     if (!usePlanStore.getState().hasFeature('tempoControl')) return;
     const state = get();
@@ -392,6 +383,9 @@ export const useDJStore = create<DJState>()(
 
     const ctxNow = audioEngine.getAudioContextTime();
     if (ctxNow === null) return;
+
+    // Don't fight explicit user actions (e.g. BPM slider moves).
+    if (ctxNow - lastManualTempoChangeAtCtx[deck] < 2.0) return;
 
     // Don't fight scheduled ramps (mixing, user actions, etc).
     if (audioEngine.isTempoRamping(deck, ctxNow)) return;
@@ -406,11 +400,12 @@ export const useDJStore = create<DJState>()(
     const effectiveRate = Math.max(0.25, audioEngine.getEffectiveTempo(deck, ctxNow) || 1);
     const currentBpm = baseBpm * effectiveRate;
 
-    const allowedDrift = lockTolerancePctToAllowedDriftBpm(state.settings.lockTolerancePct);
-    const drift = Math.abs(currentBpm - targetBpm);
-    if (drift <= allowedDrift) return;
-
     const { ratio: targetRatio, debug } = computeTempoForDeck(deck, targetBpm, state.settings.maxTempoPercent);
+    const targetEffectiveBpm = baseBpm * targetRatio;
+
+    const allowedDrift = lockTolerancePctToAllowedDriftBpm(state.settings.lockTolerancePct, targetEffectiveBpm);
+    const drift = Math.abs(currentBpm - targetEffectiveBpm);
+    if (drift <= allowedDrift) return;
 
     // Bar-align when possible (4 beats); start slightly in the future for scheduling safety.
     const startCandidate = ctxNow + 0.05;
@@ -524,7 +519,8 @@ export const useDJStore = create<DJState>()(
     const after = get();
     const triggerSecondsTrack = computeAutoMixTriggerSecondsTrack(after);
     audioEngine.setMixTriggerConfig('remaining', triggerSecondsTrack);
-    audioEngine.enableMixCheck(true);
+    audioEngine.enableMixCheck(after.settings.repeatMode !== 'track');
+    audioEngine.resetMixTrigger();
   };
 
   const getEffectiveStartTimeSec = (track: Track | undefined, settings: Settings | undefined) => {
@@ -545,7 +541,13 @@ export const useDJStore = create<DJState>()(
     return audioEngine.getCurrentTime(deck) || getDeckState(state, deck).currentTime || 0;
   };
 
-  const cancelPendingTransition = (opts?: { mixInProgress?: boolean }) => {
+  const cancelPendingTransition = (arg?: { mixInProgress?: boolean; reason?: string } | string) => {
+    const opts = typeof arg === 'string' ? { reason: arg } : arg;
+
+    if (import.meta.env.DEV && opts?.reason) {
+      console.debug('[DJ Store] cancelPendingTransition:', opts.reason);
+    }
+
     // Cancels any scheduled transition timeouts (state updates, pause/stop hooks, etc).
     clearScheduledTimeouts();
 
@@ -608,13 +610,16 @@ export const useDJStore = create<DJState>()(
     targetLoudness: 0.7,
     limiterEnabled: true,
     limiterStrength: 'medium',
-    loopPlaylist: true,
+    vibesPreset: 'flat',
+    repeatMode: 'playlist',
   };
 
-  const computeTargetBpm = (settings: Settings) => {
-    if (settings.tempoMode === 'locked') return settings.lockedBpm;
+  const getCanonicalTargetBpm = (settings: Settings): number | null => {
+    if (settings.tempoMode === 'locked') {
+      return Number.isFinite(settings.lockedBpm) && settings.lockedBpm > 0 ? settings.lockedBpm : null;
+    }
     if (settings.tempoMode === 'auto') {
-      if (settings.autoBaseBpm === null || !Number.isFinite(settings.autoBaseBpm)) return null;
+      if (settings.autoBaseBpm === null || !Number.isFinite(settings.autoBaseBpm) || settings.autoBaseBpm <= 0) return null;
       // Auto Match uses a direct target BPM (single source of truth).
       // `autoOffsetBpm` remains for back-compat in persisted settings but is ignored.
       return settings.autoBaseBpm;
@@ -651,7 +656,7 @@ export const useDJStore = create<DJState>()(
     const fallbackBpm = (outgoingTrack?.bpm ?? audioEngine.getBaseBpm(outgoingDeck) ?? 120) * outgoingRate;
     const tempoControlEnabled = usePlanStore.getState().hasFeature('tempoControl');
     const targetBpm = tempoControlEnabled
-      ? (computeTargetBpm(state.settings) ?? fallbackBpm)
+      ? (getCanonicalTargetBpm(state.settings) ?? fallbackBpm)
       : fallbackBpm;
 
     const beatSec = 60 / Math.max(1, targetBpm);
@@ -680,9 +685,13 @@ export const useDJStore = create<DJState>()(
     const deckState = deck === 'A' ? state.deckA : state.deckB;
     if (!deckState.trackId) return;
 
-    const targetBpm = computeTargetBpm(state.settings);
+    const targetBpm = getCanonicalTargetBpm(state.settings);
     if (targetBpm === null) return;
     const { ratio, debug } = computeTempoForDeck(deck, targetBpm, state.settings.maxTempoPercent);
+    const ctxNow = audioEngine.getAudioContextTime();
+    if (ctxNow !== null) {
+      lastManualTempoChangeAtCtx[deck] = ctxNow;
+    }
     set({ lastTempoDebug: debug });
     get().setTempo(deck, ratio);
   };
@@ -778,6 +787,11 @@ export const useDJStore = create<DJState>()(
   audioEngine.setOnTrackEnd((deck) => {
     const state = get();
     if (state.isPartyMode) {
+      if (state.settings.repeatMode === 'track') {
+        get().restartCurrentTrack({ deck, reason: 'repeat_end', silent: true });
+        return;
+      }
+
       // Auto-advance to next track
       get().skip('end');
     } else {
@@ -793,8 +807,9 @@ export const useDJStore = create<DJState>()(
   audioEngine.setOnMixTrigger(() => {
     const state = get();
     if (state.isPartyMode) {
+      if (state.settings.repeatMode === 'track') return;
       const hasMore = state.nowPlayingIndex < state.partyTrackIds.length - 1;
-      const canLoop = state.settings.loopPlaylist;
+      const canLoop = state.settings.repeatMode === 'playlist';
       if (hasMore || canLoop) {
         get().skip('auto');
       }
@@ -854,6 +869,7 @@ export const useDJStore = create<DJState>()(
       audioEngine.setLimiterEnabled(settings.limiterEnabled);
       audioEngine.setLimiterStrength(settings.limiterStrength);
       audioEngine.setMasterVolume(settings.masterVolume ?? 0.9);
+      audioEngine.setVibesPreset(settings.vibesPreset ?? 'flat', { ms: 0 });
     },
 
     resetLocalData: async () => {
@@ -1419,10 +1435,16 @@ export const useDJStore = create<DJState>()(
       }
     },
 
-    restartCurrentTrack: (deck?: DeckId) => {
-      cancelPendingTransition();
+    restartCurrentTrack: (arg?: DeckId | { deck?: DeckId; reason?: string; silent?: boolean }) => {
       const state = get();
-      const targetDeck = deck || state.activeDeck;
+      const deck = typeof arg === 'string' ? arg : arg?.deck;
+      const reason = typeof arg === 'string' ? undefined : arg?.reason;
+      const silent = typeof arg === 'string' ? false : Boolean(arg?.silent);
+
+      cancelPendingTransition(reason ?? 'restart');
+
+      const refreshed = get();
+      const targetDeck = deck || refreshed.activeDeck;
       const track = getDeckTrack(state, targetDeck);
       if (!track) return;
 
@@ -1435,10 +1457,12 @@ export const useDJStore = create<DJState>()(
         set(s => ({ deckB: { ...s.deckB, currentTime: startAt } }));
       }
 
-      toast({
-        title: 'Restarted',
-        description: `Start: ${Math.floor(startAt / 60)}:${Math.floor(startAt % 60).toString().padStart(2, '0')}`,
-      });
+      if (!silent) {
+        toast({
+          title: 'Restarted',
+          description: `Start: ${Math.floor(startAt / 60)}:${Math.floor(startAt % 60).toString().padStart(2, '0')}`,
+        });
+      }
     },
 
     playPreviousTrack: async (deck?: DeckId) => {
@@ -1453,7 +1477,7 @@ export const useDJStore = create<DJState>()(
         return;
       }
 
-      if (state.nowPlayingIndex === 0 && !state.settings.loopPlaylist) {
+      if (state.nowPlayingIndex === 0 && state.settings.repeatMode !== 'playlist') {
         get().restartCurrentTrack(targetDeck);
         return;
       }
@@ -1465,7 +1489,7 @@ export const useDJStore = create<DJState>()(
 
       const computedFallbackIndex = state.nowPlayingIndex > 0
         ? state.nowPlayingIndex - 1
-        : (state.settings.loopPlaylist ? state.partyTrackIds.length - 1 : 0);
+        : (state.settings.repeatMode === 'playlist' ? state.partyTrackIds.length - 1 : 0);
 
       const fallbackTrackId = state.partyTrackIds[computedFallbackIndex] ?? null;
       const useHistory = historyCandidate && historyCandidate !== currentTrackId && historyIndex >= 0;
@@ -1481,7 +1505,7 @@ export const useDJStore = create<DJState>()(
       // Cancel any scheduled next/auto transition, source switches, and any scheduled WebAudio stops.
       // Keep `mixInProgress` true while we prepare the new transition so auto-next/end events cannot
       // schedule a new skip in the tiny window between cancel + starting the prev mix.
-      cancelPendingTransition({ mixInProgress: true });
+      cancelPendingTransition({ mixInProgress: true, reason: 'previous_track' });
 
       // If an actual mix is in-flight, bail out to a predictable "hard" previous.
       // (Crossfading while another crossfade + stop scheduling is in progress is hard to make bulletproof.)
@@ -1525,7 +1549,8 @@ export const useDJStore = create<DJState>()(
         const after = get();
         const triggerSecondsTrack = computeAutoMixTriggerSecondsTrack(after);
         audioEngine.setMixTriggerConfig('remaining', triggerSecondsTrack);
-        audioEngine.enableMixCheck(true);
+        const enableMixCheck = after.settings.repeatMode !== 'track';
+        audioEngine.enableMixCheck(enableMixCheck);
         audioEngine.resetMixTrigger();
 
         return;
@@ -1606,7 +1631,7 @@ export const useDJStore = create<DJState>()(
             const newState = get();
             const triggerSecondsTrack = computeAutoMixTriggerSecondsTrack(newState);
             audioEngine.setMixTriggerConfig('remaining', triggerSecondsTrack);
-            audioEngine.enableMixCheck(true);
+            audioEngine.enableMixCheck(newState.settings.repeatMode !== 'track');
           }, stopDelayMs));
         } else {
           // Fallback: start immediately and do an immediate crossfade schedule.
@@ -1656,6 +1681,14 @@ export const useDJStore = create<DJState>()(
       if (!state.isPartyMode || partyTrackIds.length === 0) return;
       if (state.mixInProgress) return;
 
+      // Hard guard: Repeat Track mode should never auto-mix or auto-advance.
+      if (settings.repeatMode === 'track' && (reason === 'auto' || reason === 'end')) {
+        if (reason === 'end') {
+          get().restartCurrentTrack({ deck: activeDeck, reason: 'repeat_end', silent: true });
+        }
+        return;
+      }
+
       clearScheduledTimeouts();
       
       // Determine next index
@@ -1670,7 +1703,7 @@ export const useDJStore = create<DJState>()(
       
       // Check bounds
       if (nextIndex >= partyTrackIds.length) {
-        if (settings.loopPlaylist) {
+        if (settings.repeatMode === 'playlist') {
           nextIndex = 0;
         } else {
           get().stopPartyMode();
@@ -1686,8 +1719,8 @@ export const useDJStore = create<DJState>()(
       const currentTrack = tracks.find(t => t.id === currentDeckState.trackId);
       const outgoingTrackId = currentDeckState.trackId;
 
-      // Repeat-one behavior: if we resolve "next" to the same track, do a self-blend loop.
-      // End crossfades into the beginning of the same track (start at 0, no index/history churn).
+      // Repeat-one behavior (playlist wrap on a 1-track queue): if we resolve "next" to the same track,
+      // do a self-blend loop.
       const isSelfBlend = Boolean(outgoingTrackId) && nextTrackId === outgoingTrackId;
       const postNowPlayingIndex = isSelfBlend ? nowPlayingIndex : nextIndex;
 
@@ -1729,7 +1762,7 @@ export const useDJStore = create<DJState>()(
         }
         if (settings.tempoMode === 'auto') {
           // Auto Match behavior: use the user's chosen target BPM.
-          return computeTargetBpm(settings) ?? nextBaseBpm;
+          return getCanonicalTargetBpm(settings) ?? nextBaseBpm;
         }
         return nextBaseBpm;
       };
@@ -2058,7 +2091,7 @@ export const useDJStore = create<DJState>()(
           const newState = get();
           const triggerSecondsTrack = computeAutoMixTriggerSecondsTrack(newState);
           audioEngine.setMixTriggerConfig('remaining', triggerSecondsTrack);
-          audioEngine.enableMixCheck(true);
+          audioEngine.enableMixCheck(newState.settings.repeatMode !== 'track');
 
           // If the user picked a different source during the mix, switch now.
           const afterQueued = get();
@@ -2141,7 +2174,7 @@ export const useDJStore = create<DJState>()(
 
       // Apply Auto Match tempo if baseline exists (or was just captured).
       const afterBaseline = get().settings;
-      const autoTarget = computeTargetBpm(afterBaseline);
+      const autoTarget = getCanonicalTargetBpm(afterBaseline);
       if (
         usePlanStore.getState().hasFeature('tempoControl') &&
         afterBaseline.tempoMode === 'auto' &&
@@ -2173,7 +2206,8 @@ export const useDJStore = create<DJState>()(
       const after = get();
       const triggerSecondsTrack = computeAutoMixTriggerSecondsTrack(after);
       audioEngine.setMixTriggerConfig('remaining', triggerSecondsTrack);
-      audioEngine.enableMixCheck(true);
+      audioEngine.enableMixCheck(after.settings.repeatMode !== 'track');
+      audioEngine.resetMixTrigger();
     },
 
     stopPartyMode: () => {
@@ -2220,7 +2254,7 @@ export const useDJStore = create<DJState>()(
       const state = get();
       if (state.isPartyMode) {
         const hasMore = state.nowPlayingIndex < state.partyTrackIds.length - 1;
-        const canLoop = state.settings.loopPlaylist;
+        const canLoop = state.settings.repeatMode === 'playlist';
         if (hasMore || canLoop) {
           get().skip('user');
         }
@@ -2389,6 +2423,25 @@ export const useDJStore = create<DJState>()(
     updateUserSettings: async (updates: Partial<Settings>) => {
       const before = get();
 
+      if (updates.vibesPreset !== undefined) {
+        const v = updates.vibesPreset;
+        updates.vibesPreset = v === 'warm' || v === 'bright' || v === 'club' || v === 'vocal' ? v : 'flat';
+      }
+
+      const rawRepeatMode = updates.repeatMode;
+      if (rawRepeatMode !== undefined) {
+        updates.repeatMode = rawRepeatMode === 'track' || rawRepeatMode === 'playlist' ? rawRepeatMode : 'off';
+      }
+
+      const enablingRepeatTrack =
+        updates.repeatMode === 'track' &&
+        before.settings.repeatMode !== 'track';
+
+      if (enablingRepeatTrack) {
+        // Prevent any pre-armed end-of-song transitions from firing after Repeat Track is enabled.
+        cancelPendingTransition('repeat_enabled');
+      }
+
       // If shuffle is being enabled in Party Mode, shuffle the upcoming play order once.
       const shouldShuffleUpcomingNow =
         updates.shuffleEnabled === true &&
@@ -2503,13 +2556,25 @@ export const useDJStore = create<DJState>()(
         updates.lockedBpm !== undefined ||
         updates.autoBaseBpm !== undefined ||
         updates.autoOffsetBpm !== undefined ||
-        updates.maxTempoPercent !== undefined
+        updates.maxTempoPercent !== undefined ||
+        updates.repeatMode !== undefined
       )) {
-        const triggerSecondsTrack = computeAutoMixTriggerSecondsTrack(get());
-        audioEngine.setMixTriggerConfig('remaining', triggerSecondsTrack);
-        audioEngine.enableMixCheck(true);
-        // Re-evaluate immediately using the new threshold.
-        audioEngine.resetMixTrigger();
+        if (state.settings.repeatMode === 'track') {
+          // Repeat Track should never schedule/trigger a next-track mix.
+          audioEngine.enableMixCheck(false);
+          audioEngine.resetMixTrigger();
+        } else {
+          const triggerSecondsTrack = computeAutoMixTriggerSecondsTrack(get());
+          audioEngine.setMixTriggerConfig('remaining', triggerSecondsTrack);
+          audioEngine.enableMixCheck(true);
+          // Re-evaluate immediately using the new threshold.
+          audioEngine.resetMixTrigger();
+        }
+      }
+
+      if (enablingRepeatTrack) {
+        // Hard restart the same song and keep index stable.
+        get().restartCurrentTrack({ reason: 'repeat_enabled' });
       }
       
       // Apply audio engine settings
@@ -2521,6 +2586,9 @@ export const useDJStore = create<DJState>()(
       }
       if (updates.limiterStrength !== undefined) {
         audioEngine.setLimiterStrength(updates.limiterStrength);
+      }
+      if (updates.vibesPreset !== undefined) {
+        audioEngine.setVibesPreset(updates.vibesPreset);
       }
 
       // Persist settings with a short debounce to prevent IDB write races

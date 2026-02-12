@@ -35,12 +35,9 @@ export function TempoControls() {
 
   const allowedDriftBpm = (() => {
     const pct = Math.max(0, Math.min(100, settings.lockTolerancePct ?? 10))
-    if (pct <= 0) return 0
-    if (pct <= 5) return (pct / 5) * 0.2
-    if (pct <= 10) return 0.2 + ((pct - 5) / 5) * 0.3
-    if (pct <= 20) return 0.5 + ((pct - 10) / 10) * 0.5
-    if (pct <= 30) return 1.0 + ((pct - 20) / 10) * 1.0
-    return 2.0 + ((pct - 30) / 70) * 2.0
+    if (pct >= 100) return Number.POSITIVE_INFINITY
+    const target = Math.max(1, settings.lockedBpm ?? 128)
+    return (pct / 100) * target
   })()
 
   const handleAutoMatchClick = async () => {
@@ -174,7 +171,9 @@ export function TempoControls() {
               <span className="text-xs text-muted-foreground">Lock Tolerance</span>
               <span className="text-xs font-semibold text-accent">
                 {Math.round((settings.lockTolerancePct ?? 10) * 10) / 10}%
-                <span className="text-muted-foreground font-normal">&nbsp;· ±{allowedDriftBpm.toFixed(1)} BPM</span>
+                <span className="text-muted-foreground font-normal">
+                  &nbsp;· {Number.isFinite(allowedDriftBpm) ? `±${allowedDriftBpm.toFixed(1)} BPM` : 'no correction'}
+                </span>
               </span>
             </div>
             <Slider

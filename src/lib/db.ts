@@ -64,8 +64,16 @@ export interface Settings {
   targetLoudness: number; // 0-1 scale (quiet to club)
   limiterEnabled: boolean;
   limiterStrength: 'light' | 'medium' | 'strong';
+  /** Master tone preset applied pre-limiter. */
+  vibesPreset: 'flat' | 'warm' | 'bright' | 'club' | 'vocal';
   // Party mode
-  loopPlaylist: boolean;
+  /**
+   * Repeat behavior in Party Mode.
+   * - off: stop at end of queue
+   * - playlist: wrap to start of queue
+   * - track: repeat current track only (hard restart)
+   */
+  repeatMode: 'off' | 'playlist' | 'track';
 }
 
 interface MeJayDB extends DBSchema {
@@ -284,7 +292,8 @@ export async function getSettings(): Promise<Settings> {
     targetLoudness: 0.7,
     limiterEnabled: true,
     limiterStrength: 'medium',
-    loopPlaylist: true,
+    vibesPreset: 'flat',
+    repeatMode: 'playlist',
   };
 
   // Merge to backfill new fields for existing users.
@@ -294,6 +303,22 @@ export async function getSettings(): Promise<Settings> {
   const prevBehavior = rawPrevBehavior === 'alwaysMixPrevious' || rawPrevBehavior === 'restartFirst'
     ? rawPrevBehavior
     : defaults.prevBehavior;
+
+  const rawRepeatMode = (merged as any).repeatMode;
+  const legacyLoopPlaylist = Boolean((merged as any).loopPlaylist);
+  const repeatMode: Settings['repeatMode'] = rawRepeatMode === 'off' || rawRepeatMode === 'playlist' || rawRepeatMode === 'track'
+    ? rawRepeatMode
+    : (legacyLoopPlaylist ? 'playlist' : 'off');
+
+  const rawVibesPreset = (merged as any).vibesPreset;
+  const vibesPreset: Settings['vibesPreset'] =
+    rawVibesPreset === 'flat' ||
+    rawVibesPreset === 'warm' ||
+    rawVibesPreset === 'bright' ||
+    rawVibesPreset === 'club' ||
+    rawVibesPreset === 'vocal'
+      ? rawVibesPreset
+      : defaults.vibesPreset;
 
   // Normalize tempo safety clamp.
   const rawMaxTempoPercent = Number((merged as any).maxTempoPercent);
@@ -319,6 +344,8 @@ export async function getSettings(): Promise<Settings> {
   return {
     ...merged,
     prevBehavior,
+    repeatMode,
+    vibesPreset,
     maxTempoPercent: snappedMaxTempoPercent,
     lockedBpm: snappedLocked,
     autoOffsetBpm: snappedOffset,

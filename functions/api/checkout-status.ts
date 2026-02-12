@@ -6,6 +6,7 @@ type Env = {
   STRIPE_PRICE_FULL_PROGRAM: string
   CHECKOUT_VERIFY_MAX_AGE_SECONDS?: string
   DB: D1Database
+  SESSION_PEPPER?: string
   RESEND_API_KEY?: string
   RESEND_FROM?: string
   // Fallback names (some hosting dashboards use these)
@@ -88,6 +89,40 @@ function readMaxAgeSeconds(env: Partial<Env>): number {
   if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed)
   // Default: 30 minutes.
   return 30 * 60
+}
+
+async function sha256Hex(input: string) {
+  const enc = new TextEncoder().encode(input)
+  const hashBuf = await crypto.subtle.digest('SHA-256', enc)
+  return [...new Uint8Array(hashBuf)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+function parseCookies(req: Request) {
+  const raw = req.headers.get('cookie') || ''
+  const out: Record<string, string> = {}
+  raw.split(';').forEach((part) => {
+    const [k, ...v] = part.trim().split('=')
+    if (!k) return
+    out[k] = decodeURIComponent(v.join('=') || '')
+  })
+  return out
+}
+
+async function getSessionUserId(req: Request, env: Partial<Env>): Promise<string | null> {
+  const cookies = parseCookies(req)
+  const token = cookies['mejay_session']
+  if (!token) return null
+
+  const pepper = (env.SESSION_PEPPER || 'dev-session-pepper').trim() || 'dev-session-pepper'
+  const tokenHash = await sha256Hex(`session:${token}:${pepper}`)
+  const row = (await env.DB
+    .prepare('SELECT user_id, expires_at FROM sessions WHERE token_hash = ?1')
+    .bind(tokenHash)
+    .first()) as {user_id: string; expires_at: string} | null
+
+  if (!row) return null
+  if (row.expires_at < new Date().toISOString()) return null
+  return row.user_id
 }
 
 function mapToDbAccessType(accessType: AccessType): 'free' | 'pro' | 'full' {
@@ -239,24 +274,6 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
       return json({error: 'Session environment mismatch'}, {status: 400})
     }
 
-    // Safety: expire ability to verify old sessions.
-    const created = typeof session?.created === 'number' ? session.created : null
-    if (created) {
-      const now = Math.floor(Date.now() / 1000)
-      if (now - created > maxAgeSeconds) {
-        return json({error: 'Session verification expired'}, {status: 410})
-      }
-    }
-
-    // Safety: bind verification to the initiating browser (best-effort).
-    const metaToken = (session?.metadata?.checkoutToken ?? '') as string
-    if (typeof metaToken === 'string' && metaToken.trim()) {
-      if (!checkoutTokenHeader || checkoutTokenHeader !== metaToken) {
-        return json({error: 'Session token mismatch'}, {status: 403})
-      }
-    }
-
-    // Prefer session metadata written at session creation time.
     const metaPlanRaw = (session?.metadata?.plan ?? '') as string
     const metaPlan: SessionPlan | null =
       metaPlanRaw === 'pro' || metaPlanRaw === 'full_program' ? metaPlanRaw : null
@@ -265,6 +282,33 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     const metaUserId = typeof metaUserIdRaw === 'string' && metaUserIdRaw.trim() ? metaUserIdRaw.trim() : null
     const refUserId = typeof session?.client_reference_id === 'string' && session.client_reference_id.trim() ? session.client_reference_id.trim() : null
     const userId = metaUserId ?? refUserId
+
+    // Safety: bind verification to the initiating browser or to the logged-in user.
+    // - checkoutToken (preferred) ties verification to the browser
+    // - login-session ties verification to the authenticated user
+    const metaToken = (session?.metadata?.checkoutToken ?? '') as string
+    const hasMetaToken = typeof metaToken === 'string' && !!metaToken.trim()
+    const tokenOk = hasMetaToken && !!checkoutTokenHeader && checkoutTokenHeader === metaToken
+    const sessionOk = userId ? (await getSessionUserId(request, env).catch(() => null)) === userId : false
+
+    if (hasMetaToken && !tokenOk && !sessionOk) {
+      return json({error: 'Session token mismatch'}, {status: 403})
+    }
+
+    // Safety: expire ability to verify old sessions.
+    const created = typeof session?.created === 'number' ? session.created : null
+    if (created) {
+      const now = Math.floor(Date.now() / 1000)
+      if (now - created > maxAgeSeconds) {
+        // If the request is properly bound (token or login session), allow verification
+        // even if the checkout session is old.
+        if (!tokenOk && !sessionOk) {
+          return json({error: 'Session verification expired'}, {status: 410})
+        }
+      }
+    }
+
+    // Prefer session metadata written at session creation time.
 
     let accessType: AccessType = 'free'
     if (metaPlan) {

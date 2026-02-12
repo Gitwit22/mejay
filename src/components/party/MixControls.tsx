@@ -12,7 +12,7 @@ export function MixControls() {
   const timingDisabled = mixInProgress;
 
   const nextIndex = nowPlayingIndex + 1;
-  const nextTrackId = nextIndex < partyTrackIds.length ? partyTrackIds[nextIndex] : settings.loopPlaylist ? partyTrackIds[0] : null;
+  const nextTrackId = nextIndex < partyTrackIds.length ? partyTrackIds[nextIndex] : settings.repeatMode === 'playlist' ? partyTrackIds[0] : null;
   const nextTrack = nextTrackId ? tracks.find(t => t.id === nextTrackId) : null;
 
   // 0s → 60–120s depending on track length

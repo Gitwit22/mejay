@@ -5,6 +5,8 @@ import { computeClampedTempoRatio } from './tempoMatch';
 
 export type DeckId = 'A' | 'B';
 
+export type VibesPreset = 'flat' | 'warm' | 'bright' | 'club' | 'vocal';
+
 interface DeckState {
   audioBuffer: AudioBuffer | null;
   sourceNode: AudioBufferSourceNode | null;
@@ -38,6 +40,13 @@ class AudioEngine {
   private masterVolume: number = 1;
   private limiterNode: DynamicsCompressorNode | null = null;
   private ceilingNode: GainNode | null = null;
+
+  // Master tone shaping (pre-limiter)
+  private preLimiterGain: GainNode | null = null;
+  private vibeLowShelf: BiquadFilterNode | null = null;
+  private vibeMidPeak: BiquadFilterNode | null = null;
+  private vibeHighShelf: BiquadFilterNode | null = null;
+  private vibesPreset: VibesPreset = 'flat';
   private decks: Record<DeckId, DeckState> = {
     A: this.createEmptyDeck(),
     B: this.createEmptyDeck(),
@@ -74,6 +83,104 @@ class AudioEngine {
       scheduledStartTimeoutId: null,
       tempoRamp: null,
     };
+  }
+
+  private dbToLinear(db: number): number {
+    return Math.pow(10, db / 20);
+  }
+
+  private clampDb(db: number, minDb: number, maxDb: number): number {
+    if (!Number.isFinite(db)) return 0;
+    return Math.max(minDb, Math.min(maxDb, db));
+  }
+
+  private getVibesParams(preset: VibesPreset): {
+    low: {freq: number; gainDb: number}
+    mid: {freq: number; q: number; gainDb: number}
+    high: {freq: number; gainDb: number}
+  } {
+    switch (preset) {
+      case 'warm':
+        return {
+          low: {freq: 120, gainDb: 3},
+          mid: {freq: 350, q: 0.8, gainDb: 0},
+          high: {freq: 8000, gainDb: -0.5},
+        };
+      case 'bright':
+        return {
+          low: {freq: 140, gainDb: -0.5},
+          mid: {freq: 3000, q: 1.0, gainDb: 1},
+          high: {freq: 9000, gainDb: 3},
+        };
+      case 'club':
+        return {
+          low: {freq: 100, gainDb: 4},
+          mid: {freq: 500, q: 0.9, gainDb: -0.5},
+          high: {freq: 9000, gainDb: 1.5},
+        };
+      case 'vocal':
+        return {
+          low: {freq: 120, gainDb: -1},
+          mid: {freq: 320, q: 1.1, gainDb: -2},
+          high: {freq: 6000, gainDb: 1.5},
+        };
+      case 'flat':
+      default:
+        return {
+          low: {freq: 120, gainDb: 0},
+          mid: {freq: 400, q: 1.0, gainDb: 0},
+          high: {freq: 8000, gainDb: 0},
+        };
+    }
+  }
+
+  private applyVibesPreset(preset: VibesPreset, opts?: {ms?: number}): void {
+    if (!this.audioContext) return;
+    if (!this.preLimiterGain || !this.vibeLowShelf || !this.vibeMidPeak || !this.vibeHighShelf) return;
+
+    const ms = Math.max(0, Math.min(2000, opts?.ms ?? 200));
+    const now = this.audioContext.currentTime;
+    const params = this.getVibesParams(preset);
+
+    this.vibeLowShelf.type = 'lowshelf';
+    this.vibeHighShelf.type = 'highshelf';
+    this.vibeMidPeak.type = 'peaking';
+
+    // Keep frequencies/Q static; smooth only gain + trim.
+    this.vibeLowShelf.frequency.value = params.low.freq;
+    this.vibeHighShelf.frequency.value = params.high.freq;
+    this.vibeMidPeak.frequency.value = params.mid.freq;
+    this.vibeMidPeak.Q.value = params.mid.q;
+
+    const smooth = (param: AudioParam, value: number) => {
+      const t = now;
+      const end = t + ms / 1000;
+      try {
+        param.cancelScheduledValues(t);
+        param.setValueAtTime(param.value, t);
+        param.linearRampToValueAtTime(value, end);
+      } catch {
+        try {
+          param.value = value;
+        } catch {
+          // ignore
+        }
+      }
+    };
+
+    smooth(this.vibeLowShelf.gain, params.low.gainDb);
+    smooth(this.vibeMidPeak.gain, params.mid.gainDb);
+    smooth(this.vibeHighShelf.gain, params.high.gainDb);
+
+    // Pre-limiter trim to reduce constant limiting for boosted presets.
+    const maxBoost = Math.max(0, params.low.gainDb, params.mid.gainDb, params.high.gainDb);
+    const trimDb = -Math.min(3, Math.max(0, maxBoost * 0.75));
+    smooth(this.preLimiterGain.gain, this.dbToLinear(trimDb));
+  }
+
+  setVibesPreset(preset: VibesPreset, opts?: {ms?: number}): void {
+    this.vibesPreset = preset;
+    this.applyVibesPreset(preset, opts);
   }
 
   getAudioContextTime(): number | null {
@@ -282,6 +389,21 @@ class AudioEngine {
     const offset = deckState.pausedAt;
     const safeWhen = Math.max(this.audioContext.currentTime, whenTime);
 
+    // Entry ramp (avoid abrupt loudness at start).
+    try {
+      const gainNode = deckState.trackGainNode;
+      if (gainNode) {
+        const targetLinear = this.dbToLinear(this.clampDb(deckState.trackGainDb, -12, 12));
+        const startLinear = Math.min(targetLinear, 0.25);
+        const rampSeconds = 0.5;
+        gainNode.gain.cancelScheduledValues(safeWhen);
+        gainNode.gain.setValueAtTime(startLinear, safeWhen);
+        gainNode.gain.linearRampToValueAtTime(targetLinear, safeWhen + rampSeconds);
+      }
+    } catch {
+      // ignore
+    }
+
     source.start(safeWhen, offset);
     deckState.sourceNode = source;
     deckState.trackAtLastCtx = offset;
@@ -309,15 +431,29 @@ class AudioEngine {
 
     this.audioContext = new AudioContext();
     
-    // Create master chain: deck gains -> limiter -> ceiling -> master gain -> destination
+    // Create master chain: deck gains -> preLimiter (trim) -> EQ -> limiter -> ceiling -> master gain -> destination
     this.masterGain = this.audioContext.createGain();
     this.masterGain.gain.value = Math.max(0, Math.min(1, this.masterVolume));
+
+    this.preLimiterGain = this.audioContext.createGain();
+    this.preLimiterGain.gain.value = 1;
+
+    this.vibeLowShelf = this.audioContext.createBiquadFilter();
+    this.vibeMidPeak = this.audioContext.createBiquadFilter();
+    this.vibeHighShelf = this.audioContext.createBiquadFilter();
+
     this.limiterNode = this.audioContext.createDynamicsCompressor();
     this.ceilingNode = this.audioContext.createGain();
     // ~ -1 dBFS ceiling (safer than 0 dBFS).
     this.ceilingNode.gain.value = Math.pow(10, -1 / 20);
     
     this.updateLimiter();
+
+    // Wire master processing graph.
+    this.preLimiterGain.connect(this.vibeLowShelf);
+    this.vibeLowShelf.connect(this.vibeMidPeak);
+    this.vibeMidPeak.connect(this.vibeHighShelf);
+    this.vibeHighShelf.connect(this.limiterNode);
     
     this.limiterNode.connect(this.ceilingNode);
     this.ceilingNode.connect(this.masterGain);
@@ -329,11 +465,14 @@ class AudioEngine {
       this.decks[deckId].trackGainNode = this.audioContext.createGain();
       this.decks[deckId].gainNode = this.audioContext.createGain();
       this.decks[deckId].trackGainNode!.connect(this.decks[deckId].gainNode!);
-      this.decks[deckId].gainNode!.connect(this.limiterNode);
+      this.decks[deckId].gainNode!.connect(this.preLimiterGain);
     }
 
     this.updateCrossfade();
     this.startTimeUpdateLoop();
+
+    // Ensure a deterministic starting tone.
+    this.applyVibesPreset(this.vibesPreset, { ms: 0 });
   }
 
   private updateLimiter(): void {
@@ -495,12 +634,12 @@ class AudioEngine {
     
     if (deckState.trackGainNode) {
       // Convert dB to linear gain, clamped to reasonable range
-      const clampedDb = Math.max(-12, Math.min(12, gainDb));
-      const linearGain = Math.pow(10, clampedDb / 20);
+      const clampedDb = this.clampDb(gainDb, -12, 12);
+      const linearGain = this.dbToLinear(clampedDb);
       const now = this.audioContext?.currentTime ?? 0;
       try {
         deckState.trackGainNode.gain.cancelScheduledValues(now);
-        deckState.trackGainNode.gain.setTargetAtTime(linearGain, now, 0.15);
+        deckState.trackGainNode.gain.setTargetAtTime(linearGain, now, 0.2);
       } catch {
         deckState.trackGainNode.gain.value = linearGain;
       }
@@ -611,6 +750,21 @@ class AudioEngine {
 
     // Calculate start offset
     const offset = deckState.pausedAt;
+
+    // Entry ramp (avoid abrupt loudness at start).
+    try {
+      if (this.audioContext && deckState.trackGainNode) {
+        const now = this.audioContext.currentTime;
+        const targetLinear = this.dbToLinear(this.clampDb(deckState.trackGainDb, -12, 12));
+        const startLinear = Math.min(targetLinear, 0.25);
+        const rampSeconds = 0.5;
+        deckState.trackGainNode.gain.cancelScheduledValues(now);
+        deckState.trackGainNode.gain.setValueAtTime(startLinear, now);
+        deckState.trackGainNode.gain.linearRampToValueAtTime(targetLinear, now + rampSeconds);
+      }
+    } catch {
+      // ignore
+    }
     
     source.start(0, offset);
     deckState.sourceNode = source;
@@ -891,6 +1045,11 @@ class AudioEngine {
     }
     this.masterGain = null;
     this.limiterNode = null;
+    this.ceilingNode = null;
+    this.preLimiterGain = null;
+    this.vibeLowShelf = null;
+    this.vibeMidPeak = null;
+    this.vibeHighShelf = null;
   }
 }
 

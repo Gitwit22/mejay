@@ -33,7 +33,7 @@ export function NowPlaying() {
   const nextTrackId = nextIndex < partyTrackIds.length ? partyTrackIds[nextIndex] : null;
   const nextTrack = nextTrackId ? tracks.find(t => t.id === nextTrackId) : null;
   
-  const hasMoreTracks = nowPlayingIndex < partyTrackIds.length - 1 || settings.loopPlaylist;
+  const hasMoreTracks = nowPlayingIndex < partyTrackIds.length - 1 || settings.repeatMode === 'playlist';
 
   const progress = currentDeck.duration > 0 
     ? (currentDeck.currentTime / currentDeck.duration) * 100 
