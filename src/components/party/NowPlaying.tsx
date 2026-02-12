@@ -84,12 +84,7 @@ export function NowPlaying() {
     };
   }, []);
 
-  const BACK_RESTART_THRESHOLD = 4;
-  const elapsedSinceStart = Math.max(0, currentDeck.currentTime - startAt);
-  const alwaysMixPrev = settings.prevBehavior === 'alwaysMixPrevious';
-  const backTitle = alwaysMixPrev
-    ? 'Previous track'
-    : (elapsedSinceStart > BACK_RESTART_THRESHOLD ? 'Restart track' : 'Previous track');
+  const backTitle = 'Previous track';
 
   const handleSkip = () => {
     if (!hasMoreTracks) return;
@@ -292,40 +287,6 @@ export function NowPlaying() {
           <RotateCcw className="w-4 h-4" />
         </button>
       </div>
-
-      {isPartyMode && (
-        <div className="mt-3 flex items-center justify-center gap-2 text-[10px]">
-          <span className="text-muted-foreground">Prev:</span>
-          <div className="inline-flex rounded-lg bg-white/5 p-1 border border-white/10">
-            <button
-              type="button"
-              onClick={() => updateUserSettings({ prevBehavior: 'restartFirst' })}
-              className={cn(
-                'px-2 py-1 rounded-md transition-colors',
-                settings.prevBehavior !== 'alwaysMixPrevious'
-                  ? 'bg-primary/20 text-primary'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-              title="Prev restarts if track is underway"
-            >
-              Restart first
-            </button>
-            <button
-              type="button"
-              onClick={() => updateUserSettings({ prevBehavior: 'alwaysMixPrevious' })}
-              className={cn(
-                'px-2 py-1 rounded-md transition-colors',
-                settings.prevBehavior === 'alwaysMixPrevious'
-                  ? 'bg-primary/20 text-primary'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-              title="Prev always mixes to the previous track"
-            >
-              Always previous
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Master Volume */}
       <div className="mt-3 sm:mt-4 px-2">

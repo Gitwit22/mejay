@@ -594,7 +594,7 @@ export const useDJStore = create<DJState>()(
     maxTempoPercent: 8,
     shuffleEnabled: false,
     keepImportsOnDevice: true,
-    prevBehavior: 'restartFirst',
+    prevBehavior: 'alwaysMixPrevious',
     masterVolume: 0.9,
     nextSongStartOffset: 15,
     endEarlySeconds: 5,
@@ -1643,22 +1643,9 @@ export const useDJStore = create<DJState>()(
     smartBack: (deck?: DeckId) => {
       const state = get();
       const targetDeck = deck || state.activeDeck;
-      const threshold = 4;
-
-      const track = getDeckTrack(state, targetDeck);
-      const currentTime = getDeckCurrentTime(state, targetDeck);
-      const startAt = track ? getEffectiveStartTimeSec(track, state.settings) : 0;
-      const elapsed = Math.max(0, currentTime - startAt);
-
-      const alwaysMix = state.settings.prevBehavior === 'alwaysMixPrevious';
-
-      if (!alwaysMix && elapsed > threshold) {
-        // Restart path: cancel any pending transitions.
-        cancelPendingTransition();
-        get().restartCurrentTrack(targetDeck);
-        return;
-      }
-
+      // Back always means "previous track" (crossfade mix) in Party Mode.
+      // Replay/Restart is a separate control (hard seek), so Back should not restart.
+      cancelPendingTransition();
       void get().playPreviousTrack(targetDeck);
     },
 
@@ -1698,6 +1685,11 @@ export const useDJStore = create<DJState>()(
       const currentDeckState = activeDeck === 'A' ? state.deckA : state.deckB;
       const currentTrack = tracks.find(t => t.id === currentDeckState.trackId);
       const outgoingTrackId = currentDeckState.trackId;
+
+      // Repeat-one behavior: if we resolve "next" to the same track, do a self-blend loop.
+      // End crossfades into the beginning of the same track (start at 0, no index/history churn).
+      const isSelfBlend = Boolean(outgoingTrackId) && nextTrackId === outgoingTrackId;
+      const postNowPlayingIndex = isSelfBlend ? nowPlayingIndex : nextIndex;
 
       if (!nextTrack?.fileBlob) return;
 
@@ -1752,7 +1744,7 @@ export const useDJStore = create<DJState>()(
       if (ctxNow === null) return;
 
       // DJ Logic timing
-      const startOffsetSeconds = clamp(settings.nextSongStartOffset ?? 0, 0, 120);
+      const startOffsetSeconds = isSelfBlend ? 0 : clamp(settings.nextSongStartOffset ?? 0, 0, 120);
       const endEarlySeconds = clamp(settings.endEarlySeconds ?? 0, 0, 60);
       const effectiveCrossfadeSeconds = clamp(settings.crossfadeSeconds ?? 8, 1, 20);
 
@@ -2029,9 +2021,9 @@ export const useDJStore = create<DJState>()(
           audioEngine.resetMixTrigger();
           set((s) => ({
             activeDeck: nextDeck,
-            nowPlayingIndex: nextIndex,
+            nowPlayingIndex: postNowPlayingIndex,
             mixInProgress: false,
-            playHistoryTrackIds: pushHistory(s.playHistoryTrackIds, outgoingTrackId),
+            playHistoryTrackIds: isSelfBlend ? s.playHistoryTrackIds : pushHistory(s.playHistoryTrackIds, outgoingTrackId),
           }));
 
           // Post-transition safety: force the new active deck tempo to the intended final value.

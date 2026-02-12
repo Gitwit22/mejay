@@ -270,7 +270,7 @@ export async function getSettings(): Promise<Settings> {
     maxTempoPercent: DEFAULT_MAX_SHIFT_PCT,
     shuffleEnabled: false,
     keepImportsOnDevice: true,
-    prevBehavior: 'restartFirst',
+    prevBehavior: 'alwaysMixPrevious',
     masterVolume: 0.9,
     nextSongStartOffset: 15,
     endEarlySeconds: 5,
