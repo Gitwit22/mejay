@@ -11,6 +11,7 @@ import { CheckoutStatusError, getCheckoutStatus } from "@/lib/checkout";
 import { toast } from "@/hooks/use-toast";
 import { handleBecameOnline, periodicPolicyTick, startupCheck } from "@/licensing/licenseService";
 import { useLicenseStore } from "@/licensing/licenseStore";
+import { initMediaSession } from "@/lib/mediaSession";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import WelcomePage from "./app/pages/WelcomePage";
@@ -150,6 +151,18 @@ const AppLifetimeAudioCleanup = () => {
 
     window.addEventListener("pagehide", handlePageHide);
     return () => window.removeEventListener("pagehide", handlePageHide);
+  }, []);
+
+  return null;
+};
+
+const AppMediaSessionBootstrap = () => {
+  useEffect(() => {
+    try {
+      initMediaSession();
+    } catch {
+      // Never throw from bootstrap.
+    }
   }, []);
 
   return null;
@@ -460,6 +473,7 @@ const App = () => (
       <Toaster />
       <Sonner />
       <AppLifetimeAudioCleanup />
+      <AppMediaSessionBootstrap />
       <AppLicenseBootstrap />
       <AppBillingBootstrap />
       <BrowserRouter>

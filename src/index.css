@@ -602,11 +602,27 @@
 }
 
 .mejay-welcome .welcome-logo {
-  width: 192px;
-  height: 192px;
+  width: 72px;
+  height: 72px;
   object-fit: contain;
   flex: 0 0 auto;
   display: block;
+}
+
+.mejay-welcome .hero-logo {
+  margin-top: 18px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 18px 0 10px;
+}
+
+.mejay-welcome .hero-logo-img {
+  width: min(360px, 90%);
+  height: auto;
+  object-fit: contain;
+  display: block;
+  filter: drop-shadow(0 18px 70px rgba(0, 0, 0, 0.4));
 }
 
 .mejay-welcome .welcome-logo-bezel {
@@ -828,14 +844,29 @@
 }
 
 
-.mejay-welcome .features {
+.mejay-welcome .features-panel {
   margin-top: 10px;
+  padding: 18px;
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  box-shadow:
+    0 26px 80px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
 }
 
 .mejay-welcome .feature-grid {
   display: grid;
   grid-template-columns: 1fr;
   gap: 12px;
+}
+
+@media (min-width: 720px) {
+  .mejay-welcome .feature-grid {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 .mejay-welcome .feature-tile {
@@ -887,7 +918,9 @@
 }
 
 .mejay-welcome .welcome-footer {
-  margin-top: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   justify-content: center;
   align-items: center;

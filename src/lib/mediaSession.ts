@@ -9,7 +9,7 @@ const DEFAULT_SEEK_OFFSET_SECONDS = 10
 const POSITION_UPDATE_INTERVAL_MS = 500
 
 let isInitialized = false
-let positionIntervalId: number | null = null
+let positionIntervalId: ReturnType<typeof setInterval> | null = null
 
 function isSupported(): boolean {
   return typeof navigator !== 'undefined' && 'mediaSession' in navigator
@@ -35,9 +35,18 @@ function toArtwork(track?: Track): MediaImage[] | undefined {
   // Use stable app artwork so lock screen UI still looks good.
   // (Relative URLs are fine; Media Session will resolve them.)
   const base: MediaImage[] = [
+    // Prefer public icons if you add them (great for car head units / lock screens).
+    { src: '/branding/mejay-icon-512.png', sizes: '512x512', type: 'image/png' },
+    { src: '/branding/mejay-icon-192.png', sizes: '192x192', type: 'image/png' },
+
+    // Fallback: bundled app logo.
     { src: MEJAY_LOGO_URL, sizes: '512x512', type: 'image/png' },
     { src: MEJAY_LOGO_URL, sizes: '256x256', type: 'image/png' },
     { src: MEJAY_LOGO_URL, sizes: '96x96', type: 'image/png' },
+
+    // Extra fallbacks (existing public assets).
+    { src: '/image.jpg', sizes: '512x512', type: 'image/jpeg' },
+    { src: '/favicon.ico', sizes: '64x64', type: 'image/x-icon' },
   ]
 
   // In case you later add track-level artwork (e.g. track.artworkUrl), append it here.
@@ -61,7 +70,7 @@ function setMetadata(track: Track | undefined): void {
   navigator.mediaSession.metadata = new MediaMetadataCtor({
     title: track.displayName || 'ME Jay',
     artist: track.artist || 'ME Jay',
-    album: 'ME Jay',
+    album: 'Early Access',
     artwork: toArtwork(track),
   })
 }
@@ -124,14 +133,14 @@ function updatePositionState(): void {
 
 function stopPositionInterval(): void {
   if (positionIntervalId !== null) {
-    window.clearInterval(positionIntervalId)
+    clearInterval(positionIntervalId)
     positionIntervalId = null
   }
 }
 
 function ensurePositionIntervalRunning(): void {
   if (positionIntervalId !== null) return
-  positionIntervalId = window.setInterval(() => {
+  positionIntervalId = setInterval(() => {
     updatePositionState()
   }, POSITION_UPDATE_INTERVAL_MS)
 }

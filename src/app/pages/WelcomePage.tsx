@@ -1,3 +1,4 @@
+import {useCallback, useState} from 'react'
 import {Link, useNavigate} from 'react-router-dom'
 
 import {Globe, Infinity, Sparkles, ArrowUpRight} from 'lucide-react'
@@ -5,6 +6,17 @@ import {Globe, Infinity, Sparkles, ArrowUpRight} from 'lucide-react'
 import {useGradientParallax} from '../hooks/useGradientParallax'
 import {appStatus} from '@/appStatus'
 import { MEJAY_LOGO_URL } from '@/lib/branding'
+
+const ANIMATED_LOGO_WEBP_URL = '/branding/mejay_logo_animated.webp'
+
+function AnimatedLogo({className, alt}: {className?: string; alt: string}) {
+  const [src, setSrc] = useState(ANIMATED_LOGO_WEBP_URL)
+  const handleError = useCallback(() => {
+    setSrc(prev => (prev === MEJAY_LOGO_URL ? prev : MEJAY_LOGO_URL))
+  }, [])
+
+  return <img className={className} src={src} alt={alt} onError={handleError} />
+}
 
 export default function WelcomePage() {
   const navigate = useNavigate()
@@ -28,7 +40,7 @@ export default function WelcomePage() {
         <section className="hero-panel" aria-label="MEJay introduction">
           <header className="brand-row">
             <div className="brand">
-              <img className="welcome-logo" src={MEJAY_LOGO_URL} alt="MEJay" />
+              <AnimatedLogo className="welcome-logo" alt="MEJay" />
               <div className="brand-text">
                 <div className="brand-title">
                   <span className="brand-name">MEJay</span>
@@ -46,10 +58,8 @@ export default function WelcomePage() {
             </p>
           </div>
 
-          <div className="flex justify-center items-center py-12">
-            <video autoPlay loop muted playsInline className="w-64 md:w-96">
-              <source src="/branding/mejay_logo_animated.mp4" type="video/mp4" />
-            </video>
+          <div className="hero-logo" aria-label="Animated logo">
+            <AnimatedLogo className="hero-logo-img" alt="MEJay animated logo" />
           </div>
 
           <div className="hero-ctas">
@@ -85,7 +95,7 @@ export default function WelcomePage() {
           </div>
         </section>
 
-        <section className="features" aria-label="Key features">
+        <section className="features-panel" aria-label="Key features">
           <div className="feature-grid">
             <div className="feature-tile">
               <div className="feature-icon" aria-hidden="true">
@@ -127,17 +137,17 @@ export default function WelcomePage() {
               </div>
             </div>
           </div>
-        </section>
 
-        <footer className="welcome-footer" aria-label="Footer links">
-          <Link className="footer-link" to="/about">About</Link>
-          <span className="footer-sep" aria-hidden="true">•</span>
-          <Link className="footer-link" to="/pricing">Pricing</Link>
-          <span className="footer-sep" aria-hidden="true">•</span>
-          <Link className="footer-link" to="/contact">Contact</Link>
-          <span className="footer-sep" aria-hidden="true">•</span>
-          <Link className="footer-link" to="/terms">Terms</Link>
-        </footer>
+          <footer className="welcome-footer" aria-label="Footer links">
+            <Link className="footer-link" to="/about">About</Link>
+            <span className="footer-sep" aria-hidden="true">•</span>
+            <Link className="footer-link" to="/pricing">Pricing</Link>
+            <span className="footer-sep" aria-hidden="true">•</span>
+            <Link className="footer-link" to="/contact">Contact</Link>
+            <span className="footer-sep" aria-hidden="true">•</span>
+            <Link className="footer-link" to="/terms">Terms</Link>
+          </footer>
+        </section>
       </main>
     </div>
   )
