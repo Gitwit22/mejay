@@ -1,10 +1,11 @@
-import {useMemo, useState} from 'react'
+import {useState} from 'react'
 import {Link, useLocation, useNavigate} from 'react-router-dom'
 
 import {toast} from '@/hooks/use-toast'
 import {openBillingPortal} from '@/lib/checkout'
 import {MEJAY_LOGO_URL} from '@/lib/branding'
 import {usePlanStore} from '@/stores/planStore'
+import {navigateBackToPartyMode} from '@/app/navigation/settingsReturnTo'
 
 export default function BillingPage() {
   const location = useLocation()
@@ -17,23 +18,11 @@ export default function BillingPage() {
 
   const [busy, setBusy] = useState(false)
 
-  const safeReturnTo = useMemo(() => {
-    const sp = new URLSearchParams(location.search)
-    const raw = (sp.get('returnTo') ?? '').trim()
-    if (!raw) return '/app?tab=party'
-    if (!raw.startsWith('/')) return '/app?tab=party'
-    if (raw.startsWith('//')) return '/app?tab=party'
-    if (raw.includes('://')) return '/app?tab=party'
-    // Never send users back to login from the billing "Back" button.
-    if (raw.startsWith('/login') || raw.includes('/login')) return '/app?tab=party'
-    return raw
-  }, [location.search])
-
   const hasPaidPlan = authStatus === 'authenticated' && plan !== 'free'
   const isFullProgramOwner = authStatus === 'authenticated' && plan === 'full_program'
 
   const handleBack = () => {
-    navigate(safeReturnTo, {replace: true})
+    navigateBackToPartyMode(navigate, location.state)
   }
 
   const handleManageBilling = async () => {
@@ -54,7 +43,7 @@ export default function BillingPage() {
   const handleChangePlan = () => {
     const self = `${location.pathname}${location.search}`
     const rt = encodeURIComponent(self)
-    navigate(`/app/pricing?returnTo=${rt}`, {replace: true, state: {from: self}})
+    navigate(`/app/settings/pricing?returnTo=${rt}`, {replace: true, state: {from: self}})
   }
 
   return (

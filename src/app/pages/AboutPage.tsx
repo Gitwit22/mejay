@@ -1,11 +1,17 @@
-import {Link, useNavigate} from 'react-router-dom'
+import {Link, useLocation, useNavigate} from 'react-router-dom'
 
 import {useGradientScrollParallax} from '../hooks/useGradientScrollParallax'
 import { MEJAY_LOGO_URL } from '@/lib/branding'
+import {navigateBackToPartyMode} from '@/app/navigation/settingsReturnTo'
 
 export default function AboutPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   useGradientScrollParallax()
+
+  const handleBack = () => {
+    navigateBackToPartyMode(navigate, location.state)
+  }
 
   return (
     <div className="mejay-about">
@@ -22,7 +28,7 @@ export default function AboutPage() {
             <span className="logo-text">MEJay</span>
           </Link>
 
-          <Link to="/" className="back-link">
+          <button type="button" className="back-link" onClick={handleBack}>
             <svg
               width="20"
               height="20"
@@ -34,8 +40,8 @@ export default function AboutPage() {
             >
               <path d="M19 12H5M12 19l-7-7 7-7" />
             </svg>
-            Back to Home
-          </Link>
+            Back
+          </button>
         </div>
       </header>
 

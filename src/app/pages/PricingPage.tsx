@@ -1,10 +1,11 @@
-import {useEffect, useMemo, useState} from 'react'
+import {useEffect, useState} from 'react'
 import {Link, useLocation, useNavigate} from 'react-router-dom'
 
 import {toast} from '@/hooks/use-toast'
 import {startCheckout} from '@/lib/checkout'
 import {usePlanStore} from '@/stores/planStore'
 import { MEJAY_LOGO_URL } from '@/lib/branding'
+import {navigateBackToPartyMode} from '@/app/navigation/settingsReturnTo'
 
 export default function PricingPage() {
   const location = useLocation()
@@ -17,43 +18,12 @@ export default function PricingPage() {
   const authStatus = usePlanStore((s) => s.authStatus)
   const plan = usePlanStore((s) => s.plan)
 
-  const from = (location.state as any)?.from
-  const fromPath = typeof from === 'string' ? from : null
-  const isInApp = (fromPath?.startsWith('/app') ?? false) || location.pathname.startsWith('/app')
-  const backLabel = 'Back'
-
-  const safeReturnTo = useMemo(() => {
-    const sp = new URLSearchParams(location.search)
-    const raw = (sp.get('returnTo') ?? '').trim()
-    if (!raw) return null
-    if (!raw.startsWith('/')) return null
-    if (raw.startsWith('//')) return null
-    if (raw.includes('://')) return null
-    // Never send users back to login from the pricing "Back" button.
-    // If returnTo is polluted (e.g. nested returnTo), fall back to in-app default.
-    if (raw.startsWith('/login') || raw.includes('/login')) return null
-    return raw
-  }, [location.search])
-
   const currentPlanId = authStatus === 'authenticated' ? plan : null
   const hasFullProgram = currentPlanId === 'full_program'
   const isFullProgramComingSoon = currentPlanId !== 'full_program' && !fullProgramCheckoutEnabled
 
   const handleBack = () => {
-    // Never use browser history here (can bounce to Stripe).
-    if (safeReturnTo) {
-      navigate(safeReturnTo, {replace: true})
-      return
-    }
-
-    // If the user is authenticated, prefer keeping them inside the app shell.
-    // This also handles the public /pricing route used from the marketing pages.
-    if (isInApp || authStatus === 'authenticated') {
-      navigate('/app?tab=party', {replace: true})
-      return
-    }
-
-    navigate('/', {replace: true})
+    navigateBackToPartyMode(navigate, location.state)
   }
 
   useEffect(() => {
@@ -119,7 +89,7 @@ export default function PricingPage() {
             >
               <path d="M19 12H5M12 19l-7-7 7-7" />
             </svg>
-            {backLabel}
+            Back
           </button>
         </div>
       </header>
@@ -226,7 +196,7 @@ export default function PricingPage() {
           <div className="license-note-title">Need help?</div>
           <div className="license-note-text">
             If checkout fails or you have questions,{' '}
-            <Link className="license-note-link" to="/contact">
+            <Link className="license-note-link" to="/app/settings/contact">
               contact support
             </Link>
             .

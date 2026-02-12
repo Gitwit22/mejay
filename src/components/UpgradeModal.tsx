@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from '@/hooks/use-toast';
 import { startCheckout } from '@/lib/checkout';
+import {getSettingsEntryNavigateOptions} from '@/app/navigation/settingsReturnTo'
 
 export function UpgradeModal() {
   const { upgradeModalOpen, closeUpgradeModal, billingEnabled, setDevPlan, authBypassEnabled, plan } = usePlanStore();
@@ -17,13 +18,19 @@ export function UpgradeModal() {
   const goToPricing = () => {
     closeUpgradeModal();
     const from = `${location.pathname}${location.search}`;
-    navigate(`/app/pricing?returnTo=${encodeURIComponent(from)}`, { state: { from } });
+    navigate(
+      `/app/settings/pricing?returnTo=${encodeURIComponent(from)}`,
+      getSettingsEntryNavigateOptions({state: {from}}),
+    );
   };
 
   const goToManagePlan = () => {
     closeUpgradeModal()
     const from = `${location.pathname}${location.search}`
-    navigate(`/app/billing?returnTo=${encodeURIComponent(from)}`, {state: {from}})
+    navigate(
+      `/app/settings/billing?returnTo=${encodeURIComponent(from)}`,
+      getSettingsEntryNavigateOptions({state: {from}}),
+    )
   }
 
   const beginCheckout = async (plan: 'pro' | 'full_program') => {

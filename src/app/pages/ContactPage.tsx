@@ -1,11 +1,19 @@
 import {useEffect} from 'react'
-import {Link} from 'react-router-dom'
+import {Link, useLocation, useNavigate} from 'react-router-dom'
 import { MEJAY_LOGO_URL } from '@/lib/branding'
+import {navigateBackToPartyMode} from '@/app/navigation/settingsReturnTo'
 
 export default function ContactPage() {
+  const navigate = useNavigate()
+  const location = useLocation()
+
   useEffect(() => {
     window.scrollTo(0, 0)
   }, [])
+
+  const handleBack = () => {
+    navigateBackToPartyMode(navigate, location.state)
+  }
 
   return (
     <div className="mejay-contact">
@@ -20,9 +28,9 @@ export default function ContactPage() {
             </div>
             <span className="logo-text">MEJay</span>
           </Link>
-          <Link to="/" className="back-link">
-            Back to Home
-          </Link>
+          <button type="button" className="back-link" onClick={handleBack}>
+            Back
+          </button>
         </div>
       </header>
 

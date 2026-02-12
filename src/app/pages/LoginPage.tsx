@@ -35,6 +35,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [password2, setPassword2] = useState('')
   const [verifiedToken, setVerifiedToken] = useState('')
+  const [rememberMe, setRememberMe] = useState(true)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -59,7 +60,7 @@ export default function LoginPage() {
         method: 'POST',
         credentials: 'include',
         headers: {'content-type': 'application/json'},
-        body: JSON.stringify({email, password}),
+        body: JSON.stringify({email, password, rememberMe}),
       })
       const data = (await res.json().catch(() => null)) as any
       if (res.ok && data?.ok) {
@@ -172,7 +173,7 @@ export default function LoginPage() {
         method: 'POST',
         credentials: 'include',
         headers: {'content-type': 'application/json'},
-        body: JSON.stringify({email, verifiedToken, password}),
+        body: JSON.stringify({email, verifiedToken, password, rememberMe}),
       })
       const data = (await res.json().catch(() => null)) as any
       if (!res.ok || !data?.ok) {
@@ -229,28 +230,57 @@ export default function LoginPage() {
         </div>
 
         {mode === 'password' && (
-          <div className="space-y-3">
-            <label className="block text-sm font-medium">Email</label>
+          <form
+            className="space-y-3"
+            autoComplete="on"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void login()
+            }}
+          >
+            <label className="block text-sm font-medium" htmlFor="email">Email</label>
             <input
+              id="email"
+              name="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               type="email"
+              inputMode="email"
+              autoComplete="email"
+              autoCapitalize="none"
+              spellCheck={false}
               className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10"
               placeholder="you@example.com"
-              autoComplete="email"
+              required
             />
-            <label className="block text-sm font-medium">Password</label>
+            <label className="block text-sm font-medium" htmlFor="password">Password</label>
             <input
+              id="password"
+              name="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               type="password"
+              autoComplete="current-password"
               className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10"
               placeholder="Your password"
-              autoComplete="current-password"
+              required
             />
+
+            <div className="flex items-center gap-2 pt-1">
+              <input
+                id="remember-me"
+                name="rememberMe"
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="h-4 w-4 accent-primary"
+              />
+              <label htmlFor="remember-me" className="text-sm text-muted-foreground select-none">
+                Remember me for 30 days
+              </label>
+            </div>
             <button
-              type="button"
-              onClick={login}
+              type="submit"
               disabled={busy}
               className="w-full py-2.5 rounded-lg bg-gradient-to-r from-primary to-secondary text-white font-semibold disabled:opacity-60"
             >
@@ -280,23 +310,35 @@ export default function LoginPage() {
                 Create account
               </button>
             </div>
-          </div>
+          </form>
         )}
 
         {mode === 'code' && codeStep === 'email' && (
-          <div className="space-y-3">
-            <label className="block text-sm font-medium">Email</label>
+          <form
+            className="space-y-3"
+            autoComplete="on"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void startCode()
+            }}
+          >
+            <label className="block text-sm font-medium" htmlFor="email">Email</label>
             <input
+              id="email"
+              name="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               type="email"
+              inputMode="email"
+              autoComplete="email"
+              autoCapitalize="none"
+              spellCheck={false}
               className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10"
               placeholder="you@example.com"
-              autoComplete="email"
+              required
             />
             <button
-              type="button"
-              onClick={startCode}
+              type="submit"
               disabled={busy}
               className="w-full py-2.5 rounded-lg bg-gradient-to-r from-primary to-secondary text-white font-semibold disabled:opacity-60"
             >
@@ -321,25 +363,34 @@ export default function LoginPage() {
                 {purpose === 'signup_verify' ? 'Reset password instead' : 'Create account instead'}
               </button>
             </div>
-          </div>
+          </form>
         )}
 
         {mode === 'code' && codeStep === 'code' && (
-          <div className="space-y-3">
+          <form
+            className="space-y-3"
+            autoComplete="on"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void verifyCode()
+            }}
+          >
             <div className="text-sm text-muted-foreground">
               Code sent to <span className="text-foreground font-medium">{email}</span>
             </div>
-            <label className="block text-sm font-medium">6-digit code</label>
+            <label className="block text-sm font-medium" htmlFor="code">6-digit code</label>
             <input
+              id="code"
+              name="code"
               value={code}
               onChange={(e) => setCode(e.target.value)}
               inputMode="numeric"
+              autoComplete="one-time-code"
               className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 tracking-widest"
               placeholder="123456"
             />
             <button
-              type="button"
-              onClick={verifyCode}
+              type="submit"
               disabled={busy}
               className="w-full py-2.5 rounded-lg bg-gradient-to-r from-primary to-secondary text-white font-semibold disabled:opacity-60"
             >
@@ -353,35 +404,61 @@ export default function LoginPage() {
             >
               Use a different email
             </button>
-          </div>
+          </form>
         )}
 
         {mode === 'setPassword' && (
-          <div className="space-y-3">
+          <form
+            className="space-y-3"
+            autoComplete="on"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void setNewPassword()
+            }}
+          >
             <div className="text-sm text-muted-foreground">
               Setting password for <span className="text-foreground font-medium">{email}</span>
             </div>
-            <label className="block text-sm font-medium">New password</label>
+            <label className="block text-sm font-medium" htmlFor="new-password">New password</label>
             <input
+              id="new-password"
+              name="new-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               type="password"
               className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10"
               placeholder="At least 8 characters"
               autoComplete="new-password"
+              required
             />
-            <label className="block text-sm font-medium">Confirm password</label>
+            <label className="block text-sm font-medium" htmlFor="new-password-confirm">Confirm password</label>
             <input
+              id="new-password-confirm"
+              name="new-password-confirm"
               value={password2}
               onChange={(e) => setPassword2(e.target.value)}
               type="password"
               className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10"
               placeholder="Retype password"
               autoComplete="new-password"
+              required
             />
+
+            <div className="flex items-center gap-2 pt-1">
+              <input
+                id="remember-me"
+                name="rememberMe"
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="h-4 w-4 accent-primary"
+              />
+              <label htmlFor="remember-me" className="text-sm text-muted-foreground select-none">
+                Remember me for 30 days
+              </label>
+            </div>
             <button
-              type="button"
-              onClick={setNewPassword}
+              type="submit"
               disabled={busy}
               className="w-full py-2.5 rounded-lg bg-gradient-to-r from-primary to-secondary text-white font-semibold disabled:opacity-60"
             >
@@ -398,7 +475,7 @@ export default function LoginPage() {
             >
               Cancel
             </button>
-          </div>
+          </form>
         )}
 
         <div className="mt-6 text-center text-xs text-muted-foreground">

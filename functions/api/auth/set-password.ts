@@ -2,6 +2,7 @@ import {hashPassword} from '../_password'
 
 import {
   SESSION_TTL_MS,
+  SHORT_SESSION_TTL_MS,
   addMsIso,
   makeSessionCookie,
   normalizeEmail,
@@ -47,6 +48,9 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
     const email = normalizeEmail(String((body as any).email || ''))
     const token = String((body as any).verifiedToken || '').trim()
     const password = String((body as any).password || '')
+    const rememberMeRaw = (body as any).rememberMe
+    // Back-compat: older clients don't send rememberMe; preserve existing 30-day behavior.
+    const rememberMe = typeof rememberMeRaw === 'boolean' ? rememberMeRaw : true
 
     if (!email || !token || !password) return json({ok: false, error: 'missing'}, {status: 400})
     if (password.length < 8) return json({ok: false, error: 'password_too_short'}, {status: 400})
@@ -100,10 +104,11 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
     }
 
     // Create session.
+    const ttlMs = rememberMe ? SESSION_TTL_MS : SHORT_SESSION_TTL_MS
     const sessionToken = crypto.randomUUID() + crypto.randomUUID()
     const sessionPepper = env.SESSION_PEPPER || 'dev-session-pepper'
     const tokenHash = await sha256Hex(`session:${sessionToken}:${sessionPepper}`)
-    const expiresAt = addMsIso(SESSION_TTL_MS)
+    const expiresAt = addMsIso(ttlMs)
 
     await env.DB
       .prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?1, ?2, ?3)')
@@ -111,7 +116,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
       .run()
 
     const secure = new URL(request.url).protocol === 'https:'
-    const cookie = makeSessionCookie(sessionToken, {secure, maxAgeSeconds: Math.floor(SESSION_TTL_MS / 1000)})
+    const cookie = makeSessionCookie(sessionToken, {secure, maxAgeSeconds: Math.floor(ttlMs / 1000)})
 
     return new Response(JSON.stringify({ok: true}), {
       status: 200,

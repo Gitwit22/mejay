@@ -1,6 +1,6 @@
 import {verifyPassword} from '../_password'
 
-import {SESSION_TTL_MS, addMsIso, makeSessionCookie, normalizeEmail, readJson, sha256Hex} from '../_auth'
+import {SESSION_TTL_MS, SHORT_SESSION_TTL_MS, addMsIso, makeSessionCookie, normalizeEmail, readJson, sha256Hex} from '../_auth'
 
 type Env = {
   DB: any
@@ -29,6 +29,9 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
     const body = await readJson(request)
     const email = normalizeEmail(String((body as any).email || ''))
     const password = String((body as any).password || '')
+    const rememberMeRaw = (body as any).rememberMe
+    // Back-compat: older clients don't send rememberMe; preserve existing 30-day behavior.
+    const rememberMe = typeof rememberMeRaw === 'boolean' ? rememberMeRaw : true
 
     if (!email || !password) return json({ok: false, error: 'missing'}, {status: 400})
 
@@ -44,10 +47,12 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
 
     if (!ok) return json({ok: false, error: 'invalid_credentials'}, {status: 401})
 
+    const ttlMs = rememberMe ? SESSION_TTL_MS : SHORT_SESSION_TTL_MS
+
     const sessionToken = crypto.randomUUID() + crypto.randomUUID()
     const pepper = env.SESSION_PEPPER || 'dev-session-pepper'
     const tokenHash = await sha256Hex(`session:${sessionToken}:${pepper}`)
-    const expiresAt = addMsIso(SESSION_TTL_MS)
+    const expiresAt = addMsIso(ttlMs)
 
     await env.DB
       .prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?1, ?2, ?3)')
@@ -55,7 +60,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
       .run()
 
     const secure = new URL(request.url).protocol === 'https:'
-    const cookie = makeSessionCookie(sessionToken, {secure, maxAgeSeconds: Math.floor(SESSION_TTL_MS / 1000)})
+    const cookie = makeSessionCookie(sessionToken, {secure, maxAgeSeconds: Math.floor(ttlMs / 1000)})
 
     return new Response(JSON.stringify({ok: true}), {
       status: 200,

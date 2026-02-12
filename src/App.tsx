@@ -25,6 +25,8 @@ import PrivacyPage from "./app/pages/PrivacyPage";
 
 const queryClient = new QueryClient();
 
+const DEFAULT_AUTH_REDIRECT_PATH = '/app?tab=party';
+
 const INITIAL_PATH_SESSION_KEY = "mejay:initialPath";
 
 // Capture the initial URL for this document load so we can distinguish:
@@ -130,6 +132,46 @@ const AppShellLayout = () => {
 
   return <Outlet />;
 };
+
+const WelcomeRoute = () => {
+  const authStatus = usePlanStore((s) => s.authStatus)
+  const authBypassEnabled = usePlanStore((s) => s.authBypassEnabled)
+  const didKickoffRefresh = useRef(false)
+
+  useEffect(() => {
+    if (authBypassEnabled) return
+    if (authStatus !== 'unknown') return
+    if (didKickoffRefresh.current) return
+    didKickoffRefresh.current = true
+    void usePlanStore.getState().refreshFromServer({reason: 'welcomeGate'}).catch(() => undefined)
+  }, [authBypassEnabled, authStatus])
+
+  if (authBypassEnabled || authStatus === 'authenticated') {
+    return <Navigate to={DEFAULT_AUTH_REDIRECT_PATH} replace />
+  }
+
+  return <WelcomePage />
+}
+
+const LoginRoute = () => {
+  const authStatus = usePlanStore((s) => s.authStatus)
+  const authBypassEnabled = usePlanStore((s) => s.authBypassEnabled)
+  const didKickoffRefresh = useRef(false)
+
+  useEffect(() => {
+    if (authBypassEnabled) return
+    if (authStatus !== 'unknown') return
+    if (didKickoffRefresh.current) return
+    didKickoffRefresh.current = true
+    void usePlanStore.getState().refreshFromServer({reason: 'loginGate'}).catch(() => undefined)
+  }, [authBypassEnabled, authStatus])
+
+  if (authBypassEnabled || authStatus === 'authenticated') {
+    return <Navigate to={DEFAULT_AUTH_REDIRECT_PATH} replace />
+  }
+
+  return <LoginPage />
+}
 
 const AppLifetimeAudioCleanup = () => {
   useEffect(() => {
@@ -478,18 +520,26 @@ const App = () => (
       <AppBillingBootstrap />
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<WelcomePage />} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/about" element={<AboutPage />} />
-          <Route path="/pricing" element={<PricingPage />} />
-          <Route path="/billing" element={<Navigate to="/app/billing" replace />} />
-          <Route path="/terms" element={<TermsPage />} />
-          <Route path="/privacy" element={<PrivacyPage />} />
-          <Route path="/contact" element={<ContactPage />} />
+          <Route path="/" element={<WelcomeRoute />} />
+          <Route path="/login" element={<LoginRoute />} />
+          <Route path="/about" element={<Navigate to="/app/settings/about" replace />} />
+          <Route path="/pricing" element={<Navigate to="/app/settings/pricing" replace />} />
+          <Route path="/billing" element={<Navigate to="/app/settings/billing" replace />} />
+          <Route path="/terms" element={<Navigate to="/app/settings/terms" replace />} />
+          <Route path="/privacy" element={<Navigate to="/app/settings/privacy" replace />} />
+          <Route path="/contact" element={<Navigate to="/app/settings/contact" replace />} />
           <Route path="/app" element={<AppShellLayout />}>
             <Route index element={<Index />} />
-            <Route path="pricing" element={<PricingPage />} />
-            <Route path="billing" element={<BillingPage />} />
+            <Route path="pricing" element={<Navigate to="/app/settings/pricing" replace />} />
+            <Route path="billing" element={<Navigate to="/app/settings/billing" replace />} />
+            <Route path="settings">
+              <Route path="about" element={<AboutPage />} />
+              <Route path="pricing" element={<PricingPage />} />
+              <Route path="billing" element={<BillingPage />} />
+              <Route path="terms" element={<TermsPage />} />
+              <Route path="privacy" element={<PrivacyPage />} />
+              <Route path="contact" element={<ContactPage />} />
+            </Route>
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Route>

@@ -35,6 +35,7 @@ import {usePlanStore} from '@/stores/planStore'
 import {useLicenseStore} from '@/licensing/licenseStore'
 import {getNextRequiredCheckBy} from '@/licensing/licensePolicy'
 import {openBillingPortal} from '@/lib/checkout'
+import {getSettingsEntryNavigateOptions} from '@/app/navigation/settingsReturnTo'
 
 type TopRightSettingsMenuProps = {
   className?: string
@@ -111,9 +112,15 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
     navigate(to, options)
   }
 
+  const closeAndNavigateSettings = (to: string, options?: NavigateOptions) => {
+    closeAndNavigate(to, getSettingsEntryNavigateOptions(options))
+  }
+
   const from = `${location.pathname}${location.search}`
 
-  const planDestination = hasPaidPlan ? `/app/billing?returnTo=${encodeURIComponent(from)}` : `/app/pricing?returnTo=${encodeURIComponent(from)}`
+  const planDestination = hasPaidPlan
+    ? `/app/settings/billing?returnTo=${encodeURIComponent(from)}`
+    : `/app/settings/pricing?returnTo=${encodeURIComponent(from)}`
   const planLabelInMenu = hasPaidPlan ? 'Manage plan' : 'View pricing'
   const planLabelInSupport = hasPaidPlan ? 'Manage Plan' : 'Pricing'
   const showManageBillingButton = plan !== 'full_program'
@@ -449,7 +456,7 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                         type="button"
                         variant="outline"
                         className="w-full"
-                        onClick={() => closeAndNavigate(planDestination, {state: {from}})}
+                        onClick={() => closeAndNavigateSettings(planDestination, {state: {from}})}
                       >
                         {planLabelInMenu}
                       </Button>
@@ -616,24 +623,24 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                 </CollapsibleTrigger>
                 <CollapsibleContent>
                   <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm p-4 space-y-2">
-                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/about')}>
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigateSettings('/app/settings/about')}>
                       About MEJay
                     </Button>
                     <Button
                       type="button"
                       variant="outline"
                       className="w-full justify-start"
-                      onClick={() => closeAndNavigate(planDestination, {state: {from}})}
+                      onClick={() => closeAndNavigateSettings(planDestination, {state: {from}})}
                     >
                       {planLabelInSupport}
                     </Button>
-                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/terms')}>
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigateSettings('/app/settings/terms')}>
                       Terms of Service
                     </Button>
-                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/privacy')}>
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigateSettings('/app/settings/privacy')}>
                       Privacy Policy
                     </Button>
-                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/contact')}>
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigateSettings('/app/settings/contact')}>
                       Contact & Support
                     </Button>
                   </div>
