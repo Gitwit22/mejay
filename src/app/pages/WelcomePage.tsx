@@ -10,7 +10,10 @@ import { MEJAY_LOGO_URL } from '@/lib/branding'
 const ANIMATED_LOGO_WEBP_URL = '/branding/mejay_logo_animated.webp'
 
 function AnimatedLogo({className, alt}: {className?: string; alt: string}) {
-  const [src, setSrc] = useState(ANIMATED_LOGO_WEBP_URL)
+  const [src, setSrc] = useState(() => {
+    const v = encodeURIComponent(appStatus.version || '')
+    return v ? `${ANIMATED_LOGO_WEBP_URL}?v=${v}` : ANIMATED_LOGO_WEBP_URL
+  })
   const handleError = useCallback(() => {
     setSrc(prev => (prev === MEJAY_LOGO_URL ? prev : MEJAY_LOGO_URL))
   }, [])
@@ -58,8 +61,13 @@ export default function WelcomePage() {
             </p>
           </div>
 
-          <div className="hero-logo" aria-label="Animated logo">
-            <AnimatedLogo className="hero-logo-img" alt="MEJay animated logo" />
+          <div className="hero-benefits" aria-label="What you get">
+            <div className="hero-benefits-title">What you get</div>
+            <ul className="hero-benefits-list">
+              <li>• Auto-DJ energy without dead air</li>
+              <li>• Clean transitions that feel intentional</li>
+              <li>• Browser-first + installable (PWA)</li>
+            </ul>
           </div>
 
           <div className="hero-ctas">
