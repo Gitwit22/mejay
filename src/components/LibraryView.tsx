@@ -58,6 +58,23 @@ export function LibraryView() {
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files && files.length > 0) {
+      // Hard-block non-audio (100% in code).
+      const audioExtRe = /\.(mp3|wav|m4a|aac|flac|ogg)$/i
+      const invalid = Array.from(files).find((f) => {
+        const type = (f.type || '').toLowerCase()
+        return !(type.startsWith('audio/') || audioExtRe.test(f.name))
+      })
+
+      if (invalid) {
+        toast({
+          title: 'Audio files only',
+          description: 'Please select an audio file (mp3, wav, m4a, etc.).',
+          variant: 'destructive',
+        })
+        e.target.value = ''
+        return
+      }
+
       try {
         await importTracks(files);
       } catch (error) {
@@ -143,26 +160,24 @@ export function LibraryView() {
       </div>
 
       {/* Import Button */}
+      <button
+        type="button"
+        onClick={() => fileInputRef.current?.click()}
+        className="btn-primary-gradient flex items-center justify-center gap-2.5 w-full py-4 text-[15px] mb-5"
+      >
+        <Upload className="w-5 h-5" />
+        Import
+      </button>
+
       <input
         ref={fileInputRef}
         id={fileInputId}
         type="file"
-        // iOS Safari + Gmail downloads can label MP3 attachments as `application/octet-stream`,
-        // which makes them appear greyed out if we only accept `audio/*`.
-        // Keep this audio-only (no image/video) to avoid iOS offering camera/photo sources.
-        accept=".mp3,.m4a,.aac,.wav,.mp4,audio/*,video/*,audio/mpeg,audio/mp3,audio/x-m4a,audio/aac,audio/wav,application/octet-stream"
+        accept="audio/*,application/octet-stream,.mp3,.wav,.m4a,.aac,.flac,.ogg"
         multiple
         onChange={handleFileSelect}
-        // iOS Safari won’t open the picker reliably when the input is display:none.
         className="sr-only"
       />
-      <label
-        htmlFor={fileInputId}
-        className="btn-primary-gradient flex items-center justify-center gap-2.5 w-full py-4 text-[15px] mb-5 cursor-pointer"
-      >
-        <Upload className="w-5 h-5" />
-        Choose Files
-      </label>
 
       <button
         onClick={handleClearAllImports}

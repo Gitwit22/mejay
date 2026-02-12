@@ -46,6 +46,12 @@ export default function WelcomePage() {
             </p>
           </div>
 
+          <div className="flex justify-center items-center py-12">
+            <video autoPlay loop muted playsInline className="w-64 md:w-96">
+              <source src="/branding/mejay_logo_animated.mp4" type="video/mp4" />
+            </video>
+          </div>
+
           <div className="hero-ctas">
             <button
               type="button"
