@@ -1,9 +1,11 @@
-import { Gauge, Lock, Unlock } from 'lucide-react';
+import { Gauge, Lock, Unlock, Sparkles } from 'lucide-react';
 import { useDJStore } from '@/stores/djStore';
 import { cn } from '@/lib/utils';
 import { Slider } from '@/components/ui/slider';
 import { GatedSection } from '@/components/ui/GatedControl';
 import { audioEngine } from '@/lib/audioEngine';
+import { useEffect, useState } from 'react';
+import { TEMPO_PRESET_OPTIONS, getTempoPresetLabel, getTempoPresetTargetBpm, normalizeTempoPreset } from '@/lib/tempoPresets';
 
 export function TempoControls() {
   const {
@@ -20,9 +22,23 @@ export function TempoControls() {
     lastTransitionTempoPlan,
     lastTempoDebug,
   } = useDJStore();
+
+  const [showAdvancedModes, setShowAdvancedModes] = useState(settings.tempoMode !== 'preset');
+  useEffect(() => {
+    // When presets are active, keep Auto/Locked out of the way unless explicitly expanded.
+    if (settings.tempoMode === 'preset') {
+      setShowAdvancedModes(false);
+    } else {
+      setShowAdvancedModes(true);
+    }
+  }, [settings.tempoMode]);
   
   const currentDeck = activeDeck === 'A' ? deckA : deckB;
   const currentTrack = tracks.find(t => t.id === currentDeck.trackId);
+
+  const tempoPreset = normalizeTempoPreset(settings.tempoPreset ?? 'original')
+  const tempoPresetTargetBpm = getTempoPresetTargetBpm(tempoPreset)
+  const tempoPresetLabel = getTempoPresetLabel(tempoPreset)
 
   const autoTargetBpm = settings.autoBaseBpm !== null
     ? Math.round(settings.autoBaseBpm * 10) / 10
@@ -70,6 +86,39 @@ export function TempoControls() {
           Tempo Control
         </h3>
 
+        {/* Tempo Vibe Presets */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-muted-foreground">Tempo Vibe</span>
+            <span className="text-xs font-semibold text-primary">
+              {tempoPresetTargetBpm !== null ? `${Math.round(tempoPresetTargetBpm)} BPM (${tempoPresetLabel})` : 'Original'}
+            </span>
+          </div>
+          <div className="grid grid-cols-4 gap-2">
+            {TEMPO_PRESET_OPTIONS.map((p) => (
+              <button
+                key={p.key}
+                onClick={() => updateUserSettings({ tempoMode: 'preset', tempoPreset: p.key })}
+                className={cn(
+                  'px-2 py-2 rounded-xl text-[11px] font-medium transition-all',
+                  settings.tempoMode === 'preset' && tempoPreset === p.key
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-white/5 text-muted-foreground hover:bg-white/10'
+                )}
+                type="button"
+              >
+                <span className="inline-flex items-center justify-center gap-1">
+                  {p.key === 'club' ? <Sparkles className="w-3.5 h-3.5" /> : null}
+                  {p.shortLabel}
+                </span>
+              </button>
+            ))}
+          </div>
+          <p className="text-[9px] text-muted-foreground mt-2">
+            Discrete choices set tempo once — no continuous correction.
+          </p>
+        </div>
+
         {settings.tempoMode === 'auto' && (lastTransitionTempoPlan?.tempoMatchDisabled || lastTransitionTempoMatchDisabled) && (
           <div className="rounded-xl bg-white/5 px-3 py-2 text-[10px] text-muted-foreground">
             {(() => {
@@ -95,38 +144,66 @@ export function TempoControls() {
         {/* Tempo Mode Toggle */}
         <div>
           <span className="text-xs text-muted-foreground block mb-2">Mode</span>
-          <div className="grid grid-cols-2 gap-2">
-            <div className="space-y-1">
-              <button
-                onClick={handleAutoMatchClick}
-                className={cn(
-                  'w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-all',
-                  settings.tempoMode === 'auto'
-                    ? 'bg-accent text-accent-foreground'
-                    : 'bg-white/5 text-muted-foreground hover:bg-white/10'
-                )}
-                type="button"
-              >
-                <Unlock className="w-3.5 h-3.5" />
-                Match Base BPM
-              </button>
-              <p className="text-[9px] text-muted-foreground leading-snug">
-                Pick a target BPM for Auto Match. Tap again to reset.
-              </p>
-            </div>
+          <div className="grid grid-cols-3 gap-2">
             <button
-              onClick={() => updateUserSettings({ tempoMode: 'locked' })}
+              onClick={() => updateUserSettings({ tempoMode: 'preset' })}
               className={cn(
                 'w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-all',
-                settings.tempoMode === 'locked'
+                settings.tempoMode === 'preset'
                   ? 'bg-primary text-primary-foreground'
                   : 'bg-white/5 text-muted-foreground hover:bg-white/10'
               )}
               type="button"
             >
-              <Lock className="w-3.5 h-3.5" />
-              Locked BPM
+              <Sparkles className="w-3.5 h-3.5" />
+              Presets
             </button>
+            {settings.tempoMode === 'preset' && !showAdvancedModes ? (
+              <button
+                type="button"
+                onClick={() => setShowAdvancedModes(true)}
+                className={cn(
+                  'col-span-2 w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-all',
+                  'bg-white/5 text-muted-foreground hover:bg-white/10'
+                )}
+              >
+                Show Auto / Locked
+              </button>
+            ) : (
+              <>
+                <div className="space-y-1">
+                  <button
+                    onClick={handleAutoMatchClick}
+                    className={cn(
+                      'w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-all',
+                      settings.tempoMode === 'auto'
+                        ? 'bg-accent text-accent-foreground'
+                        : 'bg-white/5 text-muted-foreground hover:bg-white/10'
+                    )}
+                    type="button"
+                  >
+                    <Unlock className="w-3.5 h-3.5" />
+                    Match Base BPM
+                  </button>
+                  <p className="text-[9px] text-muted-foreground leading-snug">
+                    Pick a target BPM for Auto Match. Tap again to reset.
+                  </p>
+                </div>
+                <button
+                  onClick={() => updateUserSettings({ tempoMode: 'locked' })}
+                  className={cn(
+                    'w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-all',
+                    settings.tempoMode === 'locked'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-white/5 text-muted-foreground hover:bg-white/10'
+                  )}
+                  type="button"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  Locked BPM
+                </button>
+              </>
+            )}
           </div>
         </div>
 

@@ -5,6 +5,7 @@ import { formatDuration } from '@/lib/utils';
 import { useRef, useEffect } from 'react';
 import { computeTempoShiftInfo, getTempoCapDecision } from '@/lib/tempoMatch';
 import { usePlanStore } from '@/stores/planStore';
+import { getTempoPresetTargetBpm, normalizeTempoPreset } from '@/lib/tempoPresets';
 
 type PartyQueuePanelProps = {
   className?: string;
@@ -32,13 +33,21 @@ export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
 
   const tempoControlEnabled = usePlanStore((s) => s.hasFeature('tempoControl'));
 
+  // Preset mode uses a larger stretch ceiling so the vibe targets are reachable.
+  const effectiveMaxTempoPercent = settings.tempoMode === 'preset' ? 35 : settings.maxTempoPercent;
+
   const targetBpm = (() => {
     if (settings.tempoMode === 'locked') return settings.lockedBpm;
 
+    if (settings.tempoMode === 'preset') {
+      const preset = normalizeTempoPreset(settings.tempoPreset ?? 'original');
+      const presetBpm = getTempoPresetTargetBpm(preset);
+      if (presetBpm !== null) return presetBpm;
+    }
+
     if (settings.tempoMode === 'auto') {
       if (settings.autoBaseBpm !== null && Number.isFinite(settings.autoBaseBpm)) {
-        const offset = Number.isFinite(settings.autoOffsetBpm) ? (settings.autoOffsetBpm ?? 0) : 0;
-        return settings.autoBaseBpm + offset;
+        return settings.autoBaseBpm;
       }
     }
 
@@ -208,7 +217,7 @@ export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
                         tempoControlEnabled,
                         tempoMode: settings.tempoMode,
                         requiredShiftPct: info.requiredShiftPct,
-                        rawMaxTempoPercent: settings.maxTempoPercent,
+                        rawMaxTempoPercent: effectiveMaxTempoPercent,
                         nearCapFraction: 0.8,
                       });
 

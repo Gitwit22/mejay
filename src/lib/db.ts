@@ -50,7 +50,9 @@ export interface Settings {
   nextSongStartOffset: number; // seconds into next song to start
   endEarlySeconds?: number; // fade out this many seconds before current track ends
   // Tempo controls
-  tempoMode: 'auto' | 'locked';
+  tempoMode: 'auto' | 'locked' | 'preset';
+  /** Discrete tempo vibe presets (used when tempoMode === 'preset'). */
+  tempoPreset: 'original' | 'chill' | 'upbeat' | 'club' | 'fast';
   lockedBpm: number;
   /** 0..100 - allowed BPM drift before correcting back to lockedBpm. */
   lockTolerancePct: number;
@@ -282,7 +284,8 @@ export async function getSettings(): Promise<Settings> {
     masterVolume: 0.9,
     nextSongStartOffset: 15,
     endEarlySeconds: 5,
-    tempoMode: 'auto',
+    tempoMode: 'preset',
+    tempoPreset: 'original',
     lockedBpm: 128,
     lockTolerancePct: 10,
     autoBaseBpm: null,
@@ -309,6 +312,26 @@ export async function getSettings(): Promise<Settings> {
   const repeatMode: Settings['repeatMode'] = rawRepeatMode === 'off' || rawRepeatMode === 'playlist' || rawRepeatMode === 'track'
     ? rawRepeatMode
     : (legacyLoopPlaylist ? 'playlist' : 'off');
+
+  const rawTempoMode = (merged as any).tempoMode;
+  const tempoMode: Settings['tempoMode'] = rawTempoMode === 'locked' || rawTempoMode === 'preset' ? rawTempoMode : 'auto';
+
+  const rawTempoPreset = (merged as any).tempoPreset;
+  const tempoPreset: Settings['tempoPreset'] =
+    // Migrate legacy 'normal' -> 'upbeat' (same BPM target as old Normal).
+    rawTempoPreset === 'normal'
+      ? 'upbeat'
+      : rawTempoPreset === 'slow'
+        ? 'chill'
+      : (
+          rawTempoPreset === 'original' ||
+          rawTempoPreset === 'chill' ||
+          rawTempoPreset === 'upbeat' ||
+          rawTempoPreset === 'club' ||
+          rawTempoPreset === 'fast'
+            ? rawTempoPreset
+            : defaults.tempoPreset
+        );
 
   const rawVibesPreset = (merged as any).vibesPreset;
   const vibesPreset: Settings['vibesPreset'] =
@@ -343,6 +366,8 @@ export async function getSettings(): Promise<Settings> {
 
   return {
     ...merged,
+    tempoMode,
+    tempoPreset,
     prevBehavior,
     repeatMode,
     vibesPreset,

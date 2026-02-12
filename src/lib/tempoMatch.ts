@@ -41,7 +41,7 @@ export type TempoCapVariant = 'disabled' | 'over_cap' | 'near_cap' | 'under_cap'
  */
 export function getTempoCapDecision(args: {
   tempoControlEnabled: boolean
-  tempoMode: 'auto' | 'locked' | 'original'
+  tempoMode: 'auto' | 'locked' | 'preset' | 'original'
   requiredShiftPct: number
   rawMaxTempoPercent?: number
   nearCapFraction?: number
@@ -65,8 +65,9 @@ export function getTempoCapDecision(args: {
     }
   }
 
-  // In Party Queue UI, only Auto mode is subject to the safety cap.
-  if (args.tempoMode !== 'auto') {
+  // In Party Queue UI, Auto and Preset modes are subject to a tempo-stretch cap.
+  // (Auto: safety. Presets: keeps extreme stretches bounded.)
+  if (args.tempoMode !== 'auto' && args.tempoMode !== 'preset') {
     return {
       capPctUsed,
       overCap: false,

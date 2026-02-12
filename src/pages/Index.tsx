@@ -10,6 +10,7 @@ import { UpgradeModal } from '@/components/UpgradeModal';
 import { TopRightSettingsMenu } from '@/components/TopRightSettingsMenu';
 import { cn } from '@/lib/utils';
 import { MEJAY_LOGO_URL } from '@/lib/branding';
+import { ENTITLEMENTS_CHANGED_EVENT } from '@/stores/planStore';
 
 type TabId = 'library' | 'party' | 'playlists';
 
@@ -34,6 +35,26 @@ const Index = () => {
     useDJStore.getState().loadTracks();
     useDJStore.getState().loadPlaylists();
     useDJStore.getState().loadSettings();
+
+    // If entitlements/plan changes after initial load (common on reload/login/upgrade),
+    // ensure tempo presets/settings are applied to the engine immediately.
+    const handleEntitlementsChanged = () => {
+      useDJStore.getState().syncTempoNow({ reason: 'entitlements_changed' });
+    };
+
+    try {
+      window.addEventListener(ENTITLEMENTS_CHANGED_EVENT, handleEntitlementsChanged as EventListener);
+    } catch {
+      // ignore
+    }
+
+    return () => {
+      try {
+        window.removeEventListener(ENTITLEMENTS_CHANGED_EVENT, handleEntitlementsChanged as EventListener);
+      } catch {
+        // ignore
+      }
+    };
   }, []);
 
   // Sync tab from URL

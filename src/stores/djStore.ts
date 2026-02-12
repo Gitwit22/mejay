@@ -4,6 +4,7 @@ import { Track, Settings, getAllTracks, getSettings, addTrack, updateTrack, dele
 import { audioEngine, DeckId } from '@/lib/audioEngine';
 import { detectBPM } from '@/lib/bpmDetector';
 import { computeClampedTempoRatio, computeRequiredTempoShiftPercent, isOverTempoCap, resolveMaxTempoPercent } from '@/lib/tempoMatch';
+import { TEMPO_PRESET_BPM } from '@/lib/tempoPresets';
 // Note: Energy Mode automation removed; mixing uses manual sliders only.
 import { usePlanStore } from '@/stores/planStore';
 import { toast } from '@/hooks/use-toast';
@@ -63,7 +64,7 @@ interface DJState {
 
   // Debuggable snapshot of the last transition tempo plan.
   lastTransitionTempoPlan: {
-    mode: 'party' | 'autoMatch' | 'locked' | 'original';
+    mode: 'party' | 'autoMatch' | 'locked' | 'preset' | 'original';
     nextBaseBpmUsed: number | null;
     outgoingBaseBpmUsed: number | null;
     targetBpmUsed: number | null;
@@ -140,6 +141,9 @@ interface DJState {
   // Mixing
   setCrossfade: (value: number) => void;
   setTempo: (deck: DeckId, ratio: number) => void;
+
+  // Utility: force the engine to match current tempo settings (and feature gating).
+  syncTempoNow: (opts?: { reason?: string }) => void;
 
   // Master output
   setMasterVolume: (value: number) => void;
@@ -345,6 +349,14 @@ export const useDJStore = create<DJState>()(
       deckB: {...state.deckB, playbackRate: 1},
     }));
   };
+  // Preset mode is intentionally more expressive than Auto/Locked.
+  // Auto is capped for safety; presets should be able to reach their targets.
+  const PRESET_MAX_TEMPO_PERCENT = 35;
+
+  const getEffectiveMaxTempoPercent = (settings: Settings): number => {
+    if (settings.tempoMode === 'preset') return PRESET_MAX_TEMPO_PERCENT;
+    return settings.maxTempoPercent;
+  };
 
   // If the plan becomes Free, don't leave pitch/tempo altered.
   if (typeof window !== 'undefined') {
@@ -400,7 +412,7 @@ export const useDJStore = create<DJState>()(
     const effectiveRate = Math.max(0.25, audioEngine.getEffectiveTempo(deck, ctxNow) || 1);
     const currentBpm = baseBpm * effectiveRate;
 
-    const { ratio: targetRatio, debug } = computeTempoForDeck(deck, targetBpm, state.settings.maxTempoPercent);
+    const { ratio: targetRatio, debug } = computeTempoForDeck(deck, targetBpm, getEffectiveMaxTempoPercent(state.settings));
     const targetEffectiveBpm = baseBpm * targetRatio;
 
     const allowedDrift = lockTolerancePctToAllowedDriftBpm(state.settings.lockTolerancePct, targetEffectiveBpm);
@@ -600,7 +612,8 @@ export const useDJStore = create<DJState>()(
     masterVolume: 0.9,
     nextSongStartOffset: 15,
     endEarlySeconds: 5,
-    tempoMode: 'auto',
+    tempoMode: 'preset',
+    tempoPreset: 'original',
     lockedBpm: 128,
     lockTolerancePct: 10,
     autoBaseBpm: null,
@@ -623,6 +636,11 @@ export const useDJStore = create<DJState>()(
       // Auto Match uses a direct target BPM (single source of truth).
       // `autoOffsetBpm` remains for back-compat in persisted settings but is ignored.
       return settings.autoBaseBpm;
+    }
+    if (settings.tempoMode === 'preset') {
+      const preset = settings.tempoPreset ?? 'original';
+      // Original must return null (meaning 1.0× speed), not a fallback BPM.
+      return TEMPO_PRESET_BPM[preset];
     }
     return null;
   };
@@ -686,8 +704,18 @@ export const useDJStore = create<DJState>()(
     if (!deckState.trackId) return;
 
     const targetBpm = getCanonicalTargetBpm(state.settings);
-    if (targetBpm === null) return;
-    const { ratio, debug } = computeTempoForDeck(deck, targetBpm, state.settings.maxTempoPercent);
+    if (targetBpm === null) {
+      // Preset "Original": explicitly restore neutral speed.
+      if (state.settings.tempoMode !== 'preset') return;
+      const ctxNow = audioEngine.getAudioContextTime();
+      if (ctxNow !== null) {
+        lastManualTempoChangeAtCtx[deck] = ctxNow;
+      }
+      get().setTempo(deck, 1);
+      return;
+    }
+
+    const { ratio, debug } = computeTempoForDeck(deck, targetBpm, getEffectiveMaxTempoPercent(state.settings));
     const ctxNow = audioEngine.getAudioContextTime();
     if (ctxNow !== null) {
       lastManualTempoChangeAtCtx[deck] = ctxNow;
@@ -735,6 +763,22 @@ export const useDJStore = create<DJState>()(
     for (const deck of playing) {
       applyImmediateTempoToDeck(state, deck);
     }
+  };
+
+  const syncTempoNowImpl = (state: DJState) => {
+    const tempoControlEnabled = usePlanStore.getState().hasFeature('tempoControl');
+    if (!tempoControlEnabled) {
+      // If tempo control is not entitled, force neutral speed.
+      try {
+        get().setTempo('A', 1);
+        get().setTempo('B', 1);
+      } catch {
+        // ignore
+      }
+      return;
+    }
+
+    applyImmediateTempoToPlayingDecks(state);
   };
 
   const getTrackIdsForPartySource = (state: DJState, source: PartySource): string[] => {
@@ -864,12 +908,38 @@ export const useDJStore = create<DJState>()(
 
     loadSettings: async () => {
       const settings = await getSettings();
-      set({ settings });
+
+      // Product: when Tempo Control initializes in Presets mode, always start at Original.
+      // This prevents stale presets (e.g. Texas) from carrying across reload/new sessions.
+      const nextSettings: Settings = settings.tempoMode === 'preset'
+        ? { ...settings, tempoPreset: 'original' }
+        : settings;
+
+      if (
+        nextSettings.tempoMode === 'preset' &&
+        (settings.tempoMode !== 'preset' || settings.tempoPreset !== 'original')
+      ) {
+        // Keep IndexedDB aligned with the boot behavior.
+        try {
+          await updateSettings({ tempoMode: 'preset', tempoPreset: 'original' });
+        } catch {
+          // ignore
+        }
+      }
+
+      set({ settings: nextSettings });
       // Apply limiter settings
-      audioEngine.setLimiterEnabled(settings.limiterEnabled);
-      audioEngine.setLimiterStrength(settings.limiterStrength);
-      audioEngine.setMasterVolume(settings.masterVolume ?? 0.9);
-      audioEngine.setVibesPreset(settings.vibesPreset ?? 'flat', { ms: 0 });
+      audioEngine.setLimiterEnabled(nextSettings.limiterEnabled);
+      audioEngine.setLimiterStrength(nextSettings.limiterStrength);
+      audioEngine.setMasterVolume(nextSettings.masterVolume ?? 0.9);
+      audioEngine.setVibesPreset(nextSettings.vibesPreset ?? 'flat', { ms: 0 });
+
+      // Ensure the engine reflects the loaded settings immediately.
+      try {
+        get().syncTempoNow({ reason: 'loadSettings' });
+      } catch {
+        // ignore
+      }
     },
 
     resetLocalData: async () => {
@@ -1391,10 +1461,27 @@ export const useDJStore = create<DJState>()(
       } else {
         set({ deckB: { ...initialDeckState, trackId, duration, currentTime: offsetSeconds ?? 0 } });
       }
+
+      // Ensure the newly-loaded deck reflects the user's current tempo settings.
+      // (AudioEngine resets playbackRate to 1 on each load.)
+      try {
+        applyImmediateTempoToDeck(get(), deck);
+      } catch {
+        // ignore
+      }
     },
 
     play: (deck?: DeckId) => {
       const targetDeck = deck || get().activeDeck;
+
+      // Defensive: resync tempo to settings before starting playback.
+      // This helps after navigation/reloads where the engine may have reset to 1.0.
+      try {
+        applyImmediateTempoToDeck(get(), targetDeck);
+      } catch {
+        // ignore
+      }
+
       audioEngine.play(targetDeck);
       
       if (targetDeck === 'A') {
@@ -1764,6 +1851,10 @@ export const useDJStore = create<DJState>()(
           // Auto Match behavior: use the user's chosen target BPM.
           return getCanonicalTargetBpm(settings) ?? nextBaseBpm;
         }
+        if (settings.tempoMode === 'preset') {
+          // Preset behavior: use discrete target BPM; "original" means no tempo matching.
+          return getCanonicalTargetBpm(settings) ?? nextBaseBpm;
+        }
         return nextBaseBpm;
       };
 
@@ -1828,10 +1919,12 @@ export const useDJStore = create<DJState>()(
       const requiredShiftPct = Math.max(requiredIncomingShiftPct, requiredOutgoingShiftPct);
       const missingBpmDisables = tempoMatchSafeModeEnabled && (!hasIncomingBpm || !hasOutgoingBpm);
       const overCap = tempoMatchSafeModeEnabled && isOverTempoCap(requiredShiftPct, safeModeShiftCeilingPct);
-      const shouldDisableTempoMatchThisTransition = missingBpmDisables || overCap;
+      const presetOriginalDisables = tempoControlEnabled && settings.tempoMode === 'preset' && getCanonicalTargetBpm(settings) === null;
+      const shouldDisableTempoMatchThisTransition = presetOriginalDisables || missingBpmDisables || overCap;
 
       const disabledReason: 'over_cap' | 'missing_bpm' | 'user_disabled' | null = (() => {
         if (!tempoControlEnabled) return 'user_disabled';
+        if (presetOriginalDisables) return 'user_disabled';
         if (missingBpmDisables) return 'missing_bpm';
         if (overCap) return 'over_cap';
         return null;
@@ -1849,6 +1942,8 @@ export const useDJStore = create<DJState>()(
               ? 'locked'
               : settings.tempoMode === 'auto'
                 ? 'party'
+                : settings.tempoMode === 'preset'
+                  ? 'preset'
                 : 'original',
           nextBaseBpmUsed: Number.isFinite(nextBaseBpm) ? nextBaseBpm : null,
           outgoingBaseBpmUsed: Number.isFinite(outgoingBaseBpm) ? outgoingBaseBpm : null,
@@ -1877,7 +1972,7 @@ export const useDJStore = create<DJState>()(
       });
 
       const computedOutgoing = (tempoControlEnabled && !shouldDisableTempoMatchThisTransition)
-        ? computeTempoForDeck(currentDeck, targetBpm, settings.maxTempoPercent)
+        ? computeTempoForDeck(currentDeck, targetBpm, getEffectiveMaxTempoPercent(settings))
         : null;
 
       const outgoingTargetRatio = computedOutgoing ? computedOutgoing.ratio : 1;
@@ -1953,7 +2048,7 @@ export const useDJStore = create<DJState>()(
           get().setTempo(nextDeck, 1);
         } else {
           // Incoming deck starts already matched to the shared target BPM.
-          const computedIncoming = computeTempoForDeck(nextDeck, targetBpm, settings.maxTempoPercent);
+          const computedIncoming = computeTempoForDeck(nextDeck, targetBpm, getEffectiveMaxTempoPercent(settings));
           const incomingTargetRatio = computedIncoming.ratio;
           set({ lastTempoDebug: computedIncoming.debug });
           get().setTempo(nextDeck, incomingTargetRatio);
@@ -2164,25 +2259,12 @@ export const useDJStore = create<DJState>()(
         await updateSettings({ autoBaseBpm: effectiveBpm, autoOffsetBpm: 0 });
         set(s => ({ settings: { ...s.settings, autoBaseBpm: effectiveBpm, autoOffsetBpm: 0 } }));
       }
-      
-      // Apply locked tempo if set
-      if (usePlanStore.getState().hasFeature('tempoControl') && state.settings.tempoMode === 'locked' && firstTrack?.bpm) {
-        const computed = computeTempoForDeck('A', state.settings.lockedBpm, state.settings.maxTempoPercent);
-        set({ lastTempoDebug: computed.debug });
-        audioEngine.setTempo('A', computed.ratio);
-      }
 
-      // Apply Auto Match tempo if baseline exists (or was just captured).
-      const afterBaseline = get().settings;
-      const autoTarget = getCanonicalTargetBpm(afterBaseline);
-      if (
-        usePlanStore.getState().hasFeature('tempoControl') &&
-        afterBaseline.tempoMode === 'auto' &&
-        autoTarget !== null
-      ) {
-        const computed = computeTempoForDeck('A', autoTarget, afterBaseline.maxTempoPercent);
-        set({ lastTempoDebug: computed.debug });
-        audioEngine.setTempo('A', computed.ratio);
+      // Ensure Party Mode starts with tempo settings applied (auto/locked/preset/original).
+      try {
+        applyImmediateTempoToDeck(get(), 'A');
+      } catch {
+        // ignore
       }
       
       set({
@@ -2407,6 +2489,16 @@ export const useDJStore = create<DJState>()(
       }
     },
 
+    syncTempoNow: (_opts?: { reason?: string }) => {
+      // Public hook for UI/router/entitlements events.
+      // Keep it safe and idempotent.
+      try {
+        syncTempoNowImpl(get());
+      } catch {
+        // ignore
+      }
+    },
+
     setMasterVolume: (value: number) => {
       const v = clamp(value, 0, 1);
       audioEngine.setMasterVolume(v);
@@ -2422,6 +2514,30 @@ export const useDJStore = create<DJState>()(
 
     updateUserSettings: async (updates: Partial<Settings>) => {
       const before = get();
+
+      // Tempo mode normalization.
+      if (updates.tempoMode !== undefined) {
+        const v = updates.tempoMode;
+        updates.tempoMode = v === 'locked' || v === 'preset' ? v : 'auto';
+      }
+
+      // Tempo preset normalization.
+      if (updates.tempoPreset !== undefined) {
+        const v = updates.tempoPreset;
+        updates.tempoPreset =
+          v === 'original' ||
+          v === 'chill' ||
+          v === 'upbeat' ||
+          v === 'club' ||
+          v === 'fast'
+            ? v
+            : (v === 'normal' ? 'upbeat' : (v === 'slow' ? 'chill' : 'original'));
+
+        // Choosing a preset implies preset mode.
+        if (updates.tempoMode === undefined) {
+          updates.tempoMode = 'preset';
+        }
+      }
 
       if (updates.vibesPreset !== undefined) {
         const v = updates.vibesPreset;
@@ -2518,6 +2634,13 @@ export const useDJStore = create<DJState>()(
         updates.autoOffsetBpm = 0;
       }
 
+      // When enabling Preset mode, default to an existing preset if not set.
+      if (updates.tempoMode === 'preset' && before.settings.tempoMode !== 'preset') {
+        if (updates.tempoPreset === undefined) {
+          updates.tempoPreset = before.settings.tempoPreset ?? 'original';
+        }
+      }
+
       // When enabling Tempo Lock, default the master BPM to the current playback BPM.
       if (updates.tempoMode === 'locked' && before.settings.tempoMode !== 'locked') {
         const deck = before.activeDeck;
@@ -2539,6 +2662,7 @@ export const useDJStore = create<DJState>()(
       // Make Master BPM / tempo mode changes apply instantly to the currently playing deck(s).
       if (
         updates.tempoMode !== undefined ||
+        updates.tempoPreset !== undefined ||
         updates.lockedBpm !== undefined ||
         updates.autoBaseBpm !== undefined ||
         updates.autoOffsetBpm !== undefined ||
@@ -2553,6 +2677,7 @@ export const useDJStore = create<DJState>()(
         updates.endEarlySeconds !== undefined ||
         updates.crossfadeSeconds !== undefined ||
         updates.tempoMode !== undefined ||
+        updates.tempoPreset !== undefined ||
         updates.lockedBpm !== undefined ||
         updates.autoBaseBpm !== undefined ||
         updates.autoOffsetBpm !== undefined ||
@@ -2743,7 +2868,11 @@ export const useDJStore = create<DJState>()(
         crossfadeValue: state.crossfadeValue,
 
         // User settings are small and serializable.
-        settings: state.settings,
+        // Product: on reload/new session, when Presets are used, originate at Original.
+        settings: {
+          ...state.settings,
+          tempoPreset: state.settings.tempoMode === 'preset' ? 'original' : state.settings.tempoPreset,
+        },
       }),
       // Ensure nested objects (deckA/deckB) merge instead of replacing.
       merge: (persistedState, currentState) => {
