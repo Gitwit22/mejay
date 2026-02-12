@@ -50,6 +50,10 @@ export interface Settings {
   nextSongStartOffset: number; // seconds into next song to start
   endEarlySeconds?: number; // fade out this many seconds before current track ends
   // Tempo controls
+  /** UI mode: which tempo control UI to show (vibes presets vs advanced controls). */
+  tempoUiMode: 'vibes' | 'advanced';
+  /** Remembers which advanced mode (auto/locked) was last used. */
+  lastAdvancedTempoMode: 'auto' | 'locked';
   tempoMode: 'auto' | 'locked' | 'preset';
   /** Discrete tempo vibe presets (used when tempoMode === 'preset'). */
   tempoPreset: 'original' | 'chill' | 'upbeat' | 'club' | 'fast';
@@ -284,6 +288,8 @@ export async function getSettings(): Promise<Settings> {
     masterVolume: 0.9,
     nextSongStartOffset: 15,
     endEarlySeconds: 5,
+    tempoUiMode: 'vibes',
+    lastAdvancedTempoMode: 'auto',
     tempoMode: 'preset',
     tempoPreset: 'original',
     lockedBpm: 128,

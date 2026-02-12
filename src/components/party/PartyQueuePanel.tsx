@@ -5,7 +5,7 @@ import { formatDuration } from '@/lib/utils';
 import { useRef, useEffect } from 'react';
 import { computeTempoShiftInfo, getTempoCapDecision } from '@/lib/tempoMatch';
 import { usePlanStore } from '@/stores/planStore';
-import { getTempoPresetTargetBpm, normalizeTempoPreset } from '@/lib/tempoPresets';
+import { computePresetTempo, normalizeTempoPreset } from '@/lib/tempoPresets';
 
 type PartyQueuePanelProps = {
   className?: string;
@@ -40,9 +40,11 @@ export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
     if (settings.tempoMode === 'locked') return settings.lockedBpm;
 
     if (settings.tempoMode === 'preset') {
+      const currentDeck = activeDeck === 'A' ? deckA : deckB;
+      const currentTrack = currentDeck.trackId ? tracks.find((t) => t.id === currentDeck.trackId) : undefined;
       const preset = normalizeTempoPreset(settings.tempoPreset ?? 'original');
-      const presetBpm = getTempoPresetTargetBpm(preset);
-      if (presetBpm !== null) return presetBpm;
+      const result = computePresetTempo(currentTrack?.bpm, preset);
+      return result.targetBpm;
     }
 
     if (settings.tempoMode === 'auto') {

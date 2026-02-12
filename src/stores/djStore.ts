@@ -4,7 +4,7 @@ import { Track, Settings, getAllTracks, getSettings, addTrack, updateTrack, dele
 import { audioEngine, DeckId } from '@/lib/audioEngine';
 import { detectBPM } from '@/lib/bpmDetector';
 import { computeClampedTempoRatio, computeRequiredTempoShiftPercent, isOverTempoCap, resolveMaxTempoPercent } from '@/lib/tempoMatch';
-import { TEMPO_PRESET_BPM } from '@/lib/tempoPresets';
+import { TEMPO_PRESET_RATIOS, computePresetTempo } from '@/lib/tempoPresets';
 // Note: Energy Mode automation removed; mixing uses manual sliders only.
 import { usePlanStore } from '@/stores/planStore';
 import { toast } from '@/hooks/use-toast';
@@ -612,6 +612,8 @@ export const useDJStore = create<DJState>()(
     masterVolume: 0.9,
     nextSongStartOffset: 15,
     endEarlySeconds: 5,
+    tempoUiMode: 'vibes',
+    lastAdvancedTempoMode: 'auto',
     tempoMode: 'preset',
     tempoPreset: 'original',
     lockedBpm: 128,
@@ -637,11 +639,8 @@ export const useDJStore = create<DJState>()(
       // `autoOffsetBpm` remains for back-compat in persisted settings but is ignored.
       return settings.autoBaseBpm;
     }
-    if (settings.tempoMode === 'preset') {
-      const preset = settings.tempoPreset ?? 'original';
-      // Original must return null (meaning 1.0× speed), not a fallback BPM.
-      return TEMPO_PRESET_BPM[preset];
-    }
+    // Preset mode uses relative ratios, not absolute BPM targets.
+    // Return null to signal "no global target BPM".
     return null;
   };
 
@@ -706,10 +705,25 @@ export const useDJStore = create<DJState>()(
     const targetBpm = getCanonicalTargetBpm(state.settings);
     if (targetBpm === null) {
       // Preset "Original": explicitly restore neutral speed.
-      if (state.settings.tempoMode !== 'preset') return;
+    // Preset mode: use relative ratio based on track's original BPM
+    if (state.settings.tempoMode === 'preset') {
+      const track = state.tracks.find(t => t.id === deckState.trackId);
+      const preset = state.settings.tempoPreset ?? 'original';
+      const result = computePresetTempo(track?.bpm, preset);
+      
       const ctxNow = audioEngine.getAudioContextTime();
       if (ctxNow !== null) {
         lastManualTempoChangeAtCtx[deck] = ctxNow;
+      }
+      
+      get().setTempo(deck, result.ratio);
+      return;
+    }
+
+    // Locked/Auto modes: compute ratio from absolute target BPM
+    const targetBpm = getCanonicalTargetBpm(state.settings);
+    if (targetBpm === null) {
+      // No valid target in locked/auto mode - fall back to neutral
       }
       get().setTempo(deck, 1);
       return;
@@ -909,30 +923,13 @@ export const useDJStore = create<DJState>()(
     loadSettings: async () => {
       const settings = await getSettings();
 
-      // Product: when Tempo Control initializes in Presets mode, always start at Original.
-      // This prevents stale presets (e.g. Texas) from carrying across reload/new sessions.
-      const nextSettings: Settings = settings.tempoMode === 'preset'
-        ? { ...settings, tempoPreset: 'original' }
-        : settings;
-
-      if (
-        nextSettings.tempoMode === 'preset' &&
-        (settings.tempoMode !== 'preset' || settings.tempoPreset !== 'original')
-      ) {
-        // Keep IndexedDB aligned with the boot behavior.
-        try {
-          await updateSettings({ tempoMode: 'preset', tempoPreset: 'original' });
-        } catch {
-          // ignore
-        }
-      }
-
-      set({ settings: nextSettings });
+      // Preserve user's preset selection across reloads
+      set({ settings });
       // Apply limiter settings
-      audioEngine.setLimiterEnabled(nextSettings.limiterEnabled);
-      audioEngine.setLimiterStrength(nextSettings.limiterStrength);
-      audioEngine.setMasterVolume(nextSettings.masterVolume ?? 0.9);
-      audioEngine.setVibesPreset(nextSettings.vibesPreset ?? 'flat', { ms: 0 });
+      audioEngine.setLimiterEnabled(settings.limiterEnabled);
+      audioEngine.setLimiterStrength(settings.limiterStrength);
+      audioEngine.setMasterVolume(settings.masterVolume ?? 0.9);
+      audioEngine.setVibesPreset(settings.vibesPreset ?? 'flat', { ms: 0 });
 
       // Ensure the engine reflects the loaded settings immediately.
       try {
@@ -2868,11 +2865,7 @@ export const useDJStore = create<DJState>()(
         crossfadeValue: state.crossfadeValue,
 
         // User settings are small and serializable.
-        // Product: on reload/new session, when Presets are used, originate at Original.
-        settings: {
-          ...state.settings,
-          tempoPreset: state.settings.tempoMode === 'preset' ? 'original' : state.settings.tempoPreset,
-        },
+        settings: state.settings,
       }),
       // Ensure nested objects (deckA/deckB) merge instead of replacing.
       merge: (persistedState, currentState) => {
