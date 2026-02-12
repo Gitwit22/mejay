@@ -18,13 +18,14 @@ export function TempoControls() {
     lastTransitionTempoMatchRequiredPct,
     lastTransitionTempoMatchCeilingPct,
     lastTransitionTempoPlan,
+    lastTempoDebug,
   } = useDJStore();
   
   const currentDeck = activeDeck === 'A' ? deckA : deckB;
   const currentTrack = tracks.find(t => t.id === currentDeck.trackId);
 
   const autoTargetBpm = settings.autoBaseBpm !== null
-    ? Math.round((settings.autoBaseBpm + (settings.autoOffsetBpm ?? 0)) * 10) / 10
+    ? Math.round(settings.autoBaseBpm * 10) / 10
     : null;
 
   const afterTransition = settings.partyTempoAfterTransition ?? 'hold'
@@ -113,7 +114,7 @@ export function TempoControls() {
                 Match Base BPM
               </button>
               <p className="text-[9px] text-muted-foreground leading-snug">
-                Nudge relative to Base (0 = original speed). Tap again to reset.
+                Pick a target BPM for Auto Match. Tap again to reset.
               </p>
             </div>
             <button
@@ -194,26 +195,26 @@ export function TempoControls() {
           </div>
         )}
 
-        {/* Auto Match Offset Slider */}
+        {/* Auto Match Target BPM Slider */}
         {settings.tempoMode === 'auto' && (
           <div>
             <div className="flex justify-between mb-2">
-              <span className="text-xs text-muted-foreground">BPM Nudge</span>
+              <span className="text-xs text-muted-foreground">Target BPM</span>
               <span className="text-xs font-semibold text-accent">
-                {settings.autoOffsetBpm >= 0 ? '+' : ''}{Math.round(settings.autoOffsetBpm)} BPM
+                {autoTargetBpm !== null ? Math.round(autoTargetBpm) : '—'} BPM
               </span>
             </div>
             <Slider
-              value={[settings.autoOffsetBpm ?? 0]}
-              onValueChange={([v]) => updateUserSettings({ autoOffsetBpm: v })}
-              min={-150}
-              max={150}
+              value={[settings.autoBaseBpm ?? (currentTrack?.bpm ?? audioEngine.getBaseBpm(activeDeck) ?? 120)]}
+              onValueChange={([v]) => updateUserSettings({ autoBaseBpm: v })}
+              min={60}
+              max={300}
               step={5}
               className="w-full"
             />
             <div className="mt-2 flex items-center justify-between text-[10px] text-muted-foreground">
               <span>
-                Base: {settings.autoBaseBpm !== null ? Math.round(settings.autoBaseBpm) : '—'} BPM
+                Track: {currentTrack?.bpm ? Math.round(currentTrack.bpm) : '—'} BPM
               </span>
               <span>
                 Target: {autoTargetBpm !== null ? Math.round(autoTargetBpm) : '—'} BPM
@@ -251,6 +252,20 @@ export function TempoControls() {
               <p className="text-[9px] text-muted-foreground mt-2">
                 Choose whether the next track stays tempo-matched after the crossfade.
               </p>
+            </div>
+          </div>
+        )}
+
+        {import.meta.env.DEV && lastTempoDebug && (
+          <div className="rounded-xl bg-white/5 px-3 py-2 text-[10px] text-muted-foreground">
+            <div className="flex flex-wrap gap-x-3 gap-y-1">
+              <span>deck {lastTempoDebug.deck}</span>
+              <span>trackBpm {lastTempoDebug.trackBpm ? Math.round(lastTempoDebug.trackBpm * 10) / 10 : '—'}</span>
+              <span>targetBpm {lastTempoDebug.targetBpm ? Math.round(lastTempoDebug.targetBpm * 10) / 10 : '—'}</span>
+              <span>rawRate {lastTempoDebug.rawRate ? Math.round(lastTempoDebug.rawRate * 1000) / 1000 : '—'}</span>
+              <span>clampedRate {lastTempoDebug.clampedRate ? Math.round(lastTempoDebug.clampedRate * 1000) / 1000 : '—'}</span>
+              <span>effectiveBpm {lastTempoDebug.effectiveBpm ? Math.round(lastTempoDebug.effectiveBpm * 10) / 10 : '—'}</span>
+              <span>cap {lastTempoDebug.maxTempoPercent ?? '—'}%</span>
             </div>
           </div>
         )}

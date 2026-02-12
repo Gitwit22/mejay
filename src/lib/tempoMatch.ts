@@ -158,6 +158,55 @@ export function computeTempoShiftInfo(baseBpm: number, targetBpm: number): {
   return best
 }
 
+export function computeClampedTempoRatio(args: {
+  baseBpm: number
+  targetBpm: number
+  maxTempoPercent?: number
+  minRatioFloor?: number
+  maxRatioCeil?: number
+}): {
+  rawRatio: number
+  clampedRatio: number
+  minRatio: number
+  maxRatio: number
+  interpretation: TempoInterpretation
+  interpretedBaseBpm: number
+} {
+  const base = Number.isFinite(args.baseBpm) && args.baseBpm > 0 ? args.baseBpm : 0
+  const target = Number.isFinite(args.targetBpm) && args.targetBpm > 0 ? args.targetBpm : 0
+
+  const minRatioFloor = Number.isFinite(args.minRatioFloor) ? (args.minRatioFloor as number) : 0.25
+  const maxRatioCeil = Number.isFinite(args.maxRatioCeil) ? (args.maxRatioCeil as number) : 4
+
+  if (!base || !target) {
+    return {
+      rawRatio: 1,
+      clampedRatio: 1,
+      minRatio: 1,
+      maxRatio: 1,
+      interpretation: 'normal',
+      interpretedBaseBpm: base || 0,
+    }
+  }
+
+  const shift = computeTempoShiftInfo(base, target)
+  const rawRatio = Number.isFinite(shift.idealRatio) && shift.idealRatio > 0 ? shift.idealRatio : 1
+
+  const capPct = Math.max(0, Math.min(100, resolveMaxTempoPercent(args.maxTempoPercent, DEFAULT_MAX_TEMPO_PERCENT)))
+  const minRatio = Math.max(minRatioFloor, 1 - capPct / 100)
+  const maxRatio = Math.min(maxRatioCeil, Math.max(minRatio, 1 + capPct / 100))
+  const clampedRatio = Math.max(minRatio, Math.min(maxRatio, rawRatio))
+
+  return {
+    rawRatio,
+    clampedRatio,
+    minRatio,
+    maxRatio,
+    interpretation: shift.interpretation,
+    interpretedBaseBpm: shift.interpretedBaseBpm,
+  }
+}
+
 export function computeRequiredTempoShiftPercent(baseBpm: number, targetBpm: number): number {
   return computeTempoShiftInfo(baseBpm, targetBpm).requiredShiftPct
 }

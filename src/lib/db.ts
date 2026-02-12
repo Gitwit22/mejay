@@ -8,6 +8,11 @@ export interface Track {
   displayName: string;
   artist?: string;
   duration: number;
+  /**
+   * Precomputed “musical end” time (seconds) used for transition planning.
+   * This trims streaming padding / trailing silence so auto-mix avoids dead air.
+   */
+  trueEndTime?: number;
   bpm?: number;
   hasBeat: boolean;
   analysisStatus: 'pending' | 'analyzing' | 'ready' | 'basic';
@@ -37,6 +42,8 @@ export interface Settings {
   shuffleEnabled: boolean;
   /** When false, imported audio is kept in-memory only (not persisted to IndexedDB). */
   keepImportsOnDevice: boolean;
+  /** Prev button behavior. */
+  prevBehavior: 'restartFirst' | 'alwaysMixPrevious';
   // Master output
   masterVolume: number; // 0..1
   // Mix timing controls
@@ -263,6 +270,7 @@ export async function getSettings(): Promise<Settings> {
     maxTempoPercent: DEFAULT_MAX_SHIFT_PCT,
     shuffleEnabled: false,
     keepImportsOnDevice: true,
+    prevBehavior: 'restartFirst',
     masterVolume: 0.9,
     nextSongStartOffset: 15,
     endEarlySeconds: 5,
@@ -281,6 +289,11 @@ export async function getSettings(): Promise<Settings> {
 
   // Merge to backfill new fields for existing users.
   const merged = settings ? { ...defaults, ...stripLegacySettingsKeys(settings) } : defaults;
+
+  const rawPrevBehavior = (merged as any).prevBehavior;
+  const prevBehavior = rawPrevBehavior === 'alwaysMixPrevious' || rawPrevBehavior === 'restartFirst'
+    ? rawPrevBehavior
+    : defaults.prevBehavior;
 
   // Normalize tempo safety clamp.
   const rawMaxTempoPercent = Number((merged as any).maxTempoPercent);
@@ -305,6 +318,7 @@ export async function getSettings(): Promise<Settings> {
 
   return {
     ...merged,
+    prevBehavior,
     maxTempoPercent: snappedMaxTempoPercent,
     lockedBpm: snappedLocked,
     autoOffsetBpm: snappedOffset,

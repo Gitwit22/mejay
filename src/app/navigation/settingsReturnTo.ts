@@ -124,7 +124,7 @@ export const navigateBackToPartyMode = (
   safeSessionSetItem(LAST_TAB_STORAGE_KEY, tab)
   safeSessionRemoveItem(SETTINGS_RETURN_TO_STORAGE_KEY)
 
-  navigate('/app', {
+  navigate('/app?tab=party', {
     ...options,
     replace: true,
   })

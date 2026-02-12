@@ -1,6 +1,8 @@
 // Web Audio API based audio engine for ME Jay
 // Provides dual-deck playback, crossfading, tempo control, and volume matching
 
+import { computeClampedTempoRatio } from './tempoMatch';
+
 export type DeckId = 'A' | 'B';
 
 interface DeckState {
@@ -17,6 +19,8 @@ interface DeckState {
   lastCtx: number;
   pausedAt: number;
   duration: number;
+  /** Optional analyzed “musical end” time used for transition planning. */
+  trueEndTime: number | null;
   trackGainDb: number; // Applied gain adjustment
   scheduledStartAt: number | null;
   scheduledStartTimeoutId: number | null;
@@ -33,6 +37,7 @@ class AudioEngine {
   private masterGain: GainNode | null = null;
   private masterVolume: number = 1;
   private limiterNode: DynamicsCompressorNode | null = null;
+  private ceilingNode: GainNode | null = null;
   private decks: Record<DeckId, DeckState> = {
     A: this.createEmptyDeck(),
     B: this.createEmptyDeck(),
@@ -63,6 +68,7 @@ class AudioEngine {
       lastCtx: 0,
       pausedAt: 0,
       duration: 0,
+      trueEndTime: null,
       trackGainDb: 0,
       scheduledStartAt: null,
       scheduledStartTimeoutId: null,
@@ -72,6 +78,19 @@ class AudioEngine {
 
   getAudioContextTime(): number | null {
     return this.audioContext?.currentTime ?? null;
+  }
+
+  setTrueEndTime(deck: DeckId, trueEndTime: number | null | undefined): void {
+    const deckState = this.decks[deck];
+    if (typeof trueEndTime !== 'number' || !Number.isFinite(trueEndTime) || trueEndTime <= 0) {
+      deckState.trueEndTime = null;
+      return;
+    }
+
+    const dur = deckState.duration;
+    deckState.trueEndTime = (Number.isFinite(dur) && dur > 0)
+      ? Math.max(0, Math.min(dur, trueEndTime))
+      : trueEndTime;
   }
 
   private getEffectivePlaybackRateAt(deck: DeckId, ctxTime: number): number {
@@ -290,14 +309,18 @@ class AudioEngine {
 
     this.audioContext = new AudioContext();
     
-    // Create master chain: deck gains -> limiter -> master gain -> destination
+    // Create master chain: deck gains -> limiter -> ceiling -> master gain -> destination
     this.masterGain = this.audioContext.createGain();
     this.masterGain.gain.value = Math.max(0, Math.min(1, this.masterVolume));
     this.limiterNode = this.audioContext.createDynamicsCompressor();
+    this.ceilingNode = this.audioContext.createGain();
+    // ~ -1 dBFS ceiling (safer than 0 dBFS).
+    this.ceilingNode.gain.value = Math.pow(10, -1 / 20);
     
     this.updateLimiter();
     
-    this.limiterNode.connect(this.masterGain);
+    this.limiterNode.connect(this.ceilingNode);
+    this.ceilingNode.connect(this.masterGain);
     this.masterGain.connect(this.audioContext.destination);
 
     // Create gain nodes for each deck
@@ -327,24 +350,24 @@ class AudioEngine {
     switch (this.limiterStrength) {
       case 'light':
         this.limiterNode.threshold.value = -3;
-        this.limiterNode.knee.value = 10;
-        this.limiterNode.ratio.value = 4;
+        this.limiterNode.knee.value = 0;
+        this.limiterNode.ratio.value = 10;
         this.limiterNode.attack.value = 0.003;
         this.limiterNode.release.value = 0.25;
         break;
       case 'medium':
         this.limiterNode.threshold.value = -6;
-        this.limiterNode.knee.value = 6;
-        this.limiterNode.ratio.value = 8;
-        this.limiterNode.attack.value = 0.002;
-        this.limiterNode.release.value = 0.15;
+        this.limiterNode.knee.value = 0;
+        this.limiterNode.ratio.value = 20;
+        this.limiterNode.attack.value = 0.003;
+        this.limiterNode.release.value = 0.25;
         break;
       case 'strong':
         this.limiterNode.threshold.value = -10;
-        this.limiterNode.knee.value = 3;
-        this.limiterNode.ratio.value = 20;
+        this.limiterNode.knee.value = 0;
+        this.limiterNode.ratio.value = 40;
         this.limiterNode.attack.value = 0.001;
-        this.limiterNode.release.value = 0.1;
+        this.limiterNode.release.value = 0.2;
         break;
     }
   }
@@ -395,7 +418,10 @@ class AudioEngine {
     if (!this.mixCheckEnabled || this.mixTriggered) return;
     
     const deckState = this.decks[deck];
-    const remaining = deckState.duration - currentTime;
+    const effectiveEnd = (typeof deckState.trueEndTime === 'number' && Number.isFinite(deckState.trueEndTime) && deckState.trueEndTime > 0)
+      ? deckState.trueEndTime
+      : deckState.duration;
+    const remaining = effectiveEnd - currentTime;
     
     let shouldTrigger = false;
     
@@ -471,7 +497,13 @@ class AudioEngine {
       // Convert dB to linear gain, clamped to reasonable range
       const clampedDb = Math.max(-12, Math.min(12, gainDb));
       const linearGain = Math.pow(10, clampedDb / 20);
-      deckState.trackGainNode.gain.value = linearGain;
+      const now = this.audioContext?.currentTime ?? 0;
+      try {
+        deckState.trackGainNode.gain.cancelScheduledValues(now);
+        deckState.trackGainNode.gain.setTargetAtTime(linearGain, now, 0.15);
+      } catch {
+        deckState.trackGainNode.gain.value = linearGain;
+      }
     }
   }
 
@@ -488,6 +520,7 @@ class AudioEngine {
     
     this.decks[deck].audioBuffer = audioBuffer;
     this.decks[deck].duration = audioBuffer.duration;
+    this.decks[deck].trueEndTime = null;
     this.decks[deck].currentTime = 0;
     this.decks[deck].pausedAt = 0;
     this.decks[deck].baseBpm = bpm || 120;
@@ -541,34 +574,14 @@ class AudioEngine {
   // Calculate tempo ratio to match target BPM
   calculateTempoRatio(deck: DeckId, targetBpm: number, maxPercent: number): number {
     const baseBpm = this.decks[deck].baseBpm;
-    if (!baseBpm || baseBpm === 0) return 1;
-
-    // Half/double BPM recognition: some analyses land at 1/2× or 2× tempo.
-    // Pick the interpretation that requires the smallest shift (closest ratio to 1.0).
-    const candidates = [baseBpm, baseBpm * 0.5, baseBpm * 2]
-      .filter((bpm) => Number.isFinite(bpm) && bpm > 0 && bpm >= 40 && bpm <= 400);
-
-    const idealRatio = (() => {
-      let best = targetBpm / baseBpm;
-      let bestDelta = Math.abs(best - 1);
-      for (const bpm of candidates) {
-        const r = targetBpm / bpm;
-        const d = Math.abs(r - 1);
-        if (d < bestDelta) {
-          best = r;
-          bestDelta = d;
-        }
-      }
-      return best;
-    })();
-
-    const safeMaxPercent = Number.isFinite(maxPercent) ? Math.max(0, maxPercent) : 0;
-    const minRatioFloor = 0.25;
-    const maxRatioCeil = 4;
-    const minRatio = Math.max(minRatioFloor, 1 - (safeMaxPercent / 100));
-    const maxRatio = Math.min(maxRatioCeil, Math.max(minRatio, 1 + (safeMaxPercent / 100)));
-
-    return Math.max(minRatio, Math.min(maxRatio, idealRatio));
+    const result = computeClampedTempoRatio({
+      baseBpm,
+      targetBpm,
+      maxTempoPercent: maxPercent,
+      minRatioFloor: 0.25,
+      maxRatioCeil: 4,
+    });
+    return result.clampedRatio;
   }
 
   // Match deck B's tempo to deck A (or to a locked BPM)
@@ -784,7 +797,23 @@ class AudioEngine {
   }
 
   setCrossfade(value: number): void {
-    this.crossfadeValue = Math.max(0, Math.min(1, value));
+    const v = Math.max(0, Math.min(1, value));
+    this.crossfadeValue = v;
+
+    // If a crossfade was previously scheduled (e.g. an automix), cancel it so manual control wins.
+    if (this.audioContext && this.decks.A.gainNode && this.decks.B.gainNode) {
+      const now = this.audioContext.currentTime;
+      try {
+        this.decks.A.gainNode.gain.cancelScheduledValues(now);
+        this.decks.B.gainNode.gain.cancelScheduledValues(now);
+        this.decks.A.gainNode.gain.setValueAtTime(Math.cos(v * Math.PI * 0.5), now);
+        this.decks.B.gainNode.gain.setValueAtTime(Math.sin(v * Math.PI * 0.5), now);
+        return;
+      } catch {
+        // fall through to immediate set
+      }
+    }
+
     this.updateCrossfade();
   }
 
