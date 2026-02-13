@@ -239,13 +239,12 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
           )}
         >
           <SheetHeader className="sticky top-0 z-10 shrink-0 bg-background/80 backdrop-blur-md pb-4">
-            <SheetTitle>Setup</SheetTitle>
-            <SheetDescription>Account, device, and local settings</SheetDescription>
+            <SheetTitle>Settings</SheetTitle>
           </SheetHeader>
 
           <div className="min-h-0 pr-1 pb-6 mt-4 space-y-7">
             {/* A) Status header */}
-            <Collapsible defaultOpen>
+            <Collapsible>
               <div className="space-y-3">
                 <CollapsibleTrigger asChild>
                   <button
@@ -274,184 +273,21 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
               
             </Collapsible>
 
-            {/* B) Account / License */}
-            <Collapsible defaultOpen>
+            {/* B) Account */}
+            <Collapsible>
               <div className="space-y-3">
                 <CollapsibleTrigger asChild>
                   <button
                     type="button"
                     className="group flex w-full items-center justify-between text-left text-xs font-semibold tracking-wide uppercase text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    <span>Account / License</span>
+                    <span>Account</span>
                     <ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]:rotate-180" />
                   </button>
                 </CollapsibleTrigger>
                 <CollapsibleContent>
                   <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm">
-                    <div className="p-4 space-y-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-medium">License</div>
-                          <div className="text-xs text-muted-foreground">Activate on this device</div>
-                        </div>
-                        <Badge
-                          variant={
-                            derivedStatus === 'PRO_OK'
-                              ? 'default'
-                              : derivedStatus === 'PRO_NEEDS_MANDATORY_CHECK'
-                                ? 'secondary'
-                                : derivedStatus === 'PRO_EXPIRED' || derivedStatus === 'INVALID'
-                                  ? 'destructive'
-                                  : 'outline'
-                          }
-                        >
-                          {derivedStatus === 'PRO_OK'
-                            ? licensePlan === 'full_program'
-                              ? 'Full Program'
-                              : 'Pro Active'
-                            : derivedStatus === 'PRO_NEEDS_MANDATORY_CHECK'
-                              ? 'Needs Check'
-                              : derivedStatus === 'PRO_EXPIRED'
-                                ? 'Expired'
-                                : derivedStatus === 'INVALID'
-                                  ? 'Invalid'
-                                  : 'Free'}
-                        </Badge>
-                      </div>
-
-                      {derivedStatus === 'PRO_NEEDS_MANDATORY_CHECK' && (
-                        <div className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs text-muted-foreground">
-                          Connect to the internet to verify your license (required every 30 days).
-                        </div>
-                      )}
-
-                      {derivedStatus === 'INVALID' && derivedReason && (
-                        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                          {derivedReason}
-                        </div>
-                      )}
-
-                      <div className="space-y-2">
-                        <Label className="text-xs">License key</Label>
-                        <div className="flex gap-2">
-                          <Input
-                            value={licenseKey}
-                            onChange={(e) => setLicenseKey(e.target.value)}
-                            placeholder="MEJAY-XXXX-XXXX"
-                            className="h-9"
-                          />
-                          <Button
-                            type="button"
-                            className="h-9"
-                            onClick={async () => {
-                              try {
-                                await activateWithKey(licenseKey)
-                                setLicenseKey('')
-                                toast({
-                                  title: 'License activated',
-                                  description: 'Pro features are now enabled on this device.',
-                                })
-                              } catch (e) {
-                                toast({
-                                  title: 'Activation failed',
-                                  description: e instanceof Error ? e.message : 'Could not activate license.',
-                                  variant: 'destructive',
-                                })
-                              }
-                            }}
-                            disabled={!licenseKey.trim()}
-                          >
-                            Activate
-                          </Button>
-                        </div>
-                        <p className="text-[10px] text-muted-foreground">
-                          A check-in is required at least once every 30 days.
-                        </p>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3 text-xs">
-                        <div>
-                          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Last checked</div>
-                          <div className="text-sm font-medium">
-                            {lastSuccessfulCheckAt ? new Date(lastSuccessfulCheckAt).toLocaleDateString() : '—'}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Next required by</div>
-                          <div className="text-sm font-medium">
-                            {nextRequiredCheckBy ? new Date(nextRequiredCheckBy).toLocaleDateString() : '—'}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Expires</div>
-                          <div className="text-sm font-medium">
-                            {expiresAt ? new Date(expiresAt).toLocaleDateString() : '—'}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Device ID</div>
-                          <button
-                            type="button"
-                            className="text-left text-sm font-medium hover:underline"
-                            onClick={async () => {
-                              try {
-                                await navigator.clipboard.writeText(deviceId)
-                                toast({title: 'Copied', description: 'Device ID copied to clipboard.'})
-                              } catch {
-                                toast({title: 'Copy failed', description: deviceId})
-                              }
-                            }}
-                            title="Tap to copy"
-                          >
-                            {deviceId.slice(0, 8)}…
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="flex gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="flex-1"
-                          onClick={async () => {
-                            try {
-                              await forceRefresh()
-                              toast({title: 'Refreshed', description: 'License check completed.'})
-                            } catch {
-                              toast({
-                                title: 'Refresh failed',
-                                description: 'Could not refresh license right now.',
-                                variant: 'destructive',
-                              })
-                            }
-                          }}
-                          disabled={!token}
-                        >
-                          Refresh now
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="flex-1"
-                          onClick={() => {
-                            clearLicense()
-                            toast({title: 'License cleared', description: 'This device is now in Free mode.'})
-                          }}
-                          disabled={!token}
-                        >
-                          Deactivate
-                        </Button>
-                      </div>
-
-                      {lastAttemptAt && (
-                        <p className="text-[10px] text-muted-foreground">Last attempt: {new Date(lastAttemptAt).toLocaleString()}</p>
-                      )}
-
-                      {activatedAt && (
-                        <p className="text-[10px] text-muted-foreground">Activated: {new Date(activatedAt).toLocaleDateString()}</p>
-                      )}
-
-                      <Separator />
+                    <div className="p-4 space-y-3">
                       {showManageBillingButton && (
                         <Button
                           type="button"
@@ -487,8 +323,36 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
               </div>
             </Collapsible>
 
-            {/* C) Settings */}
-            <Collapsible defaultOpen>
+            {/* C) License & Device */}
+            <Collapsible>
+              <div className="space-y-3">
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="group flex w-full items-center justify-between text-left text-xs font-semibold tracking-wide uppercase text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <span>License & Device</span>
+                    <ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]:rotate-180" />
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm">
+                    <div className="p-4 space-y-4">
+                      <div className="flex flex-col items-center justify-center py-8 px-4 text-center">
+                        <div className="text-sm font-medium text-muted-foreground mb-2">License Keys & Device Install</div>
+                        <Badge variant="outline" className="mb-3">Coming Soon</Badge>
+                        <p className="text-xs text-muted-foreground">
+                          Device-based licensing and PWA install will be available in a future update.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </CollapsibleContent>
+              </div>
+            </Collapsible>
+
+            {/* D) Settings */}
+            <Collapsible>
               <div className="space-y-3">
                 <CollapsibleTrigger asChild>
                   <button
@@ -608,41 +472,8 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
               </div>
             </Collapsible>
 
-            {/* D) Device */}
-            <Collapsible defaultOpen>
-              <div className="space-y-3">
-                <CollapsibleTrigger asChild>
-                  <button
-                    type="button"
-                    className="group flex w-full items-center justify-between text-left text-xs font-semibold tracking-wide uppercase text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <span>Device</span>
-                    <ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]:rotate-180" />
-                  </button>
-                </CollapsibleTrigger>
-                <CollapsibleContent>
-                  <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm">
-                    <div className="flex items-center justify-between px-4 py-3">
-                      <div>
-                        <div className="text-sm font-medium">Install MEJay</div>
-                        <div className="text-xs text-muted-foreground">Desktop / PWA install</div>
-                      </div>
-                      <Button type="button" variant="outline" onClick={handleInstallStub}>
-                        Install
-                      </Button>
-                    </div>
-                    <Separator />
-                    <div className="flex items-center justify-between px-4 py-3">
-                      <div className="text-sm text-muted-foreground">Installed</div>
-                      <div className="text-sm font-medium">Not yet</div>
-                    </div>
-                  </div>
-                </CollapsibleContent>
-              </div>
-            </Collapsible>
-
             {/* E) Support */}
-            <Collapsible defaultOpen>
+            <Collapsible>
               <div className="space-y-3">
                 <CollapsibleTrigger asChild>
                   <button

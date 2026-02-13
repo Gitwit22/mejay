@@ -60,7 +60,7 @@ export function StarterPacksOnboardingModal(props: StarterPacksOnboardingModalPr
       if (!seeded) {
         toast({
           title: 'Starter packs not added',
-          description: 'Your library is not empty, or the download failed. You can try again.',
+          description: 'You already have tracks in your library.\nTo download starter packs, go to Settings and click Download Starter Packs.',
           variant: 'destructive',
         });
         return;
