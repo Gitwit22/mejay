@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy - MEJay</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+            background: #0a0a0f;
+            color: #ffffff;
+            min-height: 100vh;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        /* Animated background gradients */
+        .bg-gradient {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(120px);
+            opacity: 0.3;
+            animation: float 25s infinite ease-in-out;
+            pointer-events: none;
+        }
+
+        .gradient-1 {
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, #ff006e 0%, transparent 70%);
+            top: -200px;
+            left: -100px;
+        }
+
+        .gradient-2 {
+            width: 500px;
+            height: 500px;
+            background: radial-gradient(circle, #8338ec 0%, transparent 70%);
+            bottom: -150px;
+            right: -100px;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            25% { transform: translate(100px, 50px) scale(1.1); }
+            50% { transform: translate(-50px, 100px) scale(0.9); }
+            75% { transform: translate(50px, -50px) scale(1.05); }
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px 20px 80px;
+            position: relative;
+            z-index: 1;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 60px;
+            padding: 40px 0;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .logo {
+            font-size: 48px;
+            font-weight: 900;
+            background: linear-gradient(135deg, #ff006e, #8338ec, #3a86ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 20px;
+            letter-spacing: -2px;
+        }
+
+        h1 {
+            font-size: 36px;
+            font-weight: 700;
+            margin-bottom: 10px;
+            background: linear-gradient(135deg, #ffffff, #e0e0e0);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .last-updated {
+            color: #888;
+            font-size: 14px;
+            margin-top: 20px;
+        }
+
+        nav {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 40px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        nav h3 {
+            margin-bottom: 16px;
+            color: #8338ec;
+        }
+
+        nav ul {
+            list-style: none;
+        }
+
+        nav li {
+            margin: 8px 0;
+        }
+
+        nav a {
+            color: #3a86ff;
+            text-decoration: none;
+            transition: color 0.3s;
+        }
+
+        nav a:hover {
+            color: #ff006e;
+        }
+
+        .section {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 32px;
+            margin-bottom: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .section:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 32px rgba(131, 56, 236, 0.1);
+        }
+
+        .section-title {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 20px;
+            color: #8338ec;
+        }
+
+        .subsection {
+            margin: 24px 0;
+        }
+
+        .subsection h4 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #ff006e;
+        }
+
+        p {
+            line-height: 1.8;
+            margin-bottom: 16px;
+            color: #cccccc;
+        }
+
+        ul {
+            margin: 16px 0 16px 24px;
+            line-height: 1.8;
+        }
+
+        li {
+            margin: 8px 0;
+            color: #cccccc;
+        }
+
+        strong {
+            color: #ffffff;
+            font-weight: 600;
+        }
+
+        a {
+            color: #3a86ff;
+            text-decoration: none;
+            transition: color 0.3s;
+        }
+
+        a:hover {
+            color: #ff006e;
+        }
+
+        .highlight {
+            background: rgba(131, 56, 236, 0.2);
+            padding: 16px;
+            border-radius: 8px;
+            border-left: 4px solid #8338ec;
+            margin: 20px 0;
+        }
+
+        .contact-box {
+            background: linear-gradient(135deg, rgba(255, 0, 110, 0.1), rgba(131, 56, 236, 0.1));
+            padding: 32px;
+            border-radius: 16px;
+            text-align: center;
+            margin-top: 40px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .contact-box h3 {
+            margin-bottom: 16px;
+            font-size: 24px;
+        }
+
+        .contact-link {
+            display: inline-block;
+            padding: 12px 32px;
+            background: linear-gradient(135deg, #ff006e, #8338ec);
+            border-radius: 8px;
+            color: white;
+            font-weight: 600;
+            margin-top: 12px;
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+
+        .contact-link:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(255, 0, 110, 0.4);
+        }
+
+        footer {
+            text-align: center;
+            padding: 40px 20px;
+            color: #666;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            margin-top: 60px;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px 16px 60px;
+            }
+
+            h1 {
+                font-size: 28px;
+            }
+
+            .logo {
+                font-size: 36px;
+            }
+
+            .section {
+                padding: 24px;
+            }
+
+            .section-title {
+                font-size: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-gradient gradient-1"></div>
+    <div class="bg-gradient gradient-2"></div>
+
+    <div class="container">
+        <header>
+            <div class="logo">MEJay</div>
+            <h1>Privacy Policy</h1>
+            <p class="last-updated">Effective Date: February 13, 2026</p>
+        </header>
+
+        <nav>
+            <h3>Quick Navigation</h3>
+            <ul>
+                <li><a href="#overview">1. Overview</a></li>
+                <li><a href="#information-collected">2. Information We Collect</a></li>
+                <li><a href="#how-we-use">3. How We Use Your Information</a></li>
+                <li><a href="#data-storage">4. Data Storage & Security</a></li>
+                <li><a href="#sharing">5. Information Sharing</a></li>
+                <li><a href="#your-rights">6. Your Privacy Rights</a></li>
+                <li><a href="#children">7. Children's Privacy</a></li>
+                <li><a href="#changes">8. Changes to This Policy</a></li>
+                <li><a href="#contact">9. Contact Us</a></li>
+            </ul>
+        </nav>
+
+        <!-- 1. Overview -->
+        <section class="section" id="overview">
+            <h2 class="section-title">1. Overview</h2>
+            <p>
+                Welcome to MEJay! We're committed to protecting your privacy and giving you control over your personal information. This Privacy Policy explains how we collect, use, store, and protect your data when you use our music app.
+            </p>
+            <div class="highlight">
+                <strong>Your Privacy Matters:</strong> We believe in transparency and your right to control your data. This policy is written in plain language to help you understand exactly what happens with your information.
+            </div>
+        </section>
+
+        <!-- 2. Information We Collect -->
+        <section class="section" id="information-collected">
+            <h2 class="section-title">2. Information We Collect</h2>
+            
+            <div class="subsection">
+                <h4>2.1 Information You Provide</h4>
+                <ul>
+                    <li><strong>Account Information:</strong> When you create an account, we collect your email address and password (encrypted)</li>
+                    <li><strong>Profile Data:</strong> Any optional profile information you choose to provide</li>
+                    <li><strong>Payment Information:</strong> Processed securely through Stripe (we don't store credit card details)</li>
+                    <li><strong>Communications:</strong> Messages you send us through support or contact forms</li>
+                </ul>
+            </div>
+
+            <div class="subsection">
+                <h4>2.2 Information We Automatically Collect</h4>
+                <ul>
+                    <li><strong>Usage Data:</strong> How you interact with the app (features used, songs played, playlists created)</li>
+                    <li><strong>Device Information:</strong> Device type, operating system, browser type</li>
+                    <li><strong>Audio Files:</strong> Metadata from music files you upload (title, artist, duration, BPM)</li>
+                    <li><strong>Performance Data:</strong> App performance metrics to improve functionality</li>
+                </ul>
+            </div>
+
+            <div class="subsection">
+                <h4>2.3 Information We Don't Collect</h4>
+                <ul>
+                    <li>We <strong>don't track</strong> you across other websites or apps</li>
+                    <li>We <strong>don't sell</strong> your personal information to third parties</li>
+                    <li>We <strong>don't access</strong> your music library without your permission</li>
+                    <li>We <strong>don't use</strong> invasive advertising trackers</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- 3. How We Use Your Information -->
+        <section class="section" id="how-we-use">
+            <h2 class="section-title">3. How We Use Your Information</h2>
+            
+            <div class="subsection">
+                <h4>3.1 To Provide Our Service</h4>
+                <ul>
+                    <li>Create and manage your account</li>
+                    <li>Store your playlists, preferences, and music library</li>
+                    <li>Process BPM detection and tempo matching</li>
+                    <li>Enable Party Mode and shared features</li>
+                    <li>Sync your data across devices</li>
+                </ul>
+            </div>
+
+            <div class="subsection">
+                <h4>3.2 To Improve Our Service</h4>
+                <ul>
+                    <li>Analyze usage patterns to enhance features</li>
+                    <li>Fix bugs and improve performance</li>
+                    <li>Develop new features based on user behavior</li>
+                    <li>Test and optimize the user experience</li>
+                </ul>
+            </div>
+
+            <div class="subsection">
+                <h4>3.3 To Communicate With You</h4>
+                <ul>
+                    <li>Send important service updates and announcements</li>
+                    <li>Respond to your support requests</li>
+                    <li>Send promotional emails (only with your consent, and you can opt out anytime)</li>
+                    <li>Notify you about account or subscription changes</li>
+                </ul>
+            </div>
+
+            <div class="subsection">
+                <h4>3.4 For Security & Legal Compliance</h4>
+                <ul>
+                    <li>Protect against fraud and abuse</li>
+                    <li>Enforce our Terms of Service</li>
+                    <li>Comply with legal obligations</li>
+                    <li>Resolve disputes and troubleshoot problems</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- 4. Data Storage & Security -->
+        <section class="section" id="data-storage">
+            <h2 class="section-title">4. Data Storage & Security</h2>
+            
+            <div class="subsection">
+                <h4>4.1 Where Your Data Lives</h4>
+                <p>
+                    Your data is stored securely on Cloudflare's infrastructure:
+                </p>
+                <ul>
+                    <li><strong>Cloudflare D1:</strong> Database for user accounts and playlists</li>
+                    <li><strong>Cloudflare R2:</strong> Storage for uploaded music files</li>
+                    <li><strong>Local Storage:</strong> Some preferences are stored locally on your device</li>
+                </ul>
+                <p>
+                    <strong>Location:</strong> Data is stored in Cloudflare's global network, which may include servers in various countries.
+                </p>
+            </div>
+
+            <div class="subsection">
+                <h4>4.2 How We Protect Your Data</h4>
+                <ul>
+                    <li><strong>Encryption:</strong> All data is encrypted in transit (HTTPS/TLS) and at rest</li>
+                    <li><strong>Password Security:</strong> Passwords are hashed using industry-standard algorithms</li>
+                    <li><strong>Access Controls:</strong> Strict limits on who can access user data</li>
+                    <li><strong>Regular Security Audits:</strong> We continuously monitor for vulnerabilities</li>
+                    <li><strong>Secure Payment Processing:</strong> Payments handled exclusively by Stripe (PCI-compliant)</li>
+                </ul>
+            </div>
+
+            <div class="subsection">
+                <h4>4.3 Data Retention</h4>
+                <ul>
+                    <li><strong>Active Accounts:</strong> We retain your data as long as your account is active</li>
+                    <li><strong>Deleted Accounts:</strong> Data is permanently deleted within 30 days of account deletion</li>
+                    <li><strong>Legal Requirements:</strong> Some data may be retained longer if required by law</li>
+                    <li><strong>Backups:</strong> Backups are retained for up to 90 days for disaster recovery</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- 5. Information Sharing -->
+        <section class="section" id="sharing">
+            <h2 class="section-title">5. Information Sharing</h2>
+            
+            <div class="subsection">
+                <h4>5.1 We Share Information With:</h4>
+                <ul>
+                    <li><strong>Stripe:</strong> For payment processing (they have their own privacy policy)</li>
+                    <li><strong>Cloudflare:</strong> Our hosting and infrastructure provider</li>
+                    <li><strong>Service Providers:</strong> Third parties who help us operate the app (under strict confidentiality agreements)</li>
+                </ul>
+            </div>
+
+            <div class="subsection">
+                <h4>5.2 We May Share Information When:</h4>
+                <ul>
+                    <li>Required by law or legal process</li>
+                    <li>Necessary to protect our rights or property</li>
+                    <li>You explicitly consent to sharing</li>
+                    <li>In connection with a business transfer (acquisition, merger, etc.)</li>
+                </ul>
+            </div>
+
+            <div class="subsection">
+                <h4>5.3 We Never:</h4>
+                <ul>
+                    <li>Sell your personal information to advertisers or data brokers</li>
+                    <li>Share your music library or playlists without permission</li>
+                    <li>Use your data for unauthorized marketing purposes</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- 6. Your Privacy Rights -->
+        <section class="section" id="your-rights">
+            <h2 class="section-title">6. Your Privacy Rights</h2>
+            
+            <p>You have the following rights regarding your personal information:</p>
+
+            <div class="subsection">
+                <h4>6.1 Access & Data Portability</h4>
+                <ul>
+                    <li><strong>Access:</strong> Request a copy of all data we have about you</li>
+                    <li><strong>Data Export:</strong> Download your playlists and account information</li>
+                </ul>
+            </div>
+
+            <div class="subsection">
+                <h4>6.2 Correction & Deletion</h4>
+                <ul>
+                    <li><strong>Update:</strong> Edit your profile and account information anytime</li>
+                    <li><strong>Delete:</strong> Request complete deletion of your account and data</li>
+                </ul>
+            </div>
+
+            <div class="subsection">
+                <h4>6.3 Control & Opt-Out</h4>
+                <ul>
+                    <li><strong>Email Preferences:</strong> Unsubscribe from marketing emails</li>
+                    <li><strong>Data Processing:</strong> Object to certain types of data processing</li>
+                    <li><strong>Third-Party Access:</strong> Revoke access to third-party integrations</li>
+                </ul>
+            </div>
+
+            <div class="subsection">
+                <h4>6.4 How to Exercise Your Rights</h4>
+                <p>
+                    To exercise any of these rights, contact us at <a href="mailto:privacy@mejay.app">privacy@mejay.app</a> or through the in-app settings. We'll respond within 30 days.
+                </p>
+            </div>
+
+            <div class="highlight">
+                <strong>Regional Rights:</strong> If you're in the EU (GDPR), California (CCPA), or other regions with specific privacy laws, you may have additional rights. Contact us to learn more.
+            </div>
+        </section>
+
+        <!-- 7. Children's Privacy -->
+        <section class="section" id="children">
+            <h2 class="section-title">7. Children's Privacy</h2>
+            
+            <p>
+                MEJay is not intended for children under 13 years old. We don't knowingly collect personal information from children under 13.
+            </p>
+            
+            <p>
+                If you're a parent or guardian and believe your child has provided us with personal information, please contact us immediately at <a href="mailto:privacy@mejay.app">privacy@mejay.app</a>, and we'll delete it.
+            </p>
+            
+            <p>
+                <strong>Age Verification:</strong> By using MEJay, you confirm that you're at least 13 years old (or the minimum age required in your country).
+            </p>
+        </section>
+
+        <!-- 8. Changes to This Policy -->
+        <section class="section" id="changes">
+            <h2 class="section-title">8. Changes to This Policy</h2>
+            
+            <p>
+                We may update this Privacy Policy from time to time to reflect changes in our practices or legal requirements.
+            </p>
+            
+            <div class="subsection">
+                <h4>When We Update This Policy:</h4>
+                <ul>
+                    <li>We'll update the "Effective Date" at the top</li>
+                    <li>We'll notify you through the app or via email</li>
+                    <li>For major changes, we'll ask for your consent</li>
+                    <li>The updated policy will be posted on our website</li>
+                </ul>
+            </div>
+            
+            <p>
+                <strong>Your Continued Use:</strong> By continuing to use MEJay after changes take effect, you accept the updated Privacy Policy.
+            </p>
+        </section>
+
+        <!-- 9. Contact Us -->
+        <section class="section" id="contact">
+            <h2 class="section-title">9. Contact Us</h2>
+            
+            <p>
+                Have questions about this Privacy Policy or how we handle your data? We're here to help!
+            </p>
+            
+            <div class="subsection">
+                <h4>Contact Information:</h4>
+                <ul>
+                    <li><strong>Email:</strong> <a href="mailto:privacy@mejay.app">privacy@mejay.app</a></li>
+                    <li><strong>Support:</strong> <a href="mailto:support@mejay.app">support@mejay.app</a></li>
+                    <li><strong>General Inquiries:</strong> <a href="mailto:contact@mejay.app">contact@mejay.app</a></li>
+                    <li><strong>Contact Form:</strong> <a href="/mejay-contact.html">mejay.app/contact</a></li>
+                </ul>
+            </div>
+            
+            <div class="highlight">
+                <strong>Response Time:</strong> We aim to respond to all privacy-related inquiries within 30 days, but usually much faster.
+            </div>
+        </section>
+
+        <!-- Contact Box -->
+        <div class="contact-box">
+            <h3>Questions About Your Privacy?</h3>
+            <p>We're committed to transparency and protecting your data.</p>
+            <a href="/mejay-contact.html" class="contact-link">Get In Touch</a>
+        </div>
+
+        <footer>
+            <p>&copy; 2026 MEJay. All rights reserved.</p>
+            <p style="margin-top: 12px;">
+                <a href="/mejay-terms.html">Terms of Service</a> • 
+                <a href="/mejay-privacy.html">Privacy Policy</a> • 
+                <a href="/mejay-contact.html">Contact</a>
+            </p>
+        </footer>
+    </div>
+</body>
+</html>
