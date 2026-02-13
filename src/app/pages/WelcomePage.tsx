@@ -16,7 +16,19 @@ function AnimatedLogo({className, alt}: {className?: string; alt: string}) {
     setSrc(prev => (prev === MEJAY_LOGO_URL ? prev : MEJAY_LOGO_URL))
   }, [])
 
-  return <img className={className} src={src} alt={alt} onError={handleError} />
+  return (
+    <img 
+      className={className} 
+      src={src} 
+      alt={alt} 
+      onError={handleError}
+      width="400"
+      height="400"
+      style={{ aspectRatio: '1' }}
+      fetchpriority="high"
+      decoding="async"
+    />
+  )
 }
 
 export default function WelcomePage() {

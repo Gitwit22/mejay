@@ -100,10 +100,16 @@ const Index = () => {
       {/* Starter Packs Onboarding */}
       <StarterPacksOnboardingModal open={starterPacksOpen} onOpenChange={setStarterPacksOpen} />
 
-      {/* Background Orbs */}
-      <div className="orb orb-primary w-[250px] h-[250px] opacity-50 -top-20 -right-20" />
-      <div className="orb orb-secondary w-[200px] h-[200px] opacity-50 bottom-[180px] -left-[100px]" />
-      <div className="orb orb-accent w-[180px] h-[180px] opacity-50 -bottom-10 -right-10" />
+      {/* Background Orbs - Fixed positioning to prevent layout shift */}
+      <div className="fixed w-[250px] h-[250px] -top-20 -right-20 pointer-events-none" style={{ contain: 'layout' }}>
+        <div className="orb orb-primary w-full h-full opacity-50" />
+      </div>
+      <div className="fixed w-[200px] h-[200px] bottom-[180px] -left-[100px] pointer-events-none" style={{ contain: 'layout' }}>
+        <div className="orb orb-secondary w-full h-full opacity-50" />
+      </div>
+      <div className="fixed w-[180px] h-[180px] -bottom-10 -right-10 pointer-events-none" style={{ contain: 'layout' }}>
+        <div className="orb orb-accent w-full h-full opacity-50" />
+      </div>
 
       {/* Main Content */}
       <div
@@ -121,7 +127,12 @@ const Index = () => {
             <img
               src={MEJAY_LOGO_URL}
               alt="MEJay"
+              width="200"
+              height="128"
               className="h-32 w-auto object-contain drop-shadow-[0_18px_60px_rgba(0,0,0,0.55)]"
+              style={{ aspectRatio: '200/128' }}
+              fetchpriority="high"
+              decoding="async"
             />
           </div>
         )}
