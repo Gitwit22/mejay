@@ -200,15 +200,17 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   return (
     <div className={cn('fixed top-3 sm:top-16 right-3 z-[120]', className)}>
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetTrigger asChild>
-          <button
-            type="button"
-            className="flex items-center justify-center h-11 w-11 rounded-xl bg-background/90 backdrop-blur-md border border-border shadow-lg hover:bg-accent transition-colors"
-            aria-label="Open settings"
-          >
-            <SettingsIcon className="h-5 w-5" />
-          </button>
-        </SheetTrigger>
+        {!open && (
+          <SheetTrigger asChild>
+            <button
+              type="button"
+              className="flex items-center justify-center h-11 w-11 rounded-xl bg-background/90 backdrop-blur-md border border-border shadow-lg hover:bg-accent transition-colors"
+              aria-label="Open settings"
+            >
+              <SettingsIcon className="h-5 w-5" />
+            </button>
+          </SheetTrigger>
+        )}
 
         <SheetContent
           side="right"
