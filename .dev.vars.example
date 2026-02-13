@@ -1,0 +1,18 @@
+# Example Development Variables for Cloudflare Workers
+# Copy this to .dev.vars (git-ignored) and fill in your values
+
+# Enable dev admin panel (required for non-development NODE_ENV)
+ALLOW_DEV_ADMIN=true
+
+# Optional: Restrict dev admin access to specific emails (comma-separated)
+# If not set, any authenticated user can access admin panel in dev mode
+DEV_ADMIN_EMAILS=your-email@example.com,another-admin@example.com
+
+# Auth secrets (generate strong random values)
+# AUTH_CODE_PEPPER=
+# SESSION_PEPPER=
+# AUTH_TOKEN_SECRET=
+
+# Stripe (if using billing)
+# STRIPE_SECRET_KEY=
+# STRIPE_WEBHOOK_SECRET=

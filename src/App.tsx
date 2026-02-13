@@ -22,6 +22,7 @@ import BillingPage from "./app/pages/BillingPage";
 import TermsPage from "./app/pages/TermsPage";
 import ContactPage from "./app/pages/ContactPage";
 import PrivacyPage from "./app/pages/PrivacyPage";
+import DevAdminPage from "./app/pages/DevAdminPage";
 
 const queryClient = new QueryClient();
 
@@ -540,6 +541,8 @@ const App = () => (
               <Route path="privacy" element={<PrivacyPage />} />
               <Route path="contact" element={<ContactPage />} />
             </Route>
+            {/* Dev-only admin page */}
+            {import.meta.env.DEV && <Route path="dev-admin" element={<DevAdminPage />} />}
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Route>

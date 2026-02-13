@@ -1,4 +1,4 @@
-import { Plus, ListMusic, Trash2, Music, Play, Edit2, ArrowUpDown, GripVertical } from 'lucide-react';
+import { Plus, ListMusic, Trash2, Music, Play, Edit2, ArrowUpDown, GripVertical, Shield } from 'lucide-react';
 import { useState, useCallback } from 'react';
 import { useDJStore } from '@/stores/djStore';
 import { cn, formatDuration } from '@/lib/utils';
@@ -319,6 +319,17 @@ export function PlaylistsView() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Dev Admin Button */}
+      {import.meta.env.DEV && (
+        <button
+          onClick={() => navigate('/app/dev-admin')}
+          className="fixed bottom-[calc(84px+env(safe-area-inset-bottom,0)+8px)] right-4 p-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 transition-colors z-10"
+          title="Dev Admin"
+        >
+          <Shield className="w-4 h-4 text-red-400" />
+        </button>
       )}
     </div>
   );
