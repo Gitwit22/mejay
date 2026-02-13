@@ -210,22 +210,6 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
           </button>
         </SheetTrigger>
 
-        {/* Escape hatch: pinned close button (always tappable, even if panel scrolls). */}
-        {open && (
-          <button
-            type="button"
-            onClick={() => setOpen(false)}
-            className={cn(
-              'fixed top-3 right-3 z-[9999] inline-flex h-11 w-11 items-center justify-center rounded-xl',
-              'bg-background/90 backdrop-blur-md border border-border shadow-lg hover:bg-accent transition-colors',
-              'mejay-fixed-right',
-            )}
-            aria-label="Close settings"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        )}
-
         <SheetContent
           side="right"
           style={panelMaxHeightPx ? ({maxHeight: `${panelMaxHeightPx}px`} as React.CSSProperties) : undefined}
