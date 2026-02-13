@@ -9,7 +9,7 @@ import { TEMPO_PRESET_RATIOS, computePresetTempo } from '@/lib/tempoPresets';
 import { usePlanStore } from '@/stores/planStore';
 import { toast } from '@/hooks/use-toast';
 import { detectTrueEndTime } from '@/lib/trueEndTime';
-import { valentine2026Pack } from '@/config/starterPacks';
+import { valentine2026Pack, partyPack } from '@/config/starterPacks';
 
 interface DeckState {
   trackId: string | null;
@@ -110,6 +110,8 @@ interface DJState {
 
   // Starter packs
   seedStarterTracksIfEmpty: (packIds: string[]) => Promise<boolean>;
+  downloadStarterPacks: (packIds: string[]) => Promise<{added: number; skipped: number}>;
+  removeStarterTracks: () => Promise<number>;
 
   // Removal semantics (Library / Playlist / Current Source)
   removeFromLibrary: (trackId: string, opts?: {reason?: 'user' | 'sync'}) => Promise<void>;
@@ -1101,6 +1103,170 @@ export const useDJStore = create<DJState>()(
       }
 
       return false;
+    },
+
+    downloadStarterPacks: async (packIds: string[]) => {
+      if (!packIds.length) return { added: 0, skipped: 0 };
+
+      // Get tracks for selected packs
+      const tracksToAdd: typeof valentine2026Pack = [];
+      for (const packId of packIds) {
+        if (packId === 'valentine-2026') {
+          tracksToAdd.push(...valentine2026Pack);
+        } else if (packId === 'party-pack') {
+          tracksToAdd.push(...partyPack);
+        }
+      }
+
+      if (tracksToAdd.length === 0) return { added: 0, skipped: 0 };
+
+      // Get existing tracks to dedupe
+      let existing: Track[] = [];
+      try {
+        existing = await getAllTracks();
+      } catch {
+        existing = get().tracks;
+      }
+
+      const existingKeys = new Set(existing.map(t => t.localPath || t.id));
+      const newOnes = tracksToAdd.filter(t => !existingKeys.has(t.url));
+
+      if (newOnes.length === 0) {
+        return { added: 0, skipped: tracksToAdd.length };
+      }
+
+      // Download and process new tracks
+      const seeded: Track[] = [];
+      for (const starter of newOnes) {
+        try {
+          const response = await fetch(starter.url);
+          if (!response.ok) continue;
+
+          const blob = await response.blob();
+          let duration = 240;
+          let bpm: number | undefined;
+          let hasBeat = false;
+          let trueEndTime: number | undefined;
+          let loudnessDb: number | undefined;
+          let gainDb: number | undefined;
+          let analysisStatus: Track['analysisStatus'] = 'basic';
+
+          try {
+            const audioContext = new AudioContext();
+            const arrayBuffer = await blob.arrayBuffer();
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            duration = audioBuffer.duration || duration;
+
+            try {
+              const bpmResult = await detectBPM(audioBuffer);
+              bpm = bpmResult.bpm;
+              hasBeat = bpmResult.confidence > 0.3 && bpmResult.bpm > 0;
+            } catch (e) {
+              console.error('[DJ Store] BPM analysis failed:', e);
+            }
+
+            try {
+              trueEndTime = detectTrueEndTime(audioBuffer, {
+                silenceThresholdDb: -60,
+                minSilenceMs: 1000,
+                minCutBeforeEndSec: 2.0,
+              });
+            } catch (e) {
+              console.error('[DJ Store] True-end analysis failed:', e);
+            }
+
+            try {
+              const settings = get().settings;
+              if (settings.autoVolumeMatch) {
+                loudnessDb = audioEngine.measureLoudness(audioBuffer);
+                const targetDb = -20 + (settings.targetLoudness * 12);
+                gainDb = audioEngine.calculateGain(loudnessDb, targetDb);
+              }
+            } catch (e) {
+              console.error('[DJ Store] Loudness analysis failed:', e);
+            }
+
+            try {
+              audioContext.close();
+            } catch {
+              // ignore
+            }
+
+            analysisStatus = (hasBeat ? 'ready' : 'basic') as 'ready' | 'basic';
+          } catch (e) {
+            console.error('[DJ Store] Decode failed:', e);
+          }
+
+          const track: Track = {
+            id: starter.id,
+            localPath: starter.url,
+            displayName: starter.title,
+            artist: starter.artist,
+            isStarter: true,
+            duration,
+            bpm,
+            hasBeat,
+            analysisStatus,
+            fileBlob: blob,
+            addedAt: Date.now(),
+            trueEndTime,
+            loudnessDb,
+            gainDb,
+          };
+
+          try {
+            await addTrack(track);
+          } catch (e) {
+            console.error('[DJ Store] Failed to persist track:', e);
+          }
+
+          seeded.push(track);
+        } catch (e) {
+          console.error('[DJ Store] Failed to download track:', starter?.url, e);
+        }
+      }
+
+      if (seeded.length > 0) {
+        // Refresh from IndexedDB to get updated state
+        try {
+          const tracks = await getAllTracks();
+          set({ tracks });
+        } catch {
+          // Fallback: update in-memory state
+          set(state => ({
+            tracks: [...seeded, ...state.tracks],
+          }));
+        }
+      }
+
+      return { added: seeded.length, skipped: tracksToAdd.length - newOnes.length };
+    },
+
+    removeStarterTracks: async () => {
+      const starterTracks = get().tracks.filter(t => t.isStarter);
+      if (starterTracks.length === 0) return 0;
+
+      // Remove from IndexedDB
+      for (const track of starterTracks) {
+        try {
+          await deleteTrack(track.id);
+        } catch (e) {
+          console.error('[DJ Store] Failed to delete starter track:', track.id, e);
+        }
+      }
+
+      // Update state
+      try {
+        const tracks = await getAllTracks();
+        set({ tracks });
+      } catch {
+        // Fallback: filter in-memory
+        set(state => ({
+          tracks: state.tracks.filter(t => !t.isStarter),
+        }));
+      }
+
+      return starterTracks.length;
     },
 
     loadPlaylists: async () => {

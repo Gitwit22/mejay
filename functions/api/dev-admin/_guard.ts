@@ -14,9 +14,9 @@ type Env = {
 }
 
 export async function requireDevAdmin(request: Request, env: Env): Promise<string | Response> {
-  // 1. Check if dev admin is enabled
-  const isDev = env.NODE_ENV !== 'production' || env.ALLOW_DEV_ADMIN === 'true'
-  if (!isDev) {
+  // 1. Explicitly block production unless ALLOW_DEV_ADMIN is true
+  // This makes it impossible to access dev-admin in production by default
+  if (env.NODE_ENV === 'production' && env.ALLOW_DEV_ADMIN !== 'true') {
     return new Response('Not found', { status: 404 })
   }
 

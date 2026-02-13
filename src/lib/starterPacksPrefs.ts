@@ -3,7 +3,7 @@ export const STARTER_PACKS_ENABLED_KEY = 'mejay:starterPacksEnabled';
 export const STARTER_PROMPT_PENDING_KEY = 'mejay:starterPromptPending';
 export const ONBOARDED_KEY = 'mejay:onboarded';
 
-export type StarterPackId = 'valentine-2026';
+export type StarterPackId = 'valentine-2026' | 'party-pack';
 
 export type StarterPacksPrefs = {
   choiceMade: boolean;

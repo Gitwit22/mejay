@@ -36,6 +36,7 @@ import {useLicenseStore} from '@/licensing/licenseStore'
 import {getNextRequiredCheckBy} from '@/licensing/licensePolicy'
 import {openBillingPortal} from '@/lib/checkout'
 import {getSettingsEntryNavigateOptions} from '@/app/navigation/settingsReturnTo'
+import {DownloadPacksModal} from '@/components/DownloadPacksModal'
 
 type TopRightSettingsMenuProps = {
   className?: string
@@ -48,6 +49,7 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   const [panelMaxHeightPx, setPanelMaxHeightPx] = useState<number | null>(null)
   const [licenseKey, setLicenseKey] = useState('')
   const [resetAlsoClearLicense, setResetAlsoClearLicense] = useState(false)
+  const [downloadPacksModalOpen, setDownloadPacksModalOpen] = useState(false)
 
   const keepImportsOnDevice = useDJStore((s) => s.settings.keepImportsOnDevice)
   const updateUserSettings = useDJStore((s) => s.updateUserSettings)
@@ -92,7 +94,7 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
     [],
   )
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     // Close modal first (per UX requirement).
     setOpen(false)
 
@@ -104,7 +106,26 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
       // ignore
     }
 
-    navigate('/')
+    // Call the logout API to clear the server-side session
+    try {
+      const res = await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {'Content-Type': 'application/json'},
+      })
+      
+      if (!res.ok) {
+        console.error('Logout API call failed:', res.status)
+      }
+    } catch (error) {
+      console.error('Logout error:', error)
+    }
+
+    // Update auth status to anonymous (this clears the session state)
+    usePlanStore.setState({authStatus: 'anonymous', user: null})
+
+    // Navigate to home page
+    navigate('/', {replace: true})
   }
 
   const closeAndNavigate = (to: string, options?: NavigateOptions) => {
@@ -504,6 +525,17 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
 
                       <div className="h-4" />
 
+                      <Button 
+                        type="button" 
+                        variant="outline" 
+                        className="w-full"
+                        onClick={() => setDownloadPacksModalOpen(true)}
+                      >
+                        Download Starter Packs
+                      </Button>
+
+                      <div className="h-4" />
+
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
                           <Button type="button" variant="outline" className="w-full">
@@ -658,6 +690,9 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
           </div>
         </SheetContent>
       </Sheet>
-    </div>
+      <DownloadPacksModal 
+        open={downloadPacksModalOpen} 
+        onOpenChange={setDownloadPacksModalOpen} 
+      />    </div>
   )
 }

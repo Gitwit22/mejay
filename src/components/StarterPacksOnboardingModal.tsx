@@ -14,18 +14,27 @@ export type StarterPacksOnboardingModalProps = {
 };
 
 const VALENTINE_PACK_ID: StarterPackId = 'valentine-2026';
+const PARTY_PACK_ID: StarterPackId = 'party-pack';
 
 export function StarterPacksOnboardingModal(props: StarterPacksOnboardingModalProps) {
   const { open, onOpenChange } = props;
 
-  const initialChecked = useMemo(() => {
+  const initialSelectedPacks = useMemo(() => {
     const prefs = readStarterPacksPrefs();
-    if (!prefs.choiceMade) return true;
-    return prefs.enabledPackIds.includes(VALENTINE_PACK_ID);
+    if (!prefs.choiceMade) return [VALENTINE_PACK_ID];
+    return prefs.enabledPackIds;
   }, []);
 
-  const [valentineEnabled, setValentineEnabled] = useState<boolean>(initialChecked);
+  const [selectedPacks, setSelectedPacks] = useState<string[]>(initialSelectedPacks);
   const [isWorking, setIsWorking] = useState(false);
+
+  function togglePack(packId: string) {
+    setSelectedPacks((prev) =>
+      prev.includes(packId)
+        ? prev.filter((id) => id !== packId)
+        : [...prev, packId]
+    );
+  }
 
   const close = () => onOpenChange(false);
 
@@ -39,35 +48,41 @@ export function StarterPacksOnboardingModal(props: StarterPacksOnboardingModalPr
   };
 
   const handleConfirm = async () => {
-    const enabled: StarterPackId[] = valentineEnabled ? [VALENTINE_PACK_ID] : [];
-
-    // Persist "disabled" immediately.
-    if (enabled.length === 0) {
+    // Persist "disabled" immediately if nothing selected.
+    if (selectedPacks.length === 0) {
       saveAndClose([]);
       return;
     }
 
     setIsWorking(true);
     try {
-      const seeded = await useDJStore.getState().seedStarterTracksIfEmpty(enabled);
+      const seeded = await useDJStore.getState().seedStarterTracksIfEmpty(selectedPacks as StarterPackId[]);
       if (!seeded) {
         toast({
-          title: 'Starter pack not added',
+          title: 'Starter packs not added',
           description: 'Your library is not empty, or the download failed. You can try again.',
           variant: 'destructive',
         });
         return;
       }
 
+      const packNames = selectedPacks
+        .map((id) => {
+          if (id === VALENTINE_PACK_ID) return 'Valentine 2026';
+          if (id === PARTY_PACK_ID) return 'Party Pack';
+          return id;
+        })
+        .join(', ');
+
       toast({
-        title: 'Starter pack added',
-        description: 'Valentine 2026 tracks are now in your Library.',
+        title: 'Starter packs added',
+        description: `${packNames} tracks are now in your Library.`,
       });
 
-      saveAndClose(enabled);
+      saveAndClose(selectedPacks as StarterPackId[]);
     } catch (e) {
       toast({
-        title: 'Could not add starter pack',
+        title: 'Could not add starter packs',
         description: e instanceof Error ? e.message : 'Please try again.',
         variant: 'destructive',
       });
@@ -90,13 +105,26 @@ export function StarterPacksOnboardingModal(props: StarterPacksOnboardingModalPr
           <div className="flex items-start gap-3">
             <Checkbox
               id="starter-pack-valentine-2026"
-              checked={valentineEnabled}
-              onCheckedChange={(v) => setValentineEnabled(v === true)}
+              checked={selectedPacks.includes(VALENTINE_PACK_ID)}
+              onCheckedChange={() => togglePack(VALENTINE_PACK_ID)}
               disabled={isWorking}
             />
             <div className="grid gap-1 leading-tight">
               <Label htmlFor="starter-pack-valentine-2026">Valentine 2026 (5 tracks)</Label>
               <div className="text-xs text-muted-foreground">John Blaze — Believe It, I Do, SAYLESS, Sundress, Turnstyle</div>
+            </div>
+          </div>
+
+          <div className="flex items-start gap-3">
+            <Checkbox
+              id="starter-pack-party"
+              checked={selectedPacks.includes(PARTY_PACK_ID)}
+              onCheckedChange={() => togglePack(PARTY_PACK_ID)}
+              disabled={isWorking}
+            />
+            <div className="grid gap-1 leading-tight">
+              <Label htmlFor="starter-pack-party">Party Pack (6 tracks)</Label>
+              <div className="text-xs text-muted-foreground">John Blaze — Im So Lit, Its a Celebration, Money Right, No Friends, On Tha Move, Strawberry and Lime Liquor</div>
             </div>
           </div>
 
