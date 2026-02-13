@@ -40,6 +40,9 @@ class AudioEngine {
   private masterVolume: number = 1;
   private limiterNode: DynamicsCompressorNode | null = null;
   private ceilingNode: GainNode | null = null;
+  
+  // Per-deck ignore flag: stop()/restart() will trigger onended — don't treat it like a natural track finish
+  private ignoreNextEnded: Record<DeckId, number> = { A: 0, B: 0 };
 
   // Master tone shaping (pre-limiter)
   private preLimiterGain: GainNode | null = null;
@@ -418,6 +421,9 @@ class AudioEngine {
     }, delayMs);
 
     source.onended = () => {
+      // stop()/restart will trigger onended — don't treat it like a natural track finish
+      if ((this.ignoreNextEnded[deck] ?? 0) > Date.now()) return;
+      
       if (deckState.isPlaying) {
         deckState.isPlaying = false;
         deckState.pausedAt = 0;
@@ -774,6 +780,9 @@ class AudioEngine {
 
     // Handle track end
     source.onended = () => {
+      // stop()/restart will trigger onended — don't treat it like a natural track finish
+      if ((this.ignoreNextEnded[deck] ?? 0) > Date.now()) return;
+      
       if (deckState.isPlaying) {
         deckState.isPlaying = false;
         deckState.pausedAt = 0;
@@ -793,6 +802,12 @@ class AudioEngine {
     deckState.sourceNode.disconnect();
     deckState.sourceNode = null;
     deckState.isPlaying = false;
+  }
+
+  // Call before stop() when you *don't* want onended to be treated as a real ending
+  ignoreEndedFor(deck: DeckId, ms = 300): void {
+    const until = Date.now() + ms;
+    this.ignoreNextEnded[deck] = Math.max(this.ignoreNextEnded[deck] ?? 0, until);
   }
 
   stop(deck: DeckId): void {

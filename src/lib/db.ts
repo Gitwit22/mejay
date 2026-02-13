@@ -7,6 +7,8 @@ export interface Track {
   localPath: string;
   displayName: string;
   artist?: string;
+  /** True for bundled starter-pack tracks (not user imports). */
+  isStarter?: boolean;
   duration: number;
   /**
    * Precomputed “musical end” time (seconds) used for transition planning.

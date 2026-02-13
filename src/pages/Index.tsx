@@ -11,6 +11,8 @@ import { TopRightSettingsMenu } from '@/components/TopRightSettingsMenu';
 import { cn } from '@/lib/utils';
 import { MEJAY_LOGO_URL } from '@/lib/branding';
 import { ENTITLEMENTS_CHANGED_EVENT } from '@/stores/planStore';
+import { StarterPacksOnboardingModal } from '@/components/StarterPacksOnboardingModal';
+import { consumeStarterPromptPending, readStarterPacksPrefs } from '@/lib/starterPacksPrefs';
 
 type TabId = 'library' | 'party' | 'playlists';
 
@@ -19,6 +21,7 @@ const LAST_TAB_KEY = 'mejay:lastTab';
 const Index = () => {
   const [searchParams] = useSearchParams();
   const tabFromUrl = searchParams.get('tab') as TabId | null;
+  const [starterPacksOpen, setStarterPacksOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>(() => {
     if (tabFromUrl && ['library', 'party', 'playlists'].includes(tabFromUrl)) return tabFromUrl;
     try {
@@ -32,7 +35,17 @@ const Index = () => {
 
   // Initialize app data on mount only
   useEffect(() => {
-    useDJStore.getState().loadTracks();
+    const maybeOpenStarterPacks = () => {
+      const pending = consumeStarterPromptPending();
+      if (!pending) return;
+
+      const prefs = readStarterPacksPrefs();
+      if (prefs.choiceMade) return;
+
+      setStarterPacksOpen(true);
+    };
+
+    void useDJStore.getState().loadTracks().finally(maybeOpenStarterPacks);
     useDJStore.getState().loadPlaylists();
     useDJStore.getState().loadSettings();
 
@@ -83,6 +96,9 @@ const Index = () => {
 
       {/* Upgrade Modal */}
       <UpgradeModal />
+
+      {/* Starter Packs Onboarding */}
+      <StarterPacksOnboardingModal open={starterPacksOpen} onOpenChange={setStarterPacksOpen} />
 
       {/* Background Orbs */}
       <div className="orb orb-primary w-[250px] h-[250px] opacity-50 -top-20 -right-20" />

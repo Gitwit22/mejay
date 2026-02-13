@@ -3,6 +3,7 @@ import {useNavigate, useSearchParams, Link} from 'react-router-dom'
 import {toast} from '@/hooks/use-toast'
 import {MEJAY_LOGO_URL} from '@/lib/branding'
 import {usePlanStore} from '@/stores/planStore'
+import {setOnboarded, setStarterPromptPending} from '@/lib/starterPacksPrefs'
 
 type Mode = 'password' | 'code' | 'setPassword'
 type CodeStep = 'email' | 'code'
@@ -183,6 +184,14 @@ export default function LoginPage() {
       toast({title: 'Signed in', description: 'Welcome back.'})
       usePlanStore.getState().markAuthenticated({email})
       void usePlanStore.getState().refreshFromServer({reason: 'postSetPassword'})
+
+      // Post-auth one-shot starter pack prompt (only for first-time password creation flow).
+      // Never show this for password reset.
+      if (purpose === 'signup_verify') {
+        setStarterPromptPending(true)
+        setOnboarded(true)
+      }
+
       navigate(returnTo, {replace: true})
     } catch (e) {
       toast({

@@ -9,6 +9,7 @@ import { TEMPO_PRESET_RATIOS, computePresetTempo } from '@/lib/tempoPresets';
 import { usePlanStore } from '@/stores/planStore';
 import { toast } from '@/hooks/use-toast';
 import { detectTrueEndTime } from '@/lib/trueEndTime';
+import { valentine2026Pack } from '@/config/starterPacks';
 
 interface DeckState {
   trackId: string | null;
@@ -107,6 +108,9 @@ interface DJState {
   clearAllImports: () => Promise<void>;
   deleteTrackById: (id: string) => Promise<void>;
 
+  // Starter packs
+  seedStarterTracksIfEmpty: (packIds: string[]) => Promise<boolean>;
+
   // Removal semantics (Library / Playlist / Current Source)
   removeFromLibrary: (trackId: string, opts?: {reason?: 'user' | 'sync'}) => Promise<void>;
   removeFromPlaylist: (playlistId: string, trackId: string, opts?: {emit?: boolean}) => Promise<void>;
@@ -201,6 +205,12 @@ export const useDJStore = create<DJState>()(
   let masterVolumeSaveTimeout: ReturnType<typeof setTimeout> | null = null;
   let settingsSaveTimeout: ReturnType<typeof setTimeout> | null = null;
   let queuedSettingsUpdates: Partial<Settings> = {};
+
+  // Guard against repeated seed attempts within a single document lifetime.
+  let didAttemptStarterSeedThisSession = false;
+  
+  // Grace period after restart - blocks all auto-mix triggers for 5 seconds
+  let restartGraceUntilMs: number = 0;
 
   const FREE_UPLOAD_LIMIT_SECONDS = 30 * 60;
   // Allow a little overage for a single additional track.
@@ -529,10 +539,7 @@ export const useDJStore = create<DJState>()(
 
     // Restore automix trigger.
     const after = get();
-    const triggerSecondsTrack = computeAutoMixTriggerSecondsTrack(after);
-    audioEngine.setMixTriggerConfig('remaining', triggerSecondsTrack);
-    audioEngine.enableMixCheck(after.settings.repeatMode !== 'track');
-    audioEngine.resetMixTrigger();
+    armAutoMixTriggerForState(after);
   };
 
   const getEffectiveStartTimeSec = (track: Track | undefined, settings: Settings | undefined) => {
@@ -629,6 +636,129 @@ export const useDJStore = create<DJState>()(
     repeatMode: 'playlist',
   };
 
+  const seedValentine2026StarterTracksIfEmpty = async (): Promise<boolean> => {
+    if (didAttemptStarterSeedThisSession) return false;
+    didAttemptStarterSeedThisSession = true;
+
+    // Only seed when the library is truly empty.
+    // We check IndexedDB directly so this stays correct even if the in-memory
+    // store hasn't finished loading yet.
+    try {
+      const existing = await getAllTracks();
+      if (existing.length > 0) return false;
+    } catch {
+      // If IDB is unavailable, fall back to in-memory check.
+      if (get().tracks.length > 0) return false;
+    }
+
+    // Fetch starter MP3s from /public and store them as blobs like normal imports.
+    const seeded: Track[] = [];
+
+    for (const starter of valentine2026Pack) {
+      try {
+        const response = await fetch(starter.url);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch starter track: ${starter.url} (${response.status})`);
+        }
+
+        const blob = await response.blob();
+
+        let duration = 240;
+        let bpm: number | undefined;
+        let hasBeat = false;
+        let trueEndTime: number | undefined;
+        let loudnessDb: number | undefined;
+        let gainDb: number | undefined;
+        let analysisStatus: Track['analysisStatus'] = 'basic';
+
+        try {
+          const audioContext = new AudioContext();
+          const arrayBuffer = await blob.arrayBuffer();
+          const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+          duration = audioBuffer.duration || duration;
+
+          try {
+            const bpmResult = await detectBPM(audioBuffer);
+            bpm = bpmResult.bpm;
+            hasBeat = bpmResult.confidence > 0.3 && bpmResult.bpm > 0;
+          } catch (e) {
+            console.error('[DJ Store] Starter BPM analysis failed:', e);
+          }
+
+          try {
+            trueEndTime = detectTrueEndTime(audioBuffer, {
+              silenceThresholdDb: -60,
+              minSilenceMs: 1000,
+              minCutBeforeEndSec: 2.0,
+            });
+          } catch (e) {
+            console.error('[DJ Store] Starter true-end analysis failed:', e);
+          }
+
+          try {
+            const settings = get().settings;
+            if (settings.autoVolumeMatch) {
+              loudnessDb = audioEngine.measureLoudness(audioBuffer);
+              const targetDb = -20 + (settings.targetLoudness * 12);
+              gainDb = audioEngine.calculateGain(loudnessDb, targetDb);
+            }
+          } catch (e) {
+            console.error('[DJ Store] Starter loudness analysis failed:', e);
+          }
+
+          try {
+            audioContext.close();
+          } catch {
+            // ignore
+          }
+
+          analysisStatus = (hasBeat ? 'ready' : 'basic') as 'ready' | 'basic';
+        } catch (e) {
+          console.error('[DJ Store] Starter decode failed:', e);
+        }
+
+        const track: Track = {
+          id: starter.id,
+          localPath: starter.url,
+          displayName: starter.title,
+          artist: starter.artist,
+          isStarter: true,
+          duration,
+          bpm,
+          hasBeat,
+          analysisStatus,
+          fileBlob: blob,
+          addedAt: Date.now(),
+          trueEndTime,
+          loudnessDb,
+          gainDb,
+        };
+
+        // Starter tracks should be available offline once fetched.
+        try {
+          await addTrack(track);
+        } catch (e) {
+          console.error('[DJ Store] Failed to persist starter track to IndexedDB:', e);
+          // Still seed into in-memory state so user can play this session.
+        }
+
+        seeded.push(track);
+      } catch (e) {
+        console.error('[DJ Store] Failed to seed starter track:', starter?.url, e);
+      }
+    }
+
+    if (seeded.length === 0) return false;
+
+    // Ensure in-memory state immediately reflects seeded tracks,
+    // even if IndexedDB persistence fails.
+    set(state => ({
+      tracks: state.tracks.length === 0 ? seeded : state.tracks,
+    }));
+
+    return true;
+  };
+
   const getCanonicalTargetBpm = (settings: Settings): number | null => {
     if (settings.tempoMode === 'locked') {
       return Number.isFinite(settings.lockedBpm) && settings.lockedBpm > 0 ? settings.lockedBpm : null;
@@ -695,6 +825,36 @@ export const useDJStore = create<DJState>()(
     // Convert from real seconds to track-time seconds for the engine's "remaining" trigger.
     // Engine trigger compares against *track-time* remaining; convert from real seconds.
     return desiredRealSeconds * outgoingRate;
+  };
+
+  // Auto-mix trigger guardrails:
+  // If the threshold is larger than the track's effective length, the engine triggers immediately.
+  // Ensure the user always gets a small minimum play window before auto-mix can fire.
+  const MIN_AUTOMIX_PLAY_WINDOW_REAL_SEC = 5;
+
+  const armAutoMixTriggerForState = (state: DJState) => {
+    if (!state.isPartyMode) return;
+
+    if (state.settings.repeatMode === 'track') {
+      audioEngine.enableMixCheck(false);
+      audioEngine.resetMixTrigger();
+      return;
+    }
+
+    const outgoingDeck = state.activeDeck;
+    const outgoingDeckState = getDeckState(state, outgoingDeck);
+    const durationTrack = audioEngine.getDuration(outgoingDeck) || outgoingDeckState.duration || 0;
+    const rate = Math.max(0.25, audioEngine.getTempo(outgoingDeck) || outgoingDeckState.playbackRate || 1);
+
+    const wantedSecondsTrack = computeAutoMixTriggerSecondsTrack(state);
+
+    // Ensure at least MIN_AUTOMIX_PLAY_WINDOW_REAL_SEC of real playback before auto-mix can trigger.
+    const maxSecondsTrack = Math.max(0, durationTrack - (MIN_AUTOMIX_PLAY_WINDOW_REAL_SEC * rate));
+    const safeSecondsTrack = Math.max(0, Math.min(wantedSecondsTrack, maxSecondsTrack));
+
+    audioEngine.setMixTriggerConfig('remaining', safeSecondsTrack);
+    audioEngine.enableMixCheck(safeSecondsTrack > 0);
+    audioEngine.resetMixTrigger();
   };
 
   const applyImmediateTempoToDeck = (state: DJState, deck: DeckId) => {
@@ -863,6 +1023,12 @@ export const useDJStore = create<DJState>()(
 
   // Set up mix trigger callback for auto-mixing
   audioEngine.setOnMixTrigger(() => {
+    // BLOCK if within grace period after restart
+    if (Date.now() < restartGraceUntilMs) {
+      audioEngine.resetMixTrigger();  // Reset so it can try again later
+      return;
+    }
+    
     const state = get();
     if (state.isPartyMode) {
       if (state.settings.repeatMode === 'track') return;
@@ -913,6 +1079,28 @@ export const useDJStore = create<DJState>()(
         console.error('[DJ Store] Failed to load tracks:', error);
         set({ isLoadingTracks: false });
       }
+    },
+
+    seedStarterTracksIfEmpty: async (packIds: string[]) => {
+      const ids = Array.isArray(packIds) ? packIds : [];
+      if (ids.length === 0) return false;
+
+      // Only one pack is implemented right now; keep the API future-proof.
+      if (ids.includes('valentine-2026')) {
+        const seeded = await seedValentine2026StarterTracksIfEmpty();
+        if (seeded) {
+          // Refresh state from IndexedDB when available.
+          try {
+            const tracks = await getAllTracks();
+            set({ tracks });
+          } catch {
+            // ignore
+          }
+        }
+        return seeded;
+      }
+
+      return false;
     },
 
     loadPlaylists: async () => {
@@ -1099,7 +1287,7 @@ export const useDJStore = create<DJState>()(
       // Track total imported duration to enforce quota. (Only counts tracks with file blobs.)
       const computeLibrarySeconds = () => {
         const state = get();
-        return state.tracks.reduce((sum, t) => sum + (t.fileBlob ? (t.duration || 0) : 0), 0);
+        return state.tracks.reduce((sum, t) => sum + (t.fileBlob && !t.isStarter ? (t.duration || 0) : 0), 0);
       };
 
       let librarySeconds = isFree ? computeLibrarySeconds() : 0;
@@ -1237,9 +1425,9 @@ export const useDJStore = create<DJState>()(
           let trueEndTime: number | undefined;
           try {
             trueEndTime = detectTrueEndTime(audioBuffer, {
-              silenceThresholdDb: -55,
-              minSilenceMs: 700,
-              minCutBeforeEndSec: 1.5,
+              silenceThresholdDb: -60,  // More conservative: only truly silent sections
+              minSilenceMs: 1000,        // Require 1 full second of silence
+              minCutBeforeEndSec: 2.0,   // Don't cut within last 2 seconds
             });
           } catch (e) {
             console.error('True end time analysis failed:', e);
@@ -1520,19 +1708,37 @@ export const useDJStore = create<DJState>()(
     },
 
     restartCurrentTrack: (arg?: DeckId | { deck?: DeckId; reason?: string; silent?: boolean }) => {
-      const state = get();
+      // 1. CANCEL any pending auto-mix so restart doesn't fade into next track
+      clearScheduledTimeouts();
+      try {
+        audioEngine.enableMixCheck(false);
+        audioEngine.resetMixTrigger();
+      } catch {
+        // ignore
+      }
+      
+      // Clear mix in progress flag
+      set({ mixInProgress: false });
+      
+      // SET GRACE PERIOD - 5 seconds, no auto-mix allowed
+      restartGraceUntilMs = Date.now() + 5000;
+
+      const state0 = get();
       const deck = typeof arg === 'string' ? arg : arg?.deck;
       const reason = typeof arg === 'string' ? undefined : arg?.reason;
       const silent = typeof arg === 'string' ? false : Boolean(arg?.silent);
 
-      cancelPendingTransition(reason ?? 'restart');
+      const isRepeatRestart = reason === 'repeat_end' || state0.settings.repeatMode === 'track';
 
-      const refreshed = get();
-      const targetDeck = deck || refreshed.activeDeck;
+      const state = get();
+      const targetDeck = deck || state.activeDeck;
       const track = getDeckTrack(state, targetDeck);
       if (!track) return;
 
-      const startAt = getEffectiveStartTimeSec(track, state.settings);
+      // 2. Do the restart/seek - go back to normal start position
+      // Ignore onended event from the stop() that seek() triggers (800ms is plenty for stop->seek->play)
+      audioEngine.ignoreEndedFor(targetDeck, 800);
+      const startAt = isRepeatRestart ? 0 : getEffectiveStartTimeSec(track, state.settings);
       audioEngine.seek(targetDeck, startAt);
 
       if (targetDeck === 'A') {
@@ -1541,10 +1747,25 @@ export const useDJStore = create<DJState>()(
         set(s => ({ deckB: { ...s.deckB, currentTime: startAt } }));
       }
 
+      // 3. AFTER seek completes, recompute trigger threshold from NEW position
+      // Delay to let seek settle and position update
+      setTimeout(() => {
+        const currentState = get();
+        if (currentState.isPartyMode && currentState.settings.repeatMode !== 'track') {
+          // Recompute trigger based on current track state AFTER seek
+          const triggerSecondsTrack = computeAutoMixTriggerSecondsTrack(currentState);
+          audioEngine.setMixTriggerConfig('remaining', triggerSecondsTrack);
+          audioEngine.resetMixTrigger();  // Reset the "already fired" flag
+          audioEngine.enableMixCheck(true);
+        }
+      }, 100);
+
       if (!silent) {
         toast({
           title: 'Restarted',
-          description: `Start: ${Math.floor(startAt / 60)}:${Math.floor(startAt % 60).toString().padStart(2, '0')}`,
+          description: isRepeatRestart
+            ? 'Track restarting from beginning'
+            : `Start: ${Math.floor(startAt / 60)}:${Math.floor(startAt % 60).toString().padStart(2, '0')}`,
         });
       }
     },
@@ -1849,8 +2070,10 @@ export const useDJStore = create<DJState>()(
           return getCanonicalTargetBpm(settings) ?? nextBaseBpm;
         }
         if (settings.tempoMode === 'preset') {
-          // Preset behavior: use discrete target BPM; "original" means no tempo matching.
-          return getCanonicalTargetBpm(settings) ?? nextBaseBpm;
+          // Preset behavior: compute target based on preset ratio applied to incoming track's BPM
+          const preset = settings.tempoPreset ?? 'original';
+          const result = computePresetTempo(nextBaseBpm, preset);
+          return result.targetBpm;
         }
         return nextBaseBpm;
       };
@@ -1916,12 +2139,11 @@ export const useDJStore = create<DJState>()(
       const requiredShiftPct = Math.max(requiredIncomingShiftPct, requiredOutgoingShiftPct);
       const missingBpmDisables = tempoMatchSafeModeEnabled && (!hasIncomingBpm || !hasOutgoingBpm);
       const overCap = tempoMatchSafeModeEnabled && isOverTempoCap(requiredShiftPct, safeModeShiftCeilingPct);
-      const presetOriginalDisables = tempoControlEnabled && settings.tempoMode === 'preset' && getCanonicalTargetBpm(settings) === null;
-      const shouldDisableTempoMatchThisTransition = presetOriginalDisables || missingBpmDisables || overCap;
+      // Preset mode always applies its ratio (even "original" at 1.0×), so don't disable it
+      const shouldDisableTempoMatchThisTransition = missingBpmDisables || overCap;
 
       const disabledReason: 'over_cap' | 'missing_bpm' | 'user_disabled' | null = (() => {
         if (!tempoControlEnabled) return 'user_disabled';
-        if (presetOriginalDisables) return 'user_disabled';
         if (missingBpmDisables) return 'missing_bpm';
         if (overCap) return 'over_cap';
         return null;
@@ -2098,8 +2320,9 @@ export const useDJStore = create<DJState>()(
         // Option B: return the *new* track to original tempo by the end of the crossfade.
         // (Only applies to Party Mode + Auto Match; Locked BPM remains authoritative.)
         try {
-          const wantsRevert = (get().settings.partyTempoAfterTransition ?? 'hold') === 'revert';
-          const shouldRevert = wantsRevert && get().isPartyMode && get().settings.tempoMode === 'auto';
+          const currentState = get();
+          const wantsRevert = (currentState.settings.partyTempoAfterTransition ?? 'hold') === 'revert';
+          const shouldRevert = wantsRevert && currentState.isPartyMode && currentState.settings.tempoMode === 'auto';
           if (shouldRevert && usePlanStore.getState().hasFeature('tempoControl') && !shouldDisableTempoMatchThisTransition) {
             const rampEndAt = fadeAt + effectiveCrossfadeSeconds;
             const minRampSec = 4;
@@ -2109,13 +2332,15 @@ export const useDJStore = create<DJState>()(
             const minStart = Math.max(ctxNow + 0.05, earliestStart);
             const maxStart = Math.max(minStart, latestStart);
             const idealStart = clamp(rampEndAt - rampSecWanted, minStart, maxStart);
+            // Get tempo outside of state to avoid blocking
+            const nextDeckTempo = audioEngine.getTempo(nextDeck) || 1;
             const rampStartAt = chooseBeatAlignedTimeInRange(
               nextDeck,
               idealStart,
               barsToBeats(1),
               minStart,
               maxStart,
-              audioEngine.getTempo(nextDeck) || 1
+              nextDeckTempo
             );
             audioEngine.rampTempo(nextDeck, 1, rampStartAt, Math.round((rampEndAt - rampStartAt) * 1000));
           }
@@ -2154,14 +2379,15 @@ export const useDJStore = create<DJState>()(
           // Post-transition safety: force the new active deck tempo to the intended final value.
           try {
             const tempoControlEnabled = usePlanStore.getState().hasFeature('tempoControl');
-            const wantsRevert = (get().settings.partyTempoAfterTransition ?? 'hold') === 'revert';
-            const shouldRevert = wantsRevert && get().isPartyMode && get().settings.tempoMode === 'auto';
+            const postState = get();
+            const wantsRevert = (postState.settings.partyTempoAfterTransition ?? 'hold') === 'revert';
+            const shouldRevert = wantsRevert && postState.isPartyMode && postState.settings.tempoMode === 'auto';
 
             const finalRatio = (!tempoControlEnabled || shouldDisableTempoMatchThisTransition)
               ? 1
               : (shouldRevert ? 1 : (audioEngine.getTempo(nextDeck) || 1));
 
-            get().setTempo(nextDeck, finalRatio);
+            postState.setTempo(nextDeck, finalRatio);
           } catch {
             // ignore
           }
@@ -2686,11 +2912,8 @@ export const useDJStore = create<DJState>()(
           audioEngine.enableMixCheck(false);
           audioEngine.resetMixTrigger();
         } else {
-          const triggerSecondsTrack = computeAutoMixTriggerSecondsTrack(get());
-          audioEngine.setMixTriggerConfig('remaining', triggerSecondsTrack);
-          audioEngine.enableMixCheck(true);
           // Re-evaluate immediately using the new threshold.
-          audioEngine.resetMixTrigger();
+          armAutoMixTriggerForState(get());
         }
       }
 
