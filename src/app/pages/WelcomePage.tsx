@@ -155,6 +155,8 @@ export default function WelcomePage() {
                   <Link className="footer-link" to="/app/settings/contact">Contact</Link>
                   <span className="footer-sep" aria-hidden="true">•</span>
                   <Link className="footer-link" to="/app/settings/terms">Terms</Link>
+                  <span className="footer-sep" aria-hidden="true">•</span>
+                  <Link className="footer-link" to="/app/settings/privacy">Privacy</Link>
                 </footer>
               </section>
             </div>
