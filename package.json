@@ -13,9 +13,11 @@
   "preview": "vite preview",
   "typecheck": "tsc -p tsconfig.app.json && tsc -p tsconfig.node.json && tsc -p tsconfig.vitest.json",
   "test": "vitest run",
-  "test:watch": "vitest"
-
-
+  "test:watch": "vitest",
+  "test:bun": "bun test",
+  "test:all": "vitest run --reporter=verbose",
+  "test:coverage": "vitest run --coverage",
+  "test:ui": "vitest --ui"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
