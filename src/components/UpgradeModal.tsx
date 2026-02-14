@@ -67,7 +67,7 @@ export function UpgradeModal() {
       return;
     }
     try {
-      await startCheckout(plan);
+      await startCheckout(plan, undefined, 'monthly');
     } catch (e) {
       toast({
         title: 'Checkout unavailable',

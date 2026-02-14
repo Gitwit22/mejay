@@ -79,7 +79,7 @@ const Index = () => {
       setSearchParams(newParams, { replace: true });
       
       // Start checkout
-      void startCheckout(upgradeParam, 'trial').catch((e) => {
+      void startCheckout(upgradeParam, 'trial', 'monthly').catch((e) => {
         toast({
           title: 'Checkout failed',
           description: e instanceof Error ? e.message : 'Could not start checkout.',

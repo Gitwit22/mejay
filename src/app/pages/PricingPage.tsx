@@ -15,6 +15,7 @@ export default function PricingPage({ mode = 'app' }: PricingPageProps) {
   const location = useLocation()
   const navigate = useNavigate()
   const [isCheckingOut, setIsCheckingOut] = useState<'pro' | 'full_program' | null>(null)
+  const [cadence, setCadence] = useState<'monthly' | 'yearly'>('monthly')
   const fullProgramCheckoutEnabled = String(import.meta.env.VITE_ENABLE_FULL_PROGRAM_CHECKOUT || '').toLowerCase() === 'true'
   const billingEnabled = usePlanStore((s) => s.billingEnabled)
   const setDevPlan = usePlanStore((s) => s.setDevPlan)
@@ -61,7 +62,7 @@ export default function PricingPage({ mode = 'app' }: PricingPageProps) {
     }
     try {
       setIsCheckingOut(plan)
-      await startCheckout(plan, intent)
+      await startCheckout(plan, intent, cadence)
     } catch (e) {
       toast({
         title: 'Checkout unavailable',
@@ -110,6 +111,60 @@ export default function PricingPage({ mode = 'app' }: PricingPageProps) {
           <p className="hero-subtitle">Start free, upgrade when you're ready. Pro is monthly. Full Program is coming soon.</p>
         </section>
 
+        <div style={{display: 'flex', justifyContent: 'center', marginBottom: '2rem'}}>
+          <div style={{
+            display: 'inline-flex',
+            backgroundColor: 'rgba(255, 255, 255, 0.05)',
+            borderRadius: '12px',
+            padding: '4px',
+            gap: '4px'
+          }}>
+            <button
+              type="button"
+              onClick={() => setCadence('monthly')}
+              style={{
+                padding: '0.5rem 1.5rem',
+                borderRadius: '8px',
+                border: 'none',
+                backgroundColor: cadence === 'monthly' ? 'rgba(255, 255, 255, 0.15)' : 'transparent',
+                color: cadence === 'monthly' ? '#fff' : 'rgba(255, 255, 255, 0.6)',
+                fontWeight: cadence === 'monthly' ? '600' : '400',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                fontSize: '0.95rem'
+              }}
+            >
+              Monthly
+            </button>
+            <button
+              type="button"
+              onClick={() => setCadence('yearly')}
+              style={{
+                padding: '0.5rem 1.5rem',
+                borderRadius: '8px',
+                border: 'none',
+                backgroundColor: cadence === 'yearly' ? 'rgba(255, 255, 255, 0.15)' : 'transparent',
+                color: cadence === 'yearly' ? '#fff' : 'rgba(255, 255, 255, 0.6)',
+                fontWeight: cadence === 'yearly' ? '600' : '400',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                fontSize: '0.95rem'
+              }}
+            >
+              Yearly
+              <span style={{
+                marginLeft: '0.5rem',
+                padding: '0.125rem 0.375rem',
+                backgroundColor: 'rgba(34, 197, 94, 0.2)',
+                color: '#22c55e',
+                borderRadius: '4px',
+                fontSize: '0.75rem',
+                fontWeight: '600'
+              }}>Save 17%</span>
+            </button>
+          </div>
+        </div>
+
         <div className="pricing-grid">
           <div className={`pricing-card${currentPlanId === 'free' ? ' current' : ''}`}>
             {currentPlanId === 'free' ? <span className="plan-badge current">Current plan</span> : null}
@@ -145,8 +200,8 @@ export default function PricingPage({ mode = 'app' }: PricingPageProps) {
             </div>
             <div className="plan-description">Advanced features while you subscribe</div>
             <div className="plan-price">
-              <span className="price-amount">$5</span>
-              <span className="price-period">/month</span>
+              <span className="price-amount">${cadence === 'yearly' ? '50' : '5'}</span>
+              <span className="price-period">/{cadence === 'yearly' ? 'year' : 'month'}</span>
             </div>
             <div className="plan-description" style={{marginTop: '-0.5rem'}}>
               Lock in this price before public release.
@@ -176,7 +231,7 @@ export default function PricingPage({ mode = 'app' }: PricingPageProps) {
                   {isCheckingOut === 'pro' ? 'Starting checkout…' : 'Start 3-Day Pro Trial'}
                 </button>
                 <p className="plan-description" style={{fontSize: '0.875rem', marginTop: '0.5rem'}}>
-                  Then $5/month. Cancel anytime.
+                  Then ${cadence === 'yearly' ? '$50/year' : '$5/month'}. Cancel anytime.
                 </p>
               </>
             )}
