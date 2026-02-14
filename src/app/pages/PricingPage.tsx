@@ -30,7 +30,7 @@ export default function PricingPage() {
     window.scrollTo(0, 0)
   }, [])
 
-  const handleCheckout = async (plan: 'pro' | 'full_program') => {
+  const handleCheckout = async (plan: 'pro' | 'full_program', intent?: 'trial' | 'upgrade') => {
     if (plan === 'full_program' && !fullProgramCheckoutEnabled) {
       toast({title: 'Coming soon', description: 'Full Program is not available yet.'})
       return
@@ -51,7 +51,7 @@ export default function PricingPage() {
     }
     try {
       setIsCheckingOut(plan)
-      await startCheckout(plan)
+      await startCheckout(plan, intent)
     } catch (e) {
       toast({
         title: 'Checkout unavailable',
@@ -147,18 +147,29 @@ export default function PricingPage() {
               <li>Smooth transitions & advanced timing</li>
               <li>Tempo control + BPM tools</li>
             </ul>
-            <button
-              type="button"
-              className="plan-cta"
-              onClick={() => handleCheckout('pro')}
-              disabled={currentPlanId === 'pro' || hasFullProgram || isCheckingOut !== null}
-            >
-              {currentPlanId === 'pro' || hasFullProgram
-                ? "You're already upgraded"
-                : isCheckingOut === 'pro'
-                  ? 'Starting checkout…'
-                  : 'Upgrade to Pro'}
-            </button>
+            {currentPlanId === 'pro' || hasFullProgram ? (
+              <button
+                type="button"
+                className="plan-cta"
+                disabled
+              >
+                You're already upgraded
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="plan-cta"
+                  onClick={() => handleCheckout('pro', 'trial')}
+                  disabled={isCheckingOut !== null}
+                >
+                  {isCheckingOut === 'pro' ? 'Starting checkout…' : 'Start 3-Day Pro Trial'}
+                </button>
+                <p className="plan-description" style={{fontSize: '0.875rem', marginTop: '0.5rem'}}>
+                  Then $5/month. Cancel anytime.
+                </p>
+              </>
+            )}
           </div>
 
           <div className={`pricing-card${currentPlanId === 'full_program' ? ' current' : ''}${isFullProgramComingSoon ? ' coming-soon' : ''}`}>

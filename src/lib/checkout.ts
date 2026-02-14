@@ -51,7 +51,7 @@ export class CheckoutStatusError extends Error {
   }
 }
 
-export async function startCheckout(plan: 'pro' | 'full_program') {
+export async function startCheckout(plan: 'pro' | 'full_program', intent?: 'trial' | 'upgrade') {
   const fullProgramCheckoutEnabled = String(import.meta.env.VITE_ENABLE_FULL_PROGRAM_CHECKOUT || '').toLowerCase() === 'true'
   if (plan === 'full_program' && !fullProgramCheckoutEnabled) {
     throw new Error('Full Program is coming soon.')
@@ -73,7 +73,7 @@ export async function startCheckout(plan: 'pro' | 'full_program') {
     method: 'POST',
     credentials: 'include',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ plan, checkoutToken }),
+    body: JSON.stringify({ plan, checkoutToken, intent: intent ?? 'upgrade' }),
   })
 
   if (res.status === 401) {

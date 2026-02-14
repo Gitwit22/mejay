@@ -6,6 +6,8 @@ type CheckoutRequestBody = {
   plan?: Plan;
   /** Opaque client-generated token to help bind session verification to the initiating browser. */
   checkoutToken?: string;
+  /** Intent to track which button/flow initiated checkout (e.g., 'trial' or 'upgrade'). */
+  intent?: 'trial' | 'upgrade';
 };
 
 type Env = {
@@ -153,6 +155,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
   }
 
   const checkoutToken = typeof body?.checkoutToken === 'string' ? body.checkoutToken.trim() : '';
+  const intent = typeof body?.intent === 'string' ? body.intent : 'unknown';
 
   const secretKey = env.STRIPE_SECRET_KEY?.trim();
   const proPrice = env.STRIPE_PRICE_PRO?.trim();
@@ -223,6 +226,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
     params.set("metadata[plan]", plan);
     params.set('client_reference_id', userId);
     params.set('metadata[userId]', userId);
+    params.set('metadata[source_intent]', intent);
 
     // Ensure `session.customer` exists so activation can persist reliably.
     // (In payment mode, Stripe may otherwise leave `customer` null.)
@@ -235,6 +239,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
     if (mode === 'subscription') {
       params.set('subscription_data[metadata][userId]', userId)
       params.set('subscription_data[metadata][plan]', plan)
+      params.set('subscription_data[metadata][source_intent]', intent)
     }
 
     if (checkoutToken) {
