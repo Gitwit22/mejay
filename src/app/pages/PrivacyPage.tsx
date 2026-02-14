@@ -190,6 +190,11 @@ export default function PrivacyPage({ mode = 'app' }: PrivacyPageProps) {
             </div>
           </div>
         </section>
+
+        <div style={{marginTop: '2rem', textAlign: 'center', fontSize: '0.75rem', color: 'rgba(255,255,255,0.5)'}}>
+          <div>© 2025 Nxt Lvl Technology Solutions</div>
+          <div>MEJay™ is a trademark of Nxt Lvl Technology Solutions. All rights reserved.</div>
+        </div>
       </main>
     </div>
   )

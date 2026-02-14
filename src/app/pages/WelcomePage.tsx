@@ -195,6 +195,10 @@ export default function WelcomePage() {
                   <span className="footer-sep" aria-hidden="true">•</span>
                   <Link className="footer-link" to="/privacy">Privacy</Link>
                 </footer>
+                <div className="copyright-notice" style={{ marginTop: '2rem', textAlign: 'center', fontSize: '0.75rem', color: 'rgba(255, 255, 255, 0.5)', lineHeight: '1.5' }}>
+                  <div>© 2025 Nxt Lvl Technology Solutions</div>
+                  <div>MEJay™ is a trademark of Nxt Lvl Technology Solutions.</div>
+                </div>
               </section>
             </div>
           </div>

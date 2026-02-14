@@ -175,6 +175,11 @@ export default function ContactPage({ mode = 'app' }: ContactPageProps) {
             Building tools that keep the music going.
           </p>
         </div>
+
+        <div style={{marginTop: '2rem', textAlign: 'center', fontSize: '0.75rem', color: 'rgba(255,255,255,0.5)'}}>
+          <div>© 2025 Nxt Lvl Technology Solutions</div>
+          <div>MEJay™ is a trademark of Nxt Lvl Technology Solutions. All rights reserved.</div>
+        </div>
       </main>
     </div>
   )

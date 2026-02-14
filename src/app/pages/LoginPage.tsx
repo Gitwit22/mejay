@@ -510,6 +510,11 @@ export default function LoginPage() {
 
           <Link to="/" className="hover:text-foreground">Back to home</Link>
         </div>
+
+        <div className="copyright-notice" style={{ marginTop: '2rem', textAlign: 'center', fontSize: '0.75rem', color: 'rgba(255, 255, 255, 0.5)', lineHeight: '1.5' }}>
+          <div>© 2025 Nxt Lvl Technology Solutions</div>
+          <div>MEJay™ is a trademark of Nxt Lvl Technology Solutions.</div>
+        </div>
       </div>
     </div>
   )
