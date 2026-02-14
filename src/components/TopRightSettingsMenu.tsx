@@ -54,7 +54,7 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   const keepImportsOnDevice = useDJStore((s) => s.settings.keepImportsOnDevice)
   const updateUserSettings = useDJStore((s) => s.updateUserSettings)
 
-  const {plan, authStatus} = usePlanStore()
+  const {plan, authStatus, authBypassEnabled} = usePlanStore()
 
   const {
     token,
@@ -124,8 +124,8 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
     // Update auth status to anonymous (this clears the session state)
     usePlanStore.setState({authStatus: 'anonymous', user: null})
 
-    // Navigate to home page
-    navigate('/', {replace: true})
+    // Navigate to home page (with dev param to bypass redirect)
+    navigate('/?dev=1', {replace: true})
   }
 
   const closeAndNavigate = (to: string, options?: NavigateOptions) => {
@@ -499,6 +499,16 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
 
             <div className="pt-1">
               <Separator className="my-2" />
+              {authBypassEnabled && (
+                <Button 
+                  type="button" 
+                  variant="outline" 
+                  className="w-full justify-start mb-2"
+                  onClick={() => closeAndNavigate('/?dev=1')}
+                >
+                  🏠 View Landing Page (Dev)
+                </Button>
+              )}
               <Button type="button" variant="outline" className={logoutButtonClassName} onClick={handleLogout}>
                 <LogOut className="h-4 w-4" />
                 Logout

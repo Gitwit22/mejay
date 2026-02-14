@@ -136,6 +136,11 @@ const WelcomeRoute = () => {
   const authStatus = usePlanStore((s) => s.authStatus)
   const authBypassEnabled = usePlanStore((s) => s.authBypassEnabled)
   const didKickoffRefresh = useRef(false)
+  const location = useLocation()
+
+  // Allow dev bypass with ?dev=1 query param
+  const searchParams = new URLSearchParams(location.search)
+  const devBypass = searchParams.get('dev') === '1'
 
   useEffect(() => {
     if (authBypassEnabled) return
@@ -145,7 +150,7 @@ const WelcomeRoute = () => {
     void usePlanStore.getState().refreshFromServer({reason: 'welcomeGate'}).catch(() => undefined)
   }, [authBypassEnabled, authStatus])
 
-  if (authBypassEnabled || authStatus === 'authenticated') {
+  if (!devBypass && (authBypassEnabled || authStatus === 'authenticated')) {
     return <Navigate to={DEFAULT_AUTH_REDIRECT_PATH} replace />
   }
 

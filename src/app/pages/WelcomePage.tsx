@@ -197,8 +197,8 @@ export default function WelcomePage() {
                 </footer>
               </section>
 
-              <section className="copyright-section" style={{ marginTop: '3rem', paddingTop: '2rem', borderTop: '1px solid rgba(255, 255, 255, 0.1)' }}>
-                <div style={{ textAlign: 'center', fontSize: '0.75rem', color: 'rgba(255, 255, 255, 0.5)', lineHeight: '1.5' }}>
+              <section className="copyright-section" style={{ marginTop: '.05rem', paddingTop: '.5rem', borderTop: '1px solid rgba(255, 255, 255, 0.1)' }}>
+                <div style={{ textAlign: 'center', fontSize: '0.7rem', color: 'rgba(255, 255, 255, 0.5)', lineHeight: '1.4' }}>
                   <div>© 2025 Nxt Lvl Technology Solutions</div>
                   <div>MEJay™ is a trademark of Nxt Lvl Technology Solutions. All rights reserved.</div>
                 </div>
