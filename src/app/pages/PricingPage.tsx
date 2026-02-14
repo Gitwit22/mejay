@@ -230,8 +230,8 @@ export default function PricingPage({ mode = 'app' }: PricingPageProps) {
                 >
                   {isCheckingOut === 'pro' ? 'Starting checkout…' : 'Start 3-Day Pro Trial'}
                 </button>
-                <p className="plan-description" style={{fontSize: '0.875rem', marginTop: '0.5rem'}}>
-                  Then ${cadence === 'yearly' ? '$50/year' : '$5/month'}. Cancel anytime.
+                <p className="plan-description" style={{fontSize: '0.875rem', marginTop: '0.5rem', textAlign: 'center'}}>
+                  Then ${cadence === 'yearly' ? '50/year' : '5/month'}. Cancel anytime.
                 </p>
               </>
             )}
