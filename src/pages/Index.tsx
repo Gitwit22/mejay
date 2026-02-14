@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { motion } from 'framer-motion';
 import { TabBar } from '@/components/TabBar';
 import { LibraryView } from '@/components/LibraryView';
 import { PartyModeView } from '@/components/PartyModeView';
@@ -10,18 +11,23 @@ import { UpgradeModal } from '@/components/UpgradeModal';
 import { TopRightSettingsMenu } from '@/components/TopRightSettingsMenu';
 import { cn } from '@/lib/utils';
 import { MEJAY_LOGO_URL } from '@/lib/branding';
-import { ENTITLEMENTS_CHANGED_EVENT } from '@/stores/planStore';
+import { ENTITLEMENTS_CHANGED_EVENT, usePlanStore } from '@/stores/planStore';
 import { StarterPacksOnboardingModal } from '@/components/StarterPacksOnboardingModal';
-import { consumeStarterPromptPending, readStarterPacksPrefs } from '@/lib/starterPacksPrefs';
+import { consumeStarterPromptPending, readStarterPacksPrefs, setStarterPromptPending } from '@/lib/starterPacksPrefs';
+import { startCheckout } from '@/lib/checkout';
+import { toast } from '@/hooks/use-toast';
 
 type TabId = 'library' | 'party' | 'playlists';
 
 const LAST_TAB_KEY = 'mejay:lastTab';
 
 const Index = () => {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const tabFromUrl = searchParams.get('tab') as TabId | null;
+  const upgradeParam = searchParams.get('upgrade') as 'pro' | 'full_program' | null;
+  const authStatus = usePlanStore((s) => s.authStatus);
   const [starterPacksOpen, setStarterPacksOpen] = useState(false);
+  const [isFading, setIsFading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>(() => {
     if (tabFromUrl && ['library', 'party', 'playlists'].includes(tabFromUrl)) return tabFromUrl;
     try {
@@ -32,6 +38,56 @@ const Index = () => {
     }
     return 'library';
   });
+
+  // Handle smooth tab transitions
+  const switchTab = (tab: TabId) => {
+    if (tab === activeTab) return; // Don't fade if already on this tab
+    
+    setIsFading(true);
+    
+    setTimeout(() => {
+      setActiveTab(tab);
+      setIsFading(false);
+    }, 160);
+  };
+
+  // Set starter packs prompt flag on first entry
+  useEffect(() => {
+    try {
+      const choiceMade = localStorage.getItem('mejay:starterPacksChoiceMade');
+      const pending = localStorage.getItem('mejay:starterPromptPending');
+      
+      // If they haven't made a choice and we're not already pending, set the flag
+      if (!choiceMade && !pending) {
+        setStarterPromptPending(true);
+      }
+    } catch {
+      // ignore localStorage errors
+    }
+  }, []);
+
+  // Handle auto-checkout after login
+  useEffect(() => {
+    if (!upgradeParam || authStatus === 'unknown') return;
+    if (upgradeParam !== 'pro' && upgradeParam !== 'full_program') return;
+    
+    // User is authenticated, start checkout
+    if (authStatus === 'authenticated') {
+      // Remove the upgrade param from URL
+      const newParams = new URLSearchParams(searchParams);
+      newParams.delete('upgrade');
+      setSearchParams(newParams, { replace: true });
+      
+      // Start checkout
+      void startCheckout(upgradeParam, 'trial').catch((e) => {
+        toast({
+          title: 'Checkout failed',
+          description: e instanceof Error ? e.message : 'Could not start checkout.',
+          variant: 'destructive',
+        });
+      });
+    }
+  }, [upgradeParam, authStatus, searchParams, setSearchParams]);
 
   // Initialize app data on mount only
   useEffect(() => {
@@ -87,7 +143,13 @@ const Index = () => {
   }, [activeTab]);
 
   return (
-    <div className="mejay-screen relative mejay-viewport flex flex-col">
+    <motion.div
+      initial={{ opacity: 0, scale: 1.02 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.3, ease: "easeOut" }}
+      className="mejay-screen relative mejay-viewport flex flex-col"
+    >
       {/* Dev Plan Switcher */}
       <DevPlanSwitcher />
 
@@ -131,7 +193,7 @@ const Index = () => {
               height="128"
               className="h-32 w-auto object-contain drop-shadow-[0_18px_60px_rgba(0,0,0,0.55)]"
               style={{ aspectRatio: '200/128' }}
-              fetchpriority="high"
+              fetchPriority="high"
               decoding="async"
             />
           </div>
@@ -140,7 +202,8 @@ const Index = () => {
         {/* Tab Content */}
         <div
           className={cn(
-            'flex-1 min-h-0',
+            'flex-1 min-h-0 tab-content',
+            isFading && 'fade-out',
             // On phones, allow full-page scroll; on md+ keep panel-based scrolling.
             activeTab === 'party' ? 'overflow-visible md:overflow-hidden' : 'overflow-visible md:overflow-hidden'
           )}
@@ -152,8 +215,8 @@ const Index = () => {
       </div>
 
       {/* Tab Bar */}
-      <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
-    </div>
+      <TabBar activeTab={activeTab} onTabChange={switchTab} />
+    </motion.div>
   );
 };
 

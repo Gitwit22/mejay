@@ -57,7 +57,7 @@ export async function startCheckout(plan: 'pro' | 'full_program', intent?: 'tria
     throw new Error('Full Program is coming soon.')
   }
 
-  const {billingEnabled, setDevPlan, authBypassEnabled, refreshFromServer} = usePlanStore.getState()
+  const {billingEnabled, setDevPlan, authBypassEnabled, authStatus, isGuestMode, refreshFromServer} = usePlanStore.getState()
   if (!billingEnabled) {
     setDevPlan(plan)
     return
@@ -65,6 +65,13 @@ export async function startCheckout(plan: 'pro' | 'full_program', intent?: 'tria
 
   if (authBypassEnabled) {
     throw new Error('Checkout is disabled while Login Bypass is enabled. Disable bypass and sign in to upgrade.')
+  }
+
+  // Guest mode: redirect to login first
+  if (isGuestMode || authStatus === 'anonymous') {
+    const returnPath = `/app?tab=party&upgrade=${plan}`
+    window.location.href = `/login?returnTo=${encodeURIComponent(returnPath)}`
+    return
   }
 
   const checkoutToken = getOrCreateCheckoutToken()

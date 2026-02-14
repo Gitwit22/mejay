@@ -7,7 +7,11 @@ import {MEJAY_LOGO_URL} from '@/lib/branding'
 import {usePlanStore} from '@/stores/planStore'
 import {navigateBackToPartyMode} from '@/app/navigation/settingsReturnTo'
 
-export default function BillingPage() {
+type BillingPageProps = {
+  mode?: 'public' | 'app'
+}
+
+export default function BillingPage({ mode = 'app' }: BillingPageProps) {
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -22,7 +26,11 @@ export default function BillingPage() {
   const isFullProgramOwner = authStatus === 'authenticated' && plan === 'full_program'
 
   const handleBack = () => {
-    navigateBackToPartyMode(navigate, location.state)
+    if (mode === 'public') {
+      navigate('/')
+    } else {
+      navigateBackToPartyMode(navigate, location.state)
+    }
   }
 
   const handleManageBilling = async () => {

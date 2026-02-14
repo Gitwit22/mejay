@@ -4,13 +4,21 @@ import {useGradientScrollParallax} from '../hooks/useGradientScrollParallax'
 import { MEJAY_LOGO_URL } from '@/lib/branding'
 import {navigateBackToPartyMode} from '@/app/navigation/settingsReturnTo'
 
-export default function AboutPage() {
+type AboutPageProps = {
+  mode?: 'public' | 'app'
+}
+
+export default function AboutPage({ mode = 'app' }: AboutPageProps) {
   const navigate = useNavigate()
   const location = useLocation()
   useGradientScrollParallax()
 
   const handleBack = () => {
-    navigateBackToPartyMode(navigate, location.state)
+    if (mode === 'public') {
+      navigate('/')
+    } else {
+      navigateBackToPartyMode(navigate, location.state)
+    }
   }
 
   return (

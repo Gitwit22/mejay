@@ -3,7 +3,11 @@ import {Link, useLocation, useNavigate} from 'react-router-dom'
 import { MEJAY_LOGO_URL } from '@/lib/branding'
 import {navigateBackToPartyMode} from '@/app/navigation/settingsReturnTo'
 
-export default function TermsPage() {
+type TermsPageProps = {
+  mode?: 'public' | 'app'
+}
+
+export default function TermsPage({ mode = 'app' }: TermsPageProps) {
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -12,8 +16,15 @@ export default function TermsPage() {
   }, [])
 
   const handleBack = () => {
-    navigateBackToPartyMode(navigate, location.state)
+    if (mode === 'public') {
+      navigate('/')
+    } else {
+      navigateBackToPartyMode(navigate, location.state)
+    }
   }
+
+  const contactPath = mode === 'public' ? '/contact' : '/app/settings/contact'
+  const privacyPath = mode === 'public' ? '/privacy' : '/app/settings/privacy'
 
   return (
     <div className="mejay-terms">
@@ -116,7 +127,7 @@ export default function TermsPage() {
             </ul>
             <div className="highlight-box">
               <p>
-                <strong>Device Replacements:</strong> Need to move MEJay to a new device? <Link to="/app/settings/contact">Contact us</Link>{' '}
+                <strong>Device Replacements:</strong> Need to move MEJay to a new device? <Link to={contactPath}>Contact us</Link>{' '}
                 and we'll help you transfer your activation. We understand devices break or get upgraded.
               </p>
             </div>
@@ -184,7 +195,7 @@ export default function TermsPage() {
               your browser settings.
             </p>
             <p>
-              Privacy policy details are available in <Link to="/app/settings/privacy">our Privacy Policy</Link>.
+              Privacy policy details are available in <Link to={privacyPath}>our Privacy Policy</Link>.
             </p>
           </div>
         </section>
@@ -219,7 +230,7 @@ export default function TermsPage() {
             </p>
             <p>
               <strong>MEJay Lifetime:</strong> We offer a <strong>14-day money-back guarantee</strong>. If you're not
-              satisfied within 14 days of purchase, <Link to="/app/settings/contact">contact us</Link> for a full refund.
+              satisfied within 14 days of purchase, <Link to={contactPath}>contact us</Link> for a full refund.
             </p>
             <p>
               After 14 days, all sales are final. However, if you experience technical issues that we can't resolve,
@@ -274,7 +285,7 @@ export default function TermsPage() {
                 <strong>Website:</strong> <a href="https://nxtlvlts.com">nxtlvlts.com</a>
               </li>
               <li>
-                <strong>Support Page:</strong> <Link to="/app/settings/contact">MEJay Contact</Link>
+                <strong>Support Page:</strong> <Link to={contactPath}>MEJay Contact</Link>
               </li>
             </ul>
             <div className="info-box">

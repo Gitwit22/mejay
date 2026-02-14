@@ -3,7 +3,8 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
-import { BrowserRouter, Routes, Route, Outlet, useNavigate, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Outlet, useNavigate, Navigate, useLocation } from "react-router-dom";
+import { AnimatePresence } from "framer-motion";
 import { audioEngine } from "@/lib/audioEngine";
 import { useDJStore } from "@/stores/djStore";
 import { usePlanStore } from "@/stores/planStore";
@@ -86,6 +87,17 @@ const AppShellLayout = () => {
   const navigate = useNavigate();
   const authStatus = usePlanStore((s) => s.authStatus)
   const authBypassEnabled = usePlanStore((s) => s.authBypassEnabled)
+  const isGuestMode = usePlanStore((s) => s.isGuestMode)
+
+  useEffect(() => {
+    // Initialize guest mode if no user session exists
+    if (!authBypassEnabled && authStatus === 'unknown') {
+      void usePlanStore.getState().refreshFromServer({reason: 'appEntry'}).catch(() => {
+        // If server is unreachable or returns anonymous, enable guest mode
+        usePlanStore.getState().initializeGuestMode()
+      })
+    }
+  }, [authBypassEnabled, authStatus])
 
   useEffect(() => {
     // User request: refresh should land on the Welcome page.
@@ -105,9 +117,9 @@ const AppShellLayout = () => {
         }
       }
 
-      // Only redirect to Welcome if the server says we are actually anonymous.
-      // If authenticated, keep the user in the app on refresh.
-      if (!isBypassEnabled && usePlanStore.getState().authStatus === 'anonymous') {
+      // Only redirect to Welcome if the server says we are actually anonymous AND not in guest mode.
+      // Guest mode users can stay in the app.
+      if (!isBypassEnabled && !usePlanStore.getState().isGuestMode && usePlanStore.getState().authStatus === 'anonymous') {
         didRedirectFromAppReloadThisDocument = true
         navigate('/', {replace: true})
       }
@@ -116,21 +128,7 @@ const AppShellLayout = () => {
     void run()
   }, [navigate]);
 
-  useEffect(() => {
-    // If server auth is anonymous, show login when entering the app shell.
-    // (Free/demo features can be revisited later, but checkout must be tied to a user.)
-    if (authBypassEnabled) return
-    if (authStatus !== 'anonymous') return
-    try {
-      const path = `${window.location.pathname}${window.location.search}${window.location.hash}`
-      if (path.startsWith('/app')) {
-        navigate(`/login?returnTo=${encodeURIComponent(path)}`, {replace: true})
-      }
-    } catch {
-      navigate('/login?returnTo=/app', {replace: true})
-    }
-  }, [authBypassEnabled, authStatus, navigate])
-
+  // Removed the auth redirect - guests can now use /app
   return <Outlet />;
 };
 
@@ -510,6 +508,44 @@ const AppBillingBootstrap = () => {
   return null;
 };
 
+const AnimatedRoutes = () => {
+  const location = useLocation();
+  
+  return (
+    <AnimatePresence mode="wait">
+      <Routes location={location} key={location.pathname}>
+        <Route path="/" element={<WelcomeRoute />} />
+        <Route path="/login" element={<LoginRoute />} />
+        {/* Public routes - no auth required */}
+        <Route path="/about" element={<AboutPage mode="public" />} />
+        <Route path="/pricing" element={<PricingPage mode="public" />} />
+        <Route path="/terms" element={<TermsPage mode="public" />} />
+        <Route path="/privacy" element={<PrivacyPage mode="public" />} />
+        <Route path="/contact" element={<ContactPage mode="public" />} />
+        {/* App routes - auth required */}
+        <Route path="/app" element={<AppShellLayout />}>
+          <Route index element={<Index />} />
+          <Route path="pricing" element={<Navigate to="/app/settings/pricing" replace />} />
+          <Route path="billing" element={<Navigate to="/app/settings/billing" replace />} />
+          <Route path="settings">
+            <Route path="about" element={<AboutPage mode="app" />} />
+            <Route path="pricing" element={<PricingPage mode="app" />} />
+            <Route path="billing" element={<BillingPage mode="app" />} />
+            <Route path="terms" element={<TermsPage mode="app" />} />
+            <Route path="privacy" element={<PrivacyPage mode="app" />} />
+            <Route path="contact" element={<ContactPage mode="app" />} />
+          </Route>
+          {/* Dev-only admin page */}
+          {import.meta.env.DEV && <Route path="dev-admin" element={<DevAdminPage />} />}
+          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+          <Route path="*" element={<NotFound />} />
+        </Route>
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    </AnimatePresence>
+  );
+};
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
@@ -520,34 +556,7 @@ const App = () => (
       <AppLicenseBootstrap />
       <AppBillingBootstrap />
       <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<WelcomeRoute />} />
-          <Route path="/login" element={<LoginRoute />} />
-          <Route path="/about" element={<Navigate to="/app/settings/about" replace />} />
-          <Route path="/pricing" element={<Navigate to="/app/settings/pricing" replace />} />
-          <Route path="/billing" element={<Navigate to="/app/settings/billing" replace />} />
-          <Route path="/terms" element={<Navigate to="/app/settings/terms" replace />} />
-          <Route path="/privacy" element={<Navigate to="/app/settings/privacy" replace />} />
-          <Route path="/contact" element={<Navigate to="/app/settings/contact" replace />} />
-          <Route path="/app" element={<AppShellLayout />}>
-            <Route index element={<Index />} />
-            <Route path="pricing" element={<Navigate to="/app/settings/pricing" replace />} />
-            <Route path="billing" element={<Navigate to="/app/settings/billing" replace />} />
-            <Route path="settings">
-              <Route path="about" element={<AboutPage />} />
-              <Route path="pricing" element={<PricingPage />} />
-              <Route path="billing" element={<BillingPage />} />
-              <Route path="terms" element={<TermsPage />} />
-              <Route path="privacy" element={<PrivacyPage />} />
-              <Route path="contact" element={<ContactPage />} />
-            </Route>
-            {/* Dev-only admin page */}
-            {import.meta.env.DEV && <Route path="dev-admin" element={<DevAdminPage />} />}
-            {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-            <Route path="*" element={<NotFound />} />
-          </Route>
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+        <AnimatedRoutes />
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>

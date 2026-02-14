@@ -7,7 +7,11 @@ import {usePlanStore} from '@/stores/planStore'
 import { MEJAY_LOGO_URL } from '@/lib/branding'
 import {navigateBackToPartyMode} from '@/app/navigation/settingsReturnTo'
 
-export default function PricingPage() {
+type PricingPageProps = {
+  mode?: 'public' | 'app'
+}
+
+export default function PricingPage({ mode = 'app' }: PricingPageProps) {
   const location = useLocation()
   const navigate = useNavigate()
   const [isCheckingOut, setIsCheckingOut] = useState<'pro' | 'full_program' | null>(null)
@@ -23,8 +27,14 @@ export default function PricingPage() {
   const isFullProgramComingSoon = currentPlanId !== 'full_program' && !fullProgramCheckoutEnabled
 
   const handleBack = () => {
-    navigateBackToPartyMode(navigate, location.state)
+    if (mode === 'public') {
+      navigate('/')
+    } else {
+      navigateBackToPartyMode(navigate, location.state)
+    }
   }
+
+  const contactPath = mode === 'public' ? '/contact' : '/app/settings/contact'
 
   useEffect(() => {
     window.scrollTo(0, 0)
@@ -207,7 +217,7 @@ export default function PricingPage() {
           <div className="license-note-title">Need help?</div>
           <div className="license-note-text">
             If checkout fails or you have questions,{' '}
-            <Link className="license-note-link" to="/app/settings/contact">
+            <Link className="license-note-link" to={contactPath}>
               contact support
             </Link>
             .

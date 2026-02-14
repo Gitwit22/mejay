@@ -2,18 +2,34 @@ import { usePlanStore } from '@/stores/planStore';
 import { X, Check, Sparkles, Volume2, Sliders, Gauge } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useEffect } from 'react';
 import { toast } from '@/hooks/use-toast';
 import { startCheckout } from '@/lib/checkout';
 import {getSettingsEntryNavigateOptions} from '@/app/navigation/settingsReturnTo'
 
 export function UpgradeModal() {
-  const { upgradeModalOpen, closeUpgradeModal, billingEnabled, setDevPlan, authBypassEnabled, plan } = usePlanStore();
+  const { upgradeModalOpen, closeUpgradeModal, billingEnabled, setDevPlan, authBypassEnabled, plan, isGuestMode, authStatus } = usePlanStore();
   const navigate = useNavigate();
   const location = useLocation();
 
   const isFullProgramOwner = plan === 'full_program'
   const isProOwner = plan === 'pro'
   const isUpgraded = isProOwner || isFullProgramOwner
+  const needsAuth = isGuestMode || authStatus === 'anonymous'
+
+  // Handle ESC key to close modal
+  useEffect(() => {
+    if (!upgradeModalOpen) return;
+    
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        closeUpgradeModal();
+      }
+    };
+    
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [upgradeModalOpen, closeUpgradeModal]);
 
   const goToPricing = () => {
     closeUpgradeModal();
@@ -73,24 +89,38 @@ export function UpgradeModal() {
     <AnimatePresence>
       {upgradeModalOpen && (
         <>
-          {/* Backdrop */}
+          {/* Backdrop with Flexbox Centering */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={closeUpgradeModal}
-            className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm"
-          />
-          
-          {/* Modal */}
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 20 }}
-            transition={{ type: 'spring', duration: 0.4 }}
-            className="fixed inset-x-4 top-1/2 -translate-y-1/2 z-[201] max-w-sm mx-auto"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0, 0, 0, 0.55)',
+              backdropFilter: 'blur(6px)',
+              zIndex: 9999,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px',
+            }}
           >
-            <div className="glass-card p-6 relative">
+            {/* Modal Container */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ type: 'spring', duration: 0.4 }}
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                maxWidth: '420px',
+                width: '100%',
+                borderRadius: '20px',
+              }}
+            >
+              <div className="glass-card p-6 relative">
               {/* Close Button */}
               <button
                 onClick={closeUpgradeModal}
@@ -104,14 +134,21 @@ export function UpgradeModal() {
                 <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-primary to-secondary mb-4">
                   <Sparkles className="w-7 h-7 text-white" />
                 </div>
-                <h2 className="text-xl font-bold text-foreground mb-1">
-                  {isFullProgramOwner ? 'Full Program unlocked' : 'Unlock Pro Features'}
+                <h2 className="text-xl font-bold text-foreground mb-2">
+                  {isFullProgramOwner ? 'Full Program unlocked' : 'Start 3-Day Trial'}
                 </h2>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm text-muted-foreground mb-2">
                   {isFullProgramOwner
                     ? 'Everything is unlocked on your account.'
-                    : 'Pro or Full Program unlocks advanced tools'}
+                    : needsAuth
+                      ? 'Create an account to unlock Pro features'
+                      : 'Get full access to all Pro features'}
                 </p>
+                {!isFullProgramOwner && (
+                  <p className="text-xs text-muted-foreground/80">
+                    $5/month after trial. Cancel anytime.
+                  </p>
+                )}
               </div>
 
               {/* Features List */}
@@ -147,19 +184,22 @@ export function UpgradeModal() {
                 <>
                   <div className="space-y-2">
                     <button
+                      type="button"
                       onClick={() => beginCheckout('pro')}
                       className="w-full py-3.5 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold text-sm hover:opacity-90 transition-opacity"
                       disabled={isUpgraded}
                     >
-                      {isFullProgramOwner ? 'Full Program active' : isProOwner ? 'Pro active' : 'Upgrade to Pro — $5/month'}
+                      {isFullProgramOwner ? 'Full Program active' : isProOwner ? 'Pro active' : 'Start 3-Day Trial'}
                     </button>
-                    <button
-                      onClick={() => beginCheckout('full_program')}
-                      className="w-full py-3.5 rounded-xl bg-white/10 text-foreground font-medium text-sm hover:bg-white/15 transition-colors"
-                      disabled={isFullProgramOwner}
-                    >
-                      {isFullProgramOwner ? 'Full Program active' : 'Buy Full Program — Own It Forever'}
-                    </button>
+                    {!needsAuth && (
+                      <button
+                        onClick={() => beginCheckout('full_program')}
+                        className="w-full py-3.5 rounded-xl bg-white/10 text-foreground font-medium text-sm hover:bg-white/15 transition-colors"
+                        disabled={isFullProgramOwner}
+                      >
+                        {isFullProgramOwner ? 'Full Program active' : 'Buy Full Program — Own It Forever'}
+                      </button>
+                    )}
                     <button
                       onClick={goToPricing}
                       className="w-full py-3.5 rounded-xl bg-transparent text-muted-foreground font-medium text-sm hover:text-foreground transition-colors"
@@ -167,14 +207,11 @@ export function UpgradeModal() {
                       View pricing details
                     </button>
                   </div>
-
-                  <p className="text-center text-[11px] text-muted-foreground mt-4">
-                    Pro is subscription. Full Program is a one-time purchase.
-                  </p>
                 </>
               )}
             </div>
           </motion.div>
+        </motion.div>
         </>
       )}
     </AnimatePresence>

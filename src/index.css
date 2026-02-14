@@ -2800,3 +2800,15 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Tab Transitions */
+.tab-content {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.18s ease-out, transform 0.18s ease-out;
+}
+
+.tab-content.fade-out {
+  opacity: 0;
+  transform: translateY(6px);
+}

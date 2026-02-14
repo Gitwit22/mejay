@@ -31,6 +31,10 @@ interface PlanState {
   /** Server auth status (cookie session). */
   authStatus: 'unknown' | 'authenticated' | 'anonymous';
   user: {id: string; email: string} | null;
+  /** Guest mode: allows using /app without server auth. */
+  isGuestMode: boolean;
+  guestId: string | null;
+  initializeGuestMode: () => void;
   /** Optimistically mark auth state after a successful auth API call. */
   markAuthenticated: (user?: {id?: string; email?: string} | null) => void;
   /** Allows entering /app without a server session (dev/demo only). */
@@ -43,6 +47,8 @@ interface PlanState {
   upgradeModalOpen: boolean;
   /** Stripe customer id used to refresh entitlements from the server (D1). */
   stripeCustomerId: string | null;
+  /** Stripe subscription status for Pro gating. */
+  subscriptionStatus: 'active' | 'trialing' | 'past_due' | 'canceled' | 'unpaid' | null;
   /** Dev override (used by DevPlanSwitcher). */
   setDevPlan: (plan: Plan) => void;
   /** Runtime plan updates (should not override dev selection). */
@@ -57,6 +63,7 @@ interface PlanState {
     accessType: 'free' | 'pro' | 'full_program'
     hasFullAccess: boolean
     stripeCustomerId?: string
+    subscriptionStatus?: string
     source: 'server' | 'stripe' | 'storage'
     reason?: string
   }) => void;
@@ -66,6 +73,8 @@ interface PlanState {
   /** Back-compat alias (treat as dev plan). */
   setPlan: (plan: Plan) => void;
   hasFeature: (feature: Feature) => boolean;
+  /** Check if user has active Pro entitlement (active or trialing subscription). */
+  hasProEntitlement: () => boolean;
   openUpgradeModal: () => void;
   closeUpgradeModal: () => void;
 }
@@ -74,6 +83,7 @@ const ACCESS_PLAN_KEY = 'mejay:accessPlan';
 const BILLING_ENABLED_KEY = 'mejay:billingEnabled';
 const STRIPE_CUSTOMER_ID_KEY = 'mejay:stripeCustomerId';
 const AUTH_BYPASS_KEY = 'mejay:authBypassEnabled';
+const GUEST_ID_KEY = 'mejay:guestId';
 
 const ENTITLEMENTS_CHANNEL = 'mejay' as const;
 const TAB_ID =
@@ -163,6 +173,17 @@ function readInitialStripeCustomerId(): string | null {
   const trimmed = raw.trim()
   if (!trimmed) return null
   return trimmed
+}
+
+function readInitialGuestId(): string | null {
+  return safeReadLocalStorage(GUEST_ID_KEY)
+}
+
+function generateGuestId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `guest-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
 function normalizeServerAccessType(raw: unknown, hasFullAccess: boolean): Plan {
@@ -257,11 +278,14 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   entitlementsVersion: 0,
   authStatus: INITIAL_AUTH_BYPASS_ENABLED ? 'authenticated' : 'unknown',
   user: INITIAL_AUTH_BYPASS_ENABLED ? getBypassUser() : null,
+  isGuestMode: false,
+  guestId: readInitialGuestId(),
   authBypassEnabled: INITIAL_AUTH_BYPASS_ENABLED,
   canToggleAuthBypass: INITIAL_CAN_TOGGLE_AUTH_BYPASS,
   billingEnabled: readInitialBillingEnabled(),
   upgradeModalOpen: false,
   stripeCustomerId: readInitialStripeCustomerId(),
+  subscriptionStatus: null,
 
   setAuthBypassEnabled: (enabled) => {
     // In production, only allow runtime toggling if explicitly enabled.
@@ -311,6 +335,15 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       if (get().stripeCustomerId !== cid) {
         set({stripeCustomerId: cid})
         safeWriteLocalStorage(STRIPE_CUSTOMER_ID_KEY, cid)
+      }
+    }
+
+    // Update subscription status for Pro gating
+    const subStatus = payload.subscriptionStatus
+    if (typeof subStatus === 'string') {
+      const validStatuses = ['active', 'trialing', 'past_due', 'canceled', 'unpaid']
+      if (validStatuses.includes(subStatus)) {
+        set({subscriptionStatus: subStatus as any})
       }
     }
 
@@ -374,8 +407,8 @@ export const usePlanStore = create<PlanState>((set, get) => ({
 
     if (res.status === 401) {
       set({authStatus: 'anonymous', user: null})
-      // DO NOT fall back to localStorage as an authority for paid access.
-      // Caller can decide whether to show login.
+      // Guest mode: allow using app without auth
+      get().initializeGuestMode()
       return false
     }
 
@@ -384,16 +417,17 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     const data = (await res.json()) as any
     if (!data?.ok) throw new Error('Account fetch failed: invalid response')
 
-    const ent = data.entitlements as {accessType?: unknown; hasFullAccess?: unknown} | undefined
+    const ent = data.entitlements as {accessType?: unknown; hasFullAccess?: unknown; subscriptionStatus?: unknown} | undefined
     const hasFullAccess = ent?.hasFullAccess === true
     const accessTypeRaw = ent?.accessType
     const accessType = accessTypeRaw === 'pro' || accessTypeRaw === 'full_program' ? accessTypeRaw : 'free'
+    const subscriptionStatus = typeof ent?.subscriptionStatus === 'string' ? ent.subscriptionStatus : undefined
 
     const user = data.user as {id?: unknown; email?: unknown} | undefined
     if (typeof user?.id === 'string' && typeof user?.email === 'string') {
-      set({authStatus: 'authenticated', user: {id: user.id, email: user.email}})
+      set({authStatus: 'authenticated', user: {id: user.id, email: user.email}, isGuestMode: false})
     } else {
-      set({authStatus: 'authenticated', user: null})
+      set({authStatus: 'authenticated', user: null, isGuestMode: false})
     }
 
     // Entitlements are only meaningful when billing is enabled and there is no dev override.
@@ -402,6 +436,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       get().applyEntitlements({
         accessType: accessType as 'free' | 'pro' | 'full_program',
         hasFullAccess,
+        subscriptionStatus,
         source: 'server',
         reason: reason ?? 'refreshFromServer',
       })
@@ -465,6 +500,32 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   },
   
   hasFeature: (feature) => PLAN_FEATURES[get().plan][feature],
+  
+  hasProEntitlement: () => {
+    const state = get()
+    // Dev overrides
+    if (state.authBypassEnabled) return true
+    if (!state.billingEnabled) return true
+    if (state.planSource === 'dev' && (state.plan === 'pro' || state.plan === 'full_program')) return true
+    
+    // Runtime entitlements
+    if (state.plan === 'full_program') return true
+    if (state.plan === 'pro') {
+      // Check subscription status
+      const status = state.subscriptionStatus
+      return status === 'active' || status === 'trialing'
+    }
+    return false
+  },
+
+  initializeGuestMode: () => {
+    const existing = get().guestId
+    const guestId = existing || generateGuestId()
+    if (!existing) {
+      safeWriteLocalStorage(GUEST_ID_KEY, guestId)
+    }
+    set({ isGuestMode: true, guestId, authStatus: 'anonymous', plan: 'free', planSource: 'runtime' })
+  },
   
   openUpgradeModal: () => set({ upgradeModalOpen: true }),
   

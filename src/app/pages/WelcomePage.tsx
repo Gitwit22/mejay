@@ -1,5 +1,6 @@
 import {useCallback, useState} from 'react'
 import {Link, useNavigate} from 'react-router-dom'
+import {motion} from 'framer-motion'
 
 import {useGradientParallax} from '../hooks/useGradientParallax'
 import {appStatus} from '@/appStatus'
@@ -25,7 +26,7 @@ function AnimatedLogo({className, alt}: {className?: string; alt: string}) {
       width="400"
       height="400"
       style={{ aspectRatio: '1' }}
-      fetchpriority="high"
+      fetchPriority="high"
       decoding="async"
     />
   )
@@ -36,7 +37,23 @@ export default function WelcomePage() {
   useGradientParallax()
 
   return (
-    <div className="mejay-welcome">
+    <motion.div
+      initial={{ opacity: 0, scale: 1 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.98 }}
+      transition={{ duration: 0.3, ease: "easeOut" }}
+      className="mejay-welcome"
+    >
+      <style>{`
+        @keyframes pulsate-glow {
+          0%, 100% {
+            box-shadow: 0 0 20px rgba(255, 107, 53, 0.5), 0 0 40px rgba(255, 107, 53, 0.3), 0 0 60px rgba(255, 107, 53, 0.2);
+          }
+          50% {
+            box-shadow: 0 0 30px rgba(255, 107, 53, 0.8), 0 0 60px rgba(255, 107, 53, 0.5), 0 0 90px rgba(255, 107, 53, 0.3);
+          }
+        }
+      `}</style>
       <div className="bg-gradient gradient-1" aria-hidden="true" />
       <div className="bg-gradient gradient-2" aria-hidden="true" />
       <div className="bg-gradient gradient-3" aria-hidden="true" />
@@ -87,24 +104,34 @@ export default function WelcomePage() {
                 </p>
               </div>
 
-              <div className="hero-benefits what-you-get" aria-label="What you get">
-                <div className="hero-benefits-title">What you get</div>
-                <ul className="hero-benefits-list">
-                  <li>• Auto-DJ energy without dead air</li>
-                  <li>• Clean transitions that feel intentional</li>
-                  <li>• Browser-first + installable (PWA)</li>
-                </ul>
-              </div>
-
-              <div className="hero-ctas cta-group">
+              <div className="hero-ctas cta-group" style={{ marginTop: '2.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                 <button
                   type="button"
                   className="cta-primary cta-login cta-button"
-                  onClick={() => navigate('/login?returnTo=/app?tab=party')}
+                  onClick={() => navigate('/app?tab=library')}
+                  style={{
+                    animation: 'pulsate-glow 2s ease-in-out infinite',
+                  }}
                 >
                   <span className="inline-flex items-center justify-center gap-2 w-full">
                     Start the Party
                     <span aria-hidden="true">→</span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="cta-secondary cta-button"
+                  onClick={() => navigate('/login')}
+                  style={{
+                    background: 'linear-gradient(135deg, #00d4ff 0%, #0099ff 100%)',
+                    backdropFilter: 'blur(10px)',
+                    boxShadow: '0 0 20px rgba(0, 212, 255, 0.4), 0 0 40px rgba(0, 153, 255, 0.2)',
+                    minWidth: '280px',
+                    fontWeight: '600',
+                  }}
+                >
+                  <span className="inline-flex items-center justify-center gap-2 w-full">
+                    Log In
                   </span>
                 </button>
               </div>
@@ -114,6 +141,16 @@ export default function WelcomePage() {
             <div className="bottom-stack" aria-label="Welcome details">
               <section className="features-panel features" aria-label="Key features">
                 <div className="feature-grid">
+                  <div className="feature-tile">
+                    <div className="feature-icon" aria-hidden="true">
+                      ✨
+                    </div>
+                    <div className="feature-text">
+                      <div className="feature-title">What you get</div>
+                      <div className="feature-desc">Auto-DJ energy (no dead air) • Clean transitions that feel intentional • Installable (PWA)</div>
+                    </div>
+                  </div>
+
                   <div className="feature-tile">
                     <div className="feature-icon" aria-hidden="true">
                       🔥
@@ -148,21 +185,21 @@ export default function WelcomePage() {
 
               <section className="support-info" aria-label="Support info">
                 <footer className="welcome-footer" aria-label="Footer links">
-                  <Link className="footer-link" to="/app/settings/about">About</Link>
+                  <Link className="footer-link" to="/about">About</Link>
                   <span className="footer-sep" aria-hidden="true">•</span>
-                  <Link className="footer-link" to="/app/settings/pricing">Pricing</Link>
+                  <Link className="footer-link" to="/pricing">Pricing</Link>
                   <span className="footer-sep" aria-hidden="true">•</span>
-                  <Link className="footer-link" to="/app/settings/contact">Contact</Link>
+                  <Link className="footer-link" to="/contact">Contact</Link>
                   <span className="footer-sep" aria-hidden="true">•</span>
-                  <Link className="footer-link" to="/app/settings/terms">Terms</Link>
+                  <Link className="footer-link" to="/terms">Terms</Link>
                   <span className="footer-sep" aria-hidden="true">•</span>
-                  <Link className="footer-link" to="/app/settings/privacy">Privacy</Link>
+                  <Link className="footer-link" to="/privacy">Privacy</Link>
                 </footer>
               </section>
             </div>
           </div>
         </section>
       </main>
-    </div>
+    </motion.div>
   )
 }
