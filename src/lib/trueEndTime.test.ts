@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectTrueEndTimeFromChannelData } from './trueEndTime'
+import { detectTrueEndTimeFromChannelData, detectTrueStartTimeFromChannelData } from './trueEndTime'
 
 describe('trueEndTime', () => {
   it('returns duration when no trailing silence is found', () => {
@@ -62,5 +62,70 @@ describe('trueEndTime', () => {
     })
 
     expect(trueEnd).toBeCloseTo(duration - 1.5, 6)
+  })
+})
+
+describe('trueStartTime', () => {
+  it('returns 0 when no leading silence is found', () => {
+    const sampleRate = 10
+    const samples = new Float32Array(100).fill(0.01)
+    const duration = samples.length / sampleRate
+
+    const trueStart = detectTrueStartTimeFromChannelData(samples, sampleRate, duration, {
+      silenceThresholdDb: -55,
+      minSilenceMs: 700,
+      minCutAfterStartSec: 0.5,
+    })
+
+    expect(trueStart).toBe(0)
+  })
+
+  it('detects sustained leading silence and returns silence end time', () => {
+    const sampleRate = 10
+    const samples = new Float32Array(100).fill(0.01)
+    // first 2 seconds are silence
+    for (let i = 0; i < 20; i++) samples[i] = 0
+
+    const duration = samples.length / sampleRate
+    const trueStart = detectTrueStartTimeFromChannelData(samples, sampleRate, duration, {
+      silenceThresholdDb: -55,
+      minSilenceMs: 700, // 7 samples
+      minCutAfterStartSec: 0.5,
+    })
+
+    expect(trueStart).toBeCloseTo(2, 6)
+  })
+
+  it('ignores silence shorter than minSilenceMs', () => {
+    const sampleRate = 10
+    const samples = new Float32Array(100).fill(0.01)
+    // first 0.5s are silence (5 samples) — shorter than 700ms threshold
+    for (let i = 0; i < 5; i++) samples[i] = 0
+
+    const duration = samples.length / sampleRate
+    const trueStart = detectTrueStartTimeFromChannelData(samples, sampleRate, duration, {
+      silenceThresholdDb: -55,
+      minSilenceMs: 700,
+      minCutAfterStartSec: 0.5,
+    })
+
+    expect(trueStart).toBe(0)
+  })
+
+  it('enforces minimum minCutAfterStartSec', () => {
+    const sampleRate = 10
+    const samples = new Float32Array(100).fill(0.01)
+    // first 0.2s are silence (2 samples) -> should detect with small minSilence
+    for (let i = 0; i < 2; i++) samples[i] = 0
+
+    const duration = samples.length / sampleRate
+    const trueStart = detectTrueStartTimeFromChannelData(samples, sampleRate, duration, {
+      silenceThresholdDb: -55,
+      minSilenceMs: 100, // 1 sample
+      minCutAfterStartSec: 0.5,
+    })
+
+    // Silence end is at 0.2s, but minCutAfterStartSec is 0.5s, so result should be 0.5
+    expect(trueStart).toBeCloseTo(0.5, 6)
   })
 })

@@ -10,11 +10,30 @@ export interface TrueEndTimeOptions {
    */
   minSilenceMs?: number;
   /**
-   * Don’t set the “true end” inside the last N seconds of the file.
+   * Don't set the "true end" inside the last N seconds of the file.
    * Prevents trimming extremely short tails / codec padding edge cases.
    * Default: 1.5s.
    */
   minCutBeforeEndSec?: number;
+}
+
+export interface TrueStartTimeOptions {
+  /**
+   * Silence threshold in dBFS (negative). Typical: -50 to -60.
+   * Default: -55.
+   */
+  silenceThresholdDb?: number;
+  /**
+   * How long the signal must stay under the threshold to be considered leading silence.
+   * Default: 700ms.
+   */
+  minSilenceMs?: number;
+  /**
+   * Don't set the "true start" inside the first N seconds of the file.
+   * Prevents trimming extremely short heads / codec padding edge cases.
+   * Default: 0.5s.
+   */
+  minCutAfterStartSec?: number;
 }
 
 const dbToLinear = (db: number): number => {
@@ -61,7 +80,7 @@ export function detectTrueEndTimeFromChannelData(
       }
     } else {
       silenceCount = 0;
-      // Once we’ve found a trailing-silence region and then hit real signal,
+      // Once we've found a trailing-silence region and then hit real signal,
       // we can stop scanning.
       if (silenceStartSample !== null) break;
     }
@@ -89,4 +108,75 @@ export function detectTrueEndTime(audioBuffer: AudioBuffer, opts: TrueEndTimeOpt
   // Mono is fine for v1; channel 0 is a good proxy.
   const ch0 = audioBuffer.getChannelData(0);
   return detectTrueEndTimeFromChannelData(ch0, sampleRate, durationSec, opts);
+}
+
+/**
+ * Computes the best-guess start-of-audio time by finding sustained low-amplitude samples
+ * at the beginning of the track.
+ *
+ * This is intended for *offline* analysis (import time), not real-time.
+ */
+export function detectTrueStartTimeFromChannelData(
+  channelData: Float32Array,
+  sampleRate: number,
+  durationSec: number,
+  opts: TrueStartTimeOptions = {},
+): number {
+  const silenceThresholdDb = Number.isFinite(opts.silenceThresholdDb)
+    ? (opts.silenceThresholdDb as number)
+    : -55;
+  const minSilenceMs = Number.isFinite(opts.minSilenceMs) ? (opts.minSilenceMs as number) : 700;
+  const minCutAfterStartSec = Number.isFinite(opts.minCutAfterStartSec)
+    ? (opts.minCutAfterStartSec as number)
+    : 0.5;
+
+  if (!channelData || channelData.length === 0 || !Number.isFinite(sampleRate) || sampleRate <= 0) {
+    return 0;
+  }
+
+  const threshold = dbToLinear(silenceThresholdDb);
+  const minSilenceSamples = Math.max(1, Math.floor((sampleRate * minSilenceMs) / 1000));
+
+  let silenceCount = 0;
+  let silenceEndSample: number | null = null;
+
+  for (let i = 0; i < channelData.length; i++) {
+    const v = channelData[i];
+    if (Math.abs(v) < threshold) {
+      silenceCount += 1;
+      if (silenceCount >= minSilenceSamples) {
+        silenceEndSample = i + 1;
+      }
+    } else {
+      // Once we've found a leading-silence region and then hit real signal,
+      // we can stop scanning.
+      if (silenceEndSample !== null) break;
+      // If we hit real signal before accumulating enough silence, there's no
+      // leading silence to trim.
+      if (silenceCount < minSilenceSamples) return 0;
+    }
+  }
+
+  if (silenceEndSample === null) return 0;
+
+  const silenceEndTime = silenceEndSample / sampleRate;
+
+  // Safety rail: never skip past the first minCutAfterStartSec.
+  const earliestAllowedCut = Math.max(0, Math.min(durationSec, minCutAfterStartSec));
+  const trueStartTime = Math.max(silenceEndTime, earliestAllowedCut);
+
+  // Clamp to valid range.
+  return Math.max(0, Math.min(durationSec, trueStartTime));
+}
+
+export function detectTrueStartTime(audioBuffer: AudioBuffer, opts: TrueStartTimeOptions = {}): number {
+  const durationSec = audioBuffer?.duration ?? 0;
+  const sampleRate = audioBuffer?.sampleRate ?? 0;
+  if (!audioBuffer || !Number.isFinite(durationSec) || durationSec <= 0 || sampleRate <= 0) {
+    return 0;
+  }
+
+  // Mono is fine for v1; channel 0 is a good proxy.
+  const ch0 = audioBuffer.getChannelData(0);
+  return detectTrueStartTimeFromChannelData(ch0, sampleRate, durationSec, opts);
 }

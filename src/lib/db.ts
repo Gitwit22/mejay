@@ -15,6 +15,11 @@ export interface Track {
    * This trims streaming padding / trailing silence so auto-mix avoids dead air.
    */
   trueEndTime?: number;
+  /**
+   * Precomputed "musical start" time (seconds) used for transition planning.
+   * This trims leading silence so playback begins at actual audio content.
+   */
+  trueStartTime?: number;
   bpm?: number;
   hasBeat: boolean;
   analysisStatus: 'pending' | 'analyzing' | 'ready' | 'basic';
