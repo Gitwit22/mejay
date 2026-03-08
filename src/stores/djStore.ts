@@ -8,7 +8,7 @@ import { TEMPO_PRESET_RATIOS, computePresetTempo } from '@/lib/tempoPresets';
 // Note: Energy Mode automation removed; mixing uses manual sliders only.
 import { usePlanStore } from '@/stores/planStore';
 import { toast } from '@/hooks/use-toast';
-import { detectTrueEndTime } from '@/lib/trueEndTime';
+import { detectTrueEndTime, detectTrueStartTime } from '@/lib/trueEndTime';
 import { valentine2026Pack, partyPack } from '@/config/starterPacks';
 
 interface DeckState {
@@ -545,7 +545,13 @@ export const useDJStore = create<DJState>()(
   };
 
   const getEffectiveStartTimeSec = (track: Track | undefined, settings: Settings | undefined) => {
-    const base = (settings?.nextSongStartOffset ?? 0);
+    const userOffset = (settings?.nextSongStartOffset ?? 0);
+    // If the track has a detected leading-silence boundary, use it as a floor so
+    // playback always skips past silence even when the user offset is lower.
+    const silenceSkip = (typeof track?.trueStartTime === 'number' && Number.isFinite(track.trueStartTime) && track.trueStartTime > 0)
+      ? track.trueStartTime
+      : 0;
+    const base = Math.max(userOffset, silenceSkip);
     const duration = track?.duration;
     if (!duration || !Number.isFinite(duration)) return Math.max(0, base);
     return clamp(base, 0, Math.max(0, duration - 0.25));
@@ -669,6 +675,7 @@ export const useDJStore = create<DJState>()(
         let bpm: number | undefined;
         let hasBeat = false;
         let trueEndTime: number | undefined;
+        let trueStartTime: number | undefined;
         let loudnessDb: number | undefined;
         let gainDb: number | undefined;
         let analysisStatus: Track['analysisStatus'] = 'basic';
@@ -695,6 +702,16 @@ export const useDJStore = create<DJState>()(
             });
           } catch (e) {
             console.error('[DJ Store] Starter true-end analysis failed:', e);
+          }
+
+          try {
+            trueStartTime = detectTrueStartTime(audioBuffer, {
+              silenceThresholdDb: -60,
+              minSilenceMs: 1000,
+              minCutAfterStartSec: 0.5,
+            });
+          } catch (e) {
+            console.error('[DJ Store] Starter true-start analysis failed:', e);
           }
 
           try {
@@ -732,6 +749,7 @@ export const useDJStore = create<DJState>()(
           fileBlob: blob,
           addedAt: Date.now(),
           trueEndTime,
+          trueStartTime,
           loudnessDb,
           gainDb,
         };
@@ -1147,6 +1165,7 @@ export const useDJStore = create<DJState>()(
           let bpm: number | undefined;
           let hasBeat = false;
           let trueEndTime: number | undefined;
+          let trueStartTime: number | undefined;
           let loudnessDb: number | undefined;
           let gainDb: number | undefined;
           let analysisStatus: Track['analysisStatus'] = 'basic';
@@ -1173,6 +1192,16 @@ export const useDJStore = create<DJState>()(
               });
             } catch (e) {
               console.error('[DJ Store] True-end analysis failed:', e);
+            }
+
+            try {
+              trueStartTime = detectTrueStartTime(audioBuffer, {
+                silenceThresholdDb: -60,
+                minSilenceMs: 1000,
+                minCutAfterStartSec: 0.5,
+              });
+            } catch (e) {
+              console.error('[DJ Store] True-start analysis failed:', e);
             }
 
             try {
@@ -1210,6 +1239,7 @@ export const useDJStore = create<DJState>()(
             fileBlob: blob,
             addedAt: Date.now(),
             trueEndTime,
+            trueStartTime,
             loudnessDb,
             gainDb,
           };
@@ -1599,6 +1629,18 @@ export const useDJStore = create<DJState>()(
             console.error('True end time analysis failed:', e);
           }
 
+          // Leading-silence trimming (used for transition planning).
+          let trueStartTime: number | undefined;
+          try {
+            trueStartTime = detectTrueStartTime(audioBuffer, {
+              silenceThresholdDb: -60,
+              minSilenceMs: 1000,
+              minCutAfterStartSec: 0.5,
+            });
+          } catch (e) {
+            console.error('True start time analysis failed:', e);
+          }
+
           // Loudness analysis (optional)
           let loudnessDb: number | undefined;
           let gainDb: number | undefined;
@@ -1625,6 +1667,7 @@ export const useDJStore = create<DJState>()(
             bpm,
             hasBeat,
             trueEndTime,
+            trueStartTime,
             analysisStatus: (hasBeat ? 'ready' : 'basic') as 'ready' | 'basic',
             loudnessDb,
             gainDb,
@@ -1992,6 +2035,14 @@ export const useDJStore = create<DJState>()(
         const startAt = getEffectiveStartTimeSec(previousTrack, state.settings);
         const duration = await audioEngine.loadTrackWithOffset(targetDeck, previousTrack.fileBlob, startAt, previousTrack.bpm, gainDb);
         if (previousTrack.bpm) audioEngine.setBaseBpm(targetDeck, previousTrack.bpm);
+
+        // Provide the analyzed "musical end" so automix avoids trailing silence.
+        try {
+          audioEngine.setTrueEndTime(targetDeck, previousTrack.trueEndTime);
+        } catch {
+          // ignore
+        }
+
         get().setTempo(targetDeck, preservedTempo);
 
         if (targetDeck === 'A') {
@@ -2053,6 +2104,13 @@ export const useDJStore = create<DJState>()(
           if (gainDb !== undefined) audioEngine.setTrackGain(prevDeck, gainDb);
           else audioEngine.setTrackGain(prevDeck, 0);
         });
+
+        // Provide the analyzed "musical end" so automix avoids trailing silence.
+        try {
+          audioEngine.setTrueEndTime(prevDeck, previousTrack.trueEndTime);
+        } catch {
+          // ignore
+        }
 
         if (previousTrack.bpm) audioEngine.setBaseBpm(prevDeck, previousTrack.bpm);
         get().setTempo(prevDeck, preservedTempo);
@@ -2425,6 +2483,14 @@ export const useDJStore = create<DJState>()(
           if (gainDb !== undefined) audioEngine.setTrackGain(nextDeck, gainDb);
           else audioEngine.setTrackGain(nextDeck, 0);
         });
+
+        // Provide the analyzed "musical end" so automix avoids trailing silence.
+        try {
+          audioEngine.setTrueEndTime(nextDeck, nextTrack.trueEndTime);
+        } catch {
+          // ignore
+        }
+
         const tempoControlEnabled = usePlanStore.getState().hasFeature('tempoControl');
 
         // Start incoming early (inaudible until crossfade begins).
