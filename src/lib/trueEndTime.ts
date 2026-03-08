@@ -161,12 +161,12 @@ export function detectTrueStartTimeFromChannelData(
 
   const silenceEndTime = silenceEndSample / sampleRate;
 
-  // Safety rail: never skip past the first minCutAfterStartSec.
-  const earliestAllowedCut = Math.max(0, Math.min(durationSec, minCutAfterStartSec));
-  const trueStartTime = Math.max(silenceEndTime, earliestAllowedCut);
+  // Safety rail: if the detected silence is entirely within the first N seconds,
+  // treat it as codec padding / artifact and don't trim.
+  if (silenceEndTime <= Math.max(0, minCutAfterStartSec)) return 0;
 
   // Clamp to valid range.
-  return Math.max(0, Math.min(durationSec, trueStartTime));
+  return Math.max(0, Math.min(durationSec, silenceEndTime));
 }
 
 export function detectTrueStartTime(audioBuffer: AudioBuffer, opts: TrueStartTimeOptions = {}): number {

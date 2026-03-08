@@ -112,10 +112,10 @@ describe('trueStartTime', () => {
     expect(trueStart).toBe(0)
   })
 
-  it('enforces minimum minCutAfterStartSec', () => {
+  it('treats short silence within minCutAfterStartSec as codec padding', () => {
     const sampleRate = 10
     const samples = new Float32Array(100).fill(0.01)
-    // first 0.2s are silence (2 samples) -> should detect with small minSilence
+    // first 0.2s are silence (2 samples) -> within the 0.5s safety margin
     for (let i = 0; i < 2; i++) samples[i] = 0
 
     const duration = samples.length / sampleRate
@@ -125,7 +125,7 @@ describe('trueStartTime', () => {
       minCutAfterStartSec: 0.5,
     })
 
-    // Silence end is at 0.2s, but minCutAfterStartSec is 0.5s, so result should be 0.5
-    expect(trueStart).toBeCloseTo(0.5, 6)
+    // Silence is within the safety margin (0.2s < 0.5s), so treat as codec padding
+    expect(trueStart).toBe(0)
   })
 })
