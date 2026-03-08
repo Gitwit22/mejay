@@ -59,6 +59,7 @@ class AudioEngine {
   private onTrackEnd: ((deck: DeckId) => void) | null = null;
   private onMixTrigger: (() => void) | null = null;
   private animationFrameId: number | null = null;
+  private backgroundIntervalId: number | null = null;
   private mixCheckEnabled: boolean = false;
   private mixTriggerMode: 'remaining' | 'elapsed' | 'manual' = 'remaining';
   private mixTriggerSeconds: number = 20;
@@ -528,6 +529,8 @@ class AudioEngine {
   }
 
   private startTimeUpdateLoop(): void {
+    // requestAnimationFrame for smooth UI time updates.
+    // Note: rAF is throttled/paused in background tabs, which is fine for UI.
     const update = () => {
       if (this.onTimeUpdate) {
         if (this.decks.A.isPlaying) {
@@ -557,6 +560,28 @@ class AudioEngine {
       this.animationFrameId = requestAnimationFrame(update);
     };
     this.animationFrameId = requestAnimationFrame(update);
+
+    // setInterval fallback for background-safe mix trigger and track end checks.
+    // Browsers throttle rAF to ~0-1fps in background tabs, but setInterval still
+    // fires (at ~1s minimum). This ensures auto-mix triggers and track-end detection
+    // continue working even when the tab/window is not focused.
+    // The mixTriggered flag and mixInProgress guard in the store prevent double-fires.
+    this.backgroundIntervalId = window.setInterval(() => {
+      if (this.decks.A.isPlaying) {
+        const time = this.getCurrentTime('A');
+        this.checkMixTrigger('A', time);
+        if (time >= this.decks.A.duration && this.decks.A.duration > 0) {
+          this.onTrackEnd?.('A');
+        }
+      }
+      if (this.decks.B.isPlaying) {
+        const time = this.getCurrentTime('B');
+        this.checkMixTrigger('B', time);
+        if (time >= this.decks.B.duration && this.decks.B.duration > 0) {
+          this.onTrackEnd?.('B');
+        }
+      }
+    }, 250);
   }
 
   private checkMixTrigger(deck: DeckId, currentTime: number): void {
@@ -1051,6 +1076,10 @@ class AudioEngine {
   destroy(): void {
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);
+    }
+    if (this.backgroundIntervalId !== null) {
+      clearInterval(this.backgroundIntervalId);
+      this.backgroundIntervalId = null;
     }
     this.stop('A');
     this.stop('B');

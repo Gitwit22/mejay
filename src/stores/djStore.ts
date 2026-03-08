@@ -1992,6 +1992,14 @@ export const useDJStore = create<DJState>()(
         const startAt = getEffectiveStartTimeSec(previousTrack, state.settings);
         const duration = await audioEngine.loadTrackWithOffset(targetDeck, previousTrack.fileBlob, startAt, previousTrack.bpm, gainDb);
         if (previousTrack.bpm) audioEngine.setBaseBpm(targetDeck, previousTrack.bpm);
+
+        // Provide the analyzed "musical end" so automix avoids trailing silence.
+        try {
+          audioEngine.setTrueEndTime(targetDeck, previousTrack.trueEndTime);
+        } catch {
+          // ignore
+        }
+
         get().setTempo(targetDeck, preservedTempo);
 
         if (targetDeck === 'A') {
@@ -2053,6 +2061,13 @@ export const useDJStore = create<DJState>()(
           if (gainDb !== undefined) audioEngine.setTrackGain(prevDeck, gainDb);
           else audioEngine.setTrackGain(prevDeck, 0);
         });
+
+        // Provide the analyzed "musical end" so automix avoids trailing silence.
+        try {
+          audioEngine.setTrueEndTime(prevDeck, previousTrack.trueEndTime);
+        } catch {
+          // ignore
+        }
 
         if (previousTrack.bpm) audioEngine.setBaseBpm(prevDeck, previousTrack.bpm);
         get().setTempo(prevDeck, preservedTempo);
@@ -2425,6 +2440,14 @@ export const useDJStore = create<DJState>()(
           if (gainDb !== undefined) audioEngine.setTrackGain(nextDeck, gainDb);
           else audioEngine.setTrackGain(nextDeck, 0);
         });
+
+        // Provide the analyzed "musical end" so automix avoids trailing silence.
+        try {
+          audioEngine.setTrueEndTime(nextDeck, nextTrack.trueEndTime);
+        } catch {
+          // ignore
+        }
+
         const tempoControlEnabled = usePlanStore.getState().hasFeature('tempoControl');
 
         // Start incoming early (inaudible until crossfade begins).
