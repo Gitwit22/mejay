@@ -59,6 +59,7 @@ class AudioEngine {
   private onTrackEnd: ((deck: DeckId) => void) | null = null;
   private onMixTrigger: (() => void) | null = null;
   private animationFrameId: number | null = null;
+  private backgroundTimerId: ReturnType<typeof setInterval> | null = null;
   private mixCheckEnabled: boolean = false;
   private mixTriggerMode: 'remaining' | 'elapsed' | 'manual' = 'remaining';
   private mixTriggerSeconds: number = 20;
@@ -528,35 +529,36 @@ class AudioEngine {
   }
 
   private startTimeUpdateLoop(): void {
-    const update = () => {
-      if (this.onTimeUpdate) {
-        if (this.decks.A.isPlaying) {
-          const time = this.getCurrentTime('A');
-          this.onTimeUpdate('A', time);
-          
-          // Check mix trigger for deck A
-          this.checkMixTrigger('A', time);
-          
-          // Check if track ended
-          if (time >= this.decks.A.duration && this.decks.A.duration > 0) {
-            this.onTrackEnd?.('A');
-          }
-        }
-        if (this.decks.B.isPlaying) {
-          const time = this.getCurrentTime('B');
-          this.onTimeUpdate('B', time);
-          
-          // Check mix trigger for deck B
-          this.checkMixTrigger('B', time);
-          
-          if (time >= this.decks.B.duration && this.decks.B.duration > 0) {
-            this.onTrackEnd?.('B');
-          }
+    // Shared logic for checking both decks
+    const tickDecks = () => {
+      if (this.decks.A.isPlaying) {
+        const time = this.getCurrentTime('A');
+        this.onTimeUpdate?.('A', time);
+        this.checkMixTrigger('A', time);
+        if (time >= this.decks.A.duration && this.decks.A.duration > 0) {
+          this.onTrackEnd?.('A');
         }
       }
-      this.animationFrameId = requestAnimationFrame(update);
+      if (this.decks.B.isPlaying) {
+        const time = this.getCurrentTime('B');
+        this.onTimeUpdate?.('B', time);
+        this.checkMixTrigger('B', time);
+        if (time >= this.decks.B.duration && this.decks.B.duration > 0) {
+          this.onTrackEnd?.('B');
+        }
+      }
     };
-    this.animationFrameId = requestAnimationFrame(update);
+
+    // rAF loop for smooth UI updates when tab is visible
+    const rafLoop = () => {
+      tickDecks();
+      this.animationFrameId = requestAnimationFrame(rafLoop);
+    };
+    this.animationFrameId = requestAnimationFrame(rafLoop);
+
+    // setInterval fallback so mix-trigger checks keep running in background tabs
+    // (requestAnimationFrame is paused by browsers when the tab is hidden)
+    this.backgroundTimerId = setInterval(tickDecks, 250);
   }
 
   private checkMixTrigger(deck: DeckId, currentTime: number): void {
@@ -1051,6 +1053,10 @@ class AudioEngine {
   destroy(): void {
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);
+    }
+    if (this.backgroundTimerId !== null) {
+      clearInterval(this.backgroundTimerId);
+      this.backgroundTimerId = null;
     }
     this.stop('A');
     this.stop('B');
