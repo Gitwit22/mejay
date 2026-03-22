@@ -109,6 +109,7 @@ const makeTrack = (id: string, bpm: number) => ({
   analysisStatus: 'ready' as const,
   fileBlob: new Blob(['x'], { type: 'audio/mpeg' }),
   addedAt: Date.now(),
+  status: 'ready' as const,
 })
 
 const flush = async () => {

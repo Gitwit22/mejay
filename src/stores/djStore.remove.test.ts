@@ -127,6 +127,7 @@ const makeTrack = (id: string) => ({
   analysisStatus: 'ready' as const,
   fileBlob: new Blob(['x'], { type: 'audio/mpeg' }),
   addedAt: Date.now(),
+  status: 'ready' as const,
 })
 
 beforeEach(() => {

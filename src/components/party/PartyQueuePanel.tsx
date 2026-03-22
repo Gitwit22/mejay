@@ -37,15 +37,16 @@ export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
   const effectiveMaxTempoPercent = settings.tempoMode === 'preset' ? 35 : settings.maxTempoPercent;
 
   const targetBpm = (() => {
-    if (settings.tempoMode === 'locked') return settings.lockedBpm;
-
+    // Model A (preset mode): the target for the next transition is the current
+    // song's effective BPM (native BPM × current playback rate).
     if (settings.tempoMode === 'preset') {
-      const currentDeck = activeDeck === 'A' ? deckA : deckB;
-      const currentTrack = currentDeck.trackId ? tracks.find((t) => t.id === currentDeck.trackId) : undefined;
-      const preset = normalizeTempoPreset(settings.tempoPreset ?? 'original');
-      const result = computePresetTempo(currentTrack?.bpm, preset);
-      return result.targetBpm;
+      const currentDeckState = activeDeck === 'A' ? deckA : deckB;
+      const currentTrack = currentDeckState.trackId ? tracks.find((t) => t.id === currentDeckState.trackId) : undefined;
+      if (!currentTrack?.bpm) return null;
+      return currentTrack.bpm * (currentDeckState.playbackRate || 1);
     }
+
+    if (settings.tempoMode === 'locked') return settings.lockedBpm;
 
     if (settings.tempoMode === 'auto') {
       if (settings.autoBaseBpm !== null && Number.isFinite(settings.autoBaseBpm)) {
@@ -53,10 +54,10 @@ export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
       }
     }
 
-    const currentDeck = activeDeck === 'A' ? deckA : deckB;
-    const currentTrack = currentDeck.trackId ? tracks.find((t) => t.id === currentDeck.trackId) : undefined;
+    const currentDeckState = activeDeck === 'A' ? deckA : deckB;
+    const currentTrack = currentDeckState.trackId ? tracks.find((t) => t.id === currentDeckState.trackId) : undefined;
     if (!currentTrack?.bpm) return null;
-    return currentTrack.bpm * (currentDeck.playbackRate || 1);
+    return currentTrack.bpm * (currentDeckState.playbackRate || 1);
   })();
 
   const playingFromLabel = (() => {

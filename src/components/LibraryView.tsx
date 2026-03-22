@@ -32,8 +32,8 @@ export function LibraryView() {
   const [playlistSearchQuery, setPlaylistSearchQuery] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Count only tracks that have a valid fileBlob (playable)
-  const playableTracks = tracks.filter(t => t.fileBlob);
+  // Count only tracks that are "ready" (have a fileBlob and status === "ready")
+  const playableTracks = tracks.filter(t => t.fileBlob && t.status === 'ready');
   const playableCount = playableTracks.length;
 
   const filteredTracks = tracks.filter(track =>
@@ -225,10 +225,11 @@ export function LibraryView() {
           filteredTracks.map((track) => (
             <div
               key={track.id}
-              onClick={() => handleTrackClick(track.id)}
+              onClick={() => track.status === 'ready' ? handleTrackClick(track.id) : undefined}
               className={cn(
                 'track-item group relative',
-                deckA.trackId === track.id && 'playing'
+                deckA.trackId === track.id && 'playing',
+                track.status !== 'ready' && 'opacity-50 cursor-not-allowed'
               )}
             >
               {/* Album Art Placeholder */}
@@ -241,13 +242,19 @@ export function LibraryView() {
                 <h5 className="text-sm font-medium truncate">{track.displayName}</h5>
                 <p className="text-xs text-muted-foreground flex items-center gap-2">
                   <span>{formatDuration(track.duration)}</span>
-                  {track.analysisStatus === 'analyzing' && (
+                  {track.status === 'missing' && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">Missing</span>
+                  )}
+                  {track.status === 'error' && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30">Error</span>
+                  )}
+                  {track.status === 'ready' && track.analysisStatus === 'analyzing' && (
                     <span className="badge-analyzing">Analyzing</span>
                   )}
-                  {track.analysisStatus === 'ready' && (
+                  {track.status === 'ready' && track.analysisStatus === 'ready' && (
                     <span className="badge-ready">Ready</span>
                   )}
-                  {track.analysisStatus === 'basic' && (
+                  {track.status === 'ready' && track.analysisStatus === 'basic' && (
                     <span className="badge-basic">Basic</span>
                   )}
                 </p>
