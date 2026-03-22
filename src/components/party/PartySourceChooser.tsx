@@ -17,7 +17,7 @@ export function PartySourceChooser() {
     if (playableCount === 0) {
       toast({
         title: 'No playable tracks',
-        description: 'Import some music files first, or they may have been lost after refresh.',
+        description: 'Add music from the Import tab first, or files may have been lost after refresh.',
         variant: 'destructive',
       });
       return;
@@ -57,7 +57,7 @@ export function PartySourceChooser() {
         </p>
 
         <div className="space-y-3">
-          {/* Play from Import List */}
+          {/* Play from My Music */}
           <button
             onClick={handlePlayFromImport}
             disabled={tracks.length === 0}
@@ -72,11 +72,11 @@ export function PartySourceChooser() {
               <Library className="w-6 h-6 text-primary" />
             </div>
             <div className="flex-1 text-left">
-              <h4 className="font-semibold">Play from Import List</h4>
+              <h4 className="font-semibold">Play from My Music</h4>
               <p className="text-xs text-muted-foreground">
                 {tracks.length > 0 
                   ? `${playableCount} of ${tracks.length} tracks playable` 
-                  : 'No tracks imported yet'}
+                  : 'No tracks in your library yet'}
               </p>
             </div>
             <Play className="w-5 h-5 text-muted-foreground" />

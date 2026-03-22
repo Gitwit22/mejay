@@ -5,25 +5,26 @@ import { TabBar } from './TabBar';
 describe('TabBar', () => {
   const mockOnTabChange = vi.fn();
 
-  it('should render all three tabs', () => {
+  it('should render all four tabs', () => {
     render(<TabBar activeTab="library" onTabChange={mockOnTabChange} />);
     
-    expect(screen.getByText('Library')).toBeInTheDocument();
-    expect(screen.getByText('Party Mode')).toBeInTheDocument();
+    expect(screen.getByText('My Music')).toBeInTheDocument();
     expect(screen.getByText('Playlists')).toBeInTheDocument();
+    expect(screen.getByText('Import')).toBeInTheDocument();
+    expect(screen.getByText('Live Room')).toBeInTheDocument();
   });
 
   it('should highlight the active tab', () => {
     render(<TabBar activeTab="party" onTabChange={mockOnTabChange} />);
     
-    const partyButton = screen.getByText('Party Mode').closest('button');
+    const partyButton = screen.getByText('Live Room').closest('button');
     expect(partyButton).toHaveClass('text-primary');
   });
 
   it('should not highlight inactive tabs', () => {
     render(<TabBar activeTab="party" onTabChange={mockOnTabChange} />);
     
-    const libraryButton = screen.getByText('Library').closest('button');
+    const libraryButton = screen.getByText('My Music').closest('button');
     const playlistsButton = screen.getByText('Playlists').closest('button');
     
     expect(libraryButton).toHaveClass('text-muted-foreground');
@@ -33,7 +34,7 @@ describe('TabBar', () => {
   it('should call onTabChange with correct tab id when clicked', () => {
     render(<TabBar activeTab="library" onTabChange={mockOnTabChange} />);
     
-    const partyButton = screen.getByText('Party Mode');
+    const partyButton = screen.getByText('Live Room');
     fireEvent.click(partyButton);
     
     expect(mockOnTabChange).toHaveBeenCalledWith('party');
@@ -42,16 +43,20 @@ describe('TabBar', () => {
   it('should call onTabChange for each tab', () => {
     const { rerender } = render(<TabBar activeTab="library" onTabChange={mockOnTabChange} />);
     
-    fireEvent.click(screen.getByText('Library'));
+    fireEvent.click(screen.getByText('My Music'));
     expect(mockOnTabChange).toHaveBeenCalledWith('library');
-    
-    mockOnTabChange.mockClear();
-    fireEvent.click(screen.getByText('Party Mode'));
-    expect(mockOnTabChange).toHaveBeenCalledWith('party');
     
     mockOnTabChange.mockClear();
     fireEvent.click(screen.getByText('Playlists'));
     expect(mockOnTabChange).toHaveBeenCalledWith('playlists');
+    
+    mockOnTabChange.mockClear();
+    fireEvent.click(screen.getByText('Import'));
+    expect(mockOnTabChange).toHaveBeenCalledWith('import');
+    
+    mockOnTabChange.mockClear();
+    fireEvent.click(screen.getByText('Live Room'));
+    expect(mockOnTabChange).toHaveBeenCalledWith('party');
   });
 
   it('should render with icons', () => {
@@ -59,6 +64,6 @@ describe('TabBar', () => {
     
     // Check that SVG icons are present
     const svgElements = container.querySelectorAll('svg');
-    expect(svgElements.length).toBe(3); // One for each tab
+    expect(svgElements.length).toBe(4); // One for each tab
   });
 });

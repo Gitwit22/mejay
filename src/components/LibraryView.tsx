@@ -1,5 +1,5 @@
-import { Search, Upload, Music, MoreVertical, ListPlus, Check, Plus, X, Play, Trash2, Shield } from 'lucide-react';
-import { useState, useRef } from 'react';
+import { Search, Music, MoreVertical, ListPlus, Check, Plus, X, Play, Shield } from 'lucide-react';
+import { useState } from 'react';
 import { useDJStore } from '@/stores/djStore';
 import { cn, formatDuration } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
@@ -16,9 +16,7 @@ export function LibraryView() {
   const { 
     tracks, 
     isLoadingTracks, 
-    importTracks, 
     removeFromLibrary,
-    clearAllImports,
     loadTrackToDeck, 
     deckA,
     playlists,
@@ -30,7 +28,6 @@ export function LibraryView() {
   const [showAddToPlaylist, setShowAddToPlaylist] = useState<string | null>(null);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [playlistSearchQuery, setPlaylistSearchQuery] = useState('');
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Count only tracks that are "ready" (have a fileBlob and status === "ready")
   const playableTracks = tracks.filter(t => t.fileBlob && t.status === 'ready');
@@ -43,52 +40,6 @@ export function LibraryView() {
   const filteredPlaylists = playlists.filter(p =>
     p.name.toLowerCase().includes(playlistSearchQuery.toLowerCase())
   );
-
-  const fileInputId = 'mejay-import-audio';
-
-  const handleClearAllImports = async () => {
-    if (tracks.length === 0) return;
-    const ok = window.confirm(
-      'This will permanently remove all imported tracks from your device and clear all playlists. Continue?',
-    );
-    if (!ok) return;
-    await clearAllImports();
-  };
-
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files && files.length > 0) {
-      // Hard-block non-audio (100% in code).
-      const audioExtRe = /\.(mp3|wav|m4a|aac|flac|ogg)$/i
-      const invalid = Array.from(files).find((f) => {
-        const type = (f.type || '').toLowerCase()
-        return !(type.startsWith('audio/') || audioExtRe.test(f.name))
-      })
-
-      if (invalid) {
-        toast({
-          title: 'Audio files only',
-          description: 'Please select an audio file (mp3, wav, m4a, etc.).',
-          variant: 'destructive',
-        })
-        e.target.value = ''
-        return
-      }
-
-      try {
-        await importTracks(files);
-      } catch (error) {
-        console.error('[Library] Import failed:', error);
-        toast({
-          title: 'Import failed',
-          description: 'Something blocked the import on this device. Try again, or try a different browser (Safari) and ensure Private Browsing is off.',
-          variant: 'destructive',
-        });
-      }
-    }
-    // Reset input
-    e.target.value = '';
-  };
 
   const handleTrackClick = async (trackId: string) => {
     await loadTrackToDeck(trackId, 'A');
@@ -120,11 +71,11 @@ export function LibraryView() {
     setShowAddToPlaylist(null);
   };
 
-  const handlePlayImportList = async () => {
+  const handlePlayAll = async () => {
     if (playableCount === 0) {
       toast({
         title: 'No playable tracks',
-        description: 'Import some music files first, or they may have been lost after refresh.',
+        description: 'Import some music first from the Import tab.',
         variant: 'destructive',
       });
       return;
@@ -138,12 +89,12 @@ export function LibraryView() {
       {/* Header */}
       <div className="mb-5 flex items-start justify-between gap-3">
         <div>
-          <span className="text-[11px] text-muted-foreground uppercase tracking-[2px]">Your Music</span>
-          <h2 className="text-[28px] font-bold text-gradient-accent">Library</h2>
+          <span className="text-[11px] text-muted-foreground uppercase tracking-[2px]">Your Collection</span>
+          <h2 className="text-[28px] font-bold text-gradient-accent">My Music</h2>
         </div>
 
         <button
-          onClick={handlePlayImportList}
+          onClick={handlePlayAll}
           disabled={playableCount === 0}
           className={cn(
             'mt-1 inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors',
@@ -151,49 +102,13 @@ export function LibraryView() {
               ? 'bg-white/5 hover:bg-white/10 border border-white/10'
               : 'bg-white/5 border border-white/10 opacity-50 cursor-not-allowed'
           )}
-          title={playableCount > 0 ? 'Start Party Mode from your Import List' : 'Import music to start Party Mode'}
+          title={playableCount > 0 ? 'Play all tracks in the Live Room' : 'Import music first from the Import tab'}
           type="button"
         >
           <Play className="w-4 h-4" />
-          Play Import
+          Play All
         </button>
       </div>
-
-      {/* Import Button */}
-      <button
-        type="button"
-        onClick={() => fileInputRef.current?.click()}
-        className="btn-primary-gradient flex items-center justify-center gap-2.5 w-full py-4 text-[15px] mb-5"
-      >
-        <Upload className="w-5 h-5" />
-        Import
-      </button>
-
-      <input
-        ref={fileInputRef}
-        id={fileInputId}
-        type="file"
-        accept="audio/*,application/octet-stream,.mp3,.wav,.m4a,.aac,.flac,.ogg"
-        multiple
-        onChange={handleFileSelect}
-        className="sr-only"
-      />
-
-      <button
-        onClick={handleClearAllImports}
-        disabled={tracks.length === 0}
-        className={cn(
-          'flex items-center justify-center gap-2.5 w-full py-3 text-[13px] rounded-xl border transition-colors mb-5',
-          tracks.length > 0
-            ? 'border-destructive/40 text-destructive bg-destructive/10 hover:bg-destructive/15'
-            : 'border-white/10 text-muted-foreground bg-white/5 opacity-50 cursor-not-allowed',
-        )}
-        type="button"
-        title={tracks.length > 0 ? 'Remove all imported tracks and clear playlists' : 'No imports to clear'}
-      >
-        <Trash2 className="w-4 h-4" />
-        Clear Imports
-      </button>
 
       {/* Search Bar */}
       <div className="flex items-center gap-3 glass-card !p-3 !rounded-xl mb-4">
@@ -217,8 +132,11 @@ export function LibraryView() {
           <div className="text-center py-10">
             <Music className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
             <h4 className="text-lg font-semibold mb-2">No Tracks Yet</h4>
-            <p className="text-sm text-muted-foreground mb-5">
-              Import some music to get started
+            <p className="text-sm text-muted-foreground mb-2">
+              Your music library is empty.
+            </p>
+            <p className="text-xs text-muted-foreground mb-5">
+              Head to the <strong>Import</strong> tab to add audio files.
             </p>
           </div>
         ) : (

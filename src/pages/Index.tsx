@@ -4,6 +4,7 @@ import { TabBar } from '@/components/TabBar';
 import { LibraryView } from '@/components/LibraryView';
 import { PartyModeView } from '@/components/PartyModeView';
 import { PlaylistsView } from '@/components/PlaylistsView';
+import { ImportRoomView } from '@/components/ImportRoomView';
 import { useDJStore } from '@/stores/djStore';
 import { useSearchParams } from 'react-router-dom';
 import { DevPlanSwitcher } from '@/components/DevPlanSwitcher';
@@ -17,7 +18,7 @@ import { consumeStarterPromptPending, readStarterPacksPrefs, setStarterPromptPen
 import { startCheckout } from '@/lib/checkout';
 import { toast } from '@/hooks/use-toast';
 
-type TabId = 'library' | 'party' | 'playlists';
+type TabId = 'library' | 'playlists' | 'import' | 'party';
 
 const LAST_TAB_KEY = 'mejay:lastTab';
 
@@ -29,10 +30,10 @@ const Index = () => {
   const [starterPacksOpen, setStarterPacksOpen] = useState(false);
   const [isFading, setIsFading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>(() => {
-    if (tabFromUrl && ['library', 'party', 'playlists'].includes(tabFromUrl)) return tabFromUrl;
+    if (tabFromUrl && ['library', 'playlists', 'import', 'party'].includes(tabFromUrl)) return tabFromUrl;
     try {
       const stored = sessionStorage.getItem(LAST_TAB_KEY) as TabId | null;
-      if (stored && ['library', 'party', 'playlists'].includes(stored)) return stored;
+      if (stored && ['library', 'playlists', 'import', 'party'].includes(stored)) return stored;
     } catch {
       // ignore
     }
@@ -128,7 +129,7 @@ const Index = () => {
 
   // Sync tab from URL
   useEffect(() => {
-    if (tabFromUrl && ['library', 'party', 'playlists'].includes(tabFromUrl)) {
+    if (tabFromUrl && ['library', 'playlists', 'import', 'party'].includes(tabFromUrl)) {
       setActiveTab(tabFromUrl);
     }
   }, [tabFromUrl]);
@@ -209,8 +210,9 @@ const Index = () => {
           )}
         >
           {activeTab === 'library' && <LibraryView />}
-          {activeTab === 'party' && <PartyModeView />}
           {activeTab === 'playlists' && <PlaylistsView />}
+          {activeTab === 'import' && <ImportRoomView />}
+          {activeTab === 'party' && <PartyModeView />}
         </div>
       </div>
 

@@ -210,7 +210,7 @@ export function PlaylistsView() {
               <Music className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
               <h4 className="text-lg font-semibold mb-2">Empty Playlist</h4>
               <p className="text-sm text-muted-foreground">
-                Add tracks from your Library using the ⋯ menu
+                Add tracks from <strong>My Music</strong> using the ⋯ menu on each track.
               </p>
             </div>
           ) : (
@@ -246,7 +246,7 @@ export function PlaylistsView() {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="mb-5">
-        <span className="text-[11px] text-muted-foreground uppercase tracking-[2px]">Party Sets</span>
+        <span className="text-[11px] text-muted-foreground uppercase tracking-[2px]">Your Sets</span>
         <h2 className="text-[28px] font-bold text-gradient-accent">Playlists</h2>
       </div>
 
@@ -258,7 +258,7 @@ export function PlaylistsView() {
           className="create-playlist-btn !py-4 !gap-1.5"
         >
           <Plus className="w-6 h-6" />
-          <span className="text-[11px] font-medium">Create Party Set</span>
+          <span className="text-[11px] font-medium">Create Playlist</span>
         </button>
 
         {/* Playlists */}
@@ -330,10 +330,10 @@ export function PlaylistsView() {
       {showCreateDialog && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
           <div className="glass-card w-full max-w-sm">
-            <h3 className="text-lg font-bold mb-4">Create Party Set</h3>
+            <h3 className="text-lg font-bold mb-4">Create Playlist</h3>
             <input
               type="text"
-              placeholder="Set name..."
+              placeholder="Playlist name..."
               value={newPlaylistName}
               onChange={(e) => setNewPlaylistName(e.target.value)}
               className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm outline-none focus:border-primary mb-4"

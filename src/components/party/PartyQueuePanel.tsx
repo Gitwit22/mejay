@@ -65,7 +65,7 @@ export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
       const name = playlists.find(p => p.id === partySource.playlistId)?.name;
       return name ? `Playlist — ${name}` : 'Playlist';
     }
-    return 'Import List';
+    return 'My Music';
   })();
 
   const repeatMode = settings.repeatMode;

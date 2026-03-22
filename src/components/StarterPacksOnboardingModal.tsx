@@ -97,7 +97,7 @@ export function StarterPacksOnboardingModal(props: StarterPacksOnboardingModalPr
         <DialogHeader>
           <DialogTitle>Add a starter pack?</DialogTitle>
           <DialogDescription>
-            Start with a few tracks so you can try Party Mode right away.
+            Start with a few tracks so you can try the Live Room right away.
           </DialogDescription>
         </DialogHeader>
 

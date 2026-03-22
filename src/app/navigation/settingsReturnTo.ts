@@ -1,6 +1,6 @@
 import type {NavigateFunction, NavigateOptions} from 'react-router-dom'
 
-export type AppTabId = 'library' | 'party' | 'playlists'
+export type AppTabId = 'library' | 'playlists' | 'import' | 'party'
 
 export type SettingsReturnTo = {
   tab?: AppTabId
@@ -11,7 +11,7 @@ export const SETTINGS_RETURN_TO_STORAGE_KEY = 'settings:returnTo'
 const LAST_TAB_STORAGE_KEY = 'mejay:lastTab'
 
 const isAppTabId = (value: unknown): value is AppTabId =>
-  value === 'library' || value === 'party' || value === 'playlists'
+  value === 'library' || value === 'playlists' || value === 'import' || value === 'party'
 
 const safeSessionGetItem = (key: string): string | null => {
   try {

@@ -49,7 +49,7 @@ export function PartyModeView() {
   // Get source label
   const getSourceLabel = () => {
     if (!partySource) return null;
-    if (partySource.type === 'import') return 'Import List';
+    if (partySource.type === 'import') return 'My Music';
     const playlist = playlists.find(p => p.id === partySource.playlistId);
     return playlist ? `Playlist — ${playlist.name}` : 'Playlist';
   };
@@ -59,7 +59,7 @@ export function PartyModeView() {
       {/* Header (always visible) */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3 flex-shrink-0">
         <div>
-          <h2 className="text-[22px] sm:text-[24px] font-bold text-gradient-accent">Party Mode</h2>
+          <h2 className="text-[22px] sm:text-[24px] font-bold text-gradient-accent">Live Room</h2>
           {isPartyMode && partySource && (
             <div className="flex items-center gap-1.5 mt-1">
               {partySource.type === 'import' ? (
@@ -94,7 +94,7 @@ export function PartyModeView() {
                   <SelectValue placeholder="Choose source" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="import">Import List</SelectItem>
+                  <SelectItem value="import">My Music</SelectItem>
                   {playlists.map((p) => (
                     <SelectItem key={p.id} value={p.id}>
                       {p.name}
@@ -109,7 +109,7 @@ export function PartyModeView() {
                     <button
                       type="button"
                       className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-                      title="Save the current import list as a playlist"
+                      title="Save the current track list as a playlist"
                     >
                       Save
                     </button>
@@ -118,7 +118,7 @@ export function PartyModeView() {
                     <DialogHeader>
                       <DialogTitle>Save as Playlist</DialogTitle>
                       <DialogDescription>
-                        Save your current Import List so you can reuse it later.
+                        Save your current track list so you can reuse it later.
                       </DialogDescription>
                     </DialogHeader>
 
@@ -141,7 +141,7 @@ export function PartyModeView() {
                           if (!id) {
                             toast({
                               title: 'Could not save playlist',
-                              description: 'Enter a name and make sure Party Mode has tracks.',
+                              description: 'Enter a name and make sure the Live Room has tracks.',
                               variant: 'destructive',
                             });
                             return;
