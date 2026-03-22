@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
-import { Track, Settings, getAllTracks, getSettings, addTrack, updateTrack, deleteTrack, updateSettings, generateId, getAllPlaylists, Playlist, addPlaylist, updatePlaylist, deletePlaylist, PartySource, resetLocalDatabase, clearTracksAndPlaylists } from '@/lib/db';
+import { Track, TrackStatus, Settings, getAllTracks, getSettings, addTrack, updateTrack, deleteTrack, updateSettings, generateId, getAllPlaylists, Playlist, addPlaylist, updatePlaylist, deletePlaylist, PartySource, resetLocalDatabase, clearTracksAndPlaylists, markTrackMissing as dbMarkTrackMissing } from '@/lib/db';
 import { audioEngine, DeckId } from '@/lib/audioEngine';
 import { detectBPM } from '@/lib/bpmDetector';
 import { computeClampedTempoRatio, computeRequiredTempoShiftPercent, isOverTempoCap, resolveMaxTempoPercent } from '@/lib/tempoMatch';
@@ -167,6 +167,18 @@ interface DJState {
   clearPlaylistTracks: (playlistId: string) => Promise<void>;
   reorderPlaylistTracks: (playlistId: string, fromIndex: number, toIndex: number) => Promise<void>;
   deletePlaylistById: (id: string) => Promise<void>;
+
+  // --- Track registry helpers ---
+  /** Mark a track as missing (no resolvable file). */
+  markTrackMissing: (trackId: string) => Promise<void>;
+  /** Return all tracks with status === "ready" and a fileBlob present. */
+  getReadyTracks: () => Track[];
+  /** Return all Track objects referenced by a playlist (including missing). */
+  getPlaylistTracks: (playlistId: string) => Track[];
+  /** Return only ready/playable Track objects for a playlist. */
+  getPlayablePlaylistTracks: (playlistId: string) => Track[];
+  /** Remove playlist track references that point to missing or deleted tracks. */
+  cleanupMissingTracks: () => Promise<void>;
   
   // Helper to get current party tracks
   getPartyTracks: () => Track[];
@@ -501,8 +513,20 @@ export const useDJStore = create<DJState>()(
     }
 
     const track = state.tracks.find(t => t.id === trackId);
-    if (!track?.fileBlob) {
-      get().stopPartyMode();
+    if (!track?.fileBlob || track.status !== 'ready') {
+      // Track is missing – mark it and try to skip to the next available track.
+      if (track && track.status !== 'missing' && track.status !== 'deleted') {
+        void dbMarkTrackMissing(track.id);
+        set(s => ({
+          tracks: s.tracks.map(t => t.id === track.id ? { ...t, status: 'missing' as TrackStatus } : t),
+        }));
+      }
+      const nextIdx = index + 1;
+      if (nextIdx < state.partyTrackIds.length) {
+        void jumpToQueueIndex(nextIdx);
+      } else {
+        get().stopPartyMode();
+      }
       return;
     }
 
@@ -752,6 +776,9 @@ export const useDJStore = create<DJState>()(
           trueStartTime,
           loudnessDb,
           gainDb,
+          status: 'ready',
+          sourceType: 'starter',
+          importedAt: Date.now(),
         };
 
         // Starter tracks should be available offline once fetched.
@@ -975,16 +1002,22 @@ export const useDJStore = create<DJState>()(
     applyImmediateTempoToPlayingDecks(state);
   };
 
+  /**
+   * Returns only the track IDs that are currently playable (status "ready" + fileBlob present).
+   * Missing/deleted/error tracks are excluded so Party Mode never stalls on an unresolvable file.
+   */
   const getTrackIdsForPartySource = (state: DJState, source: PartySource): string[] => {
+    const isPlayable = (t: Track | undefined) => t && t.fileBlob && t.status === 'ready';
+
     if (source.type === 'import') {
-      return state.tracks.filter(t => t.fileBlob).map(t => t.id);
+      return state.tracks.filter(isPlayable).map(t => t.id);
     }
 
     if (source.type === 'playlist' && source.playlistId) {
       const playlist = state.playlists.find(p => p.id === source.playlistId);
       return (playlist?.trackIds || []).filter(id => {
         const track = state.tracks.find(t => t.id === id);
-        return track?.fileBlob;
+        return isPlayable(track);
       });
     }
 
@@ -1090,10 +1123,40 @@ export const useDJStore = create<DJState>()(
         if (import.meta.env.DEV) {
           console.debug('[DJ Store] Loading tracks from IndexedDB...');
         }
-        const tracks = await getAllTracks();
+        const rawTracks = await getAllTracks();
+
+        // Backfill status for tracks that predate the registry fields.
+        // Also mark tracks as missing when their blob is absent (e.g. keepImportsOnDevice
+        // was disabled, or the IDB entry survived but the blob did not).
+        const missingIds: string[] = [];
+        const tracks: Track[] = rawTracks.map(t => {
+          if (!t.status) {
+            // Pre-v4 track: derive status from fileBlob presence.
+            const status: TrackStatus = t.fileBlob ? 'ready' : 'missing';
+            if (!t.fileBlob) missingIds.push(t.id);
+            return { ...t, status, importedAt: t.importedAt ?? t.addedAt };
+          }
+          // Post-v4 track: if it was marked ready but blob is now absent, mark missing.
+          // Starter tracks are excluded: they carry their own fetch URL (localPath) and
+          // may be re-downloaded on demand, so a missing blob is not an error.
+          if (t.status === 'ready' && !t.fileBlob && !t.isStarter) {
+            missingIds.push(t.id);
+            return { ...t, status: 'missing' as TrackStatus };
+          }
+          return t;
+        });
+
         if (import.meta.env.DEV) {
-          console.debug('[DJ Store] Loaded tracks:', tracks.length);
+          console.debug('[DJ Store] Loaded tracks:', tracks.length, '| missing:', missingIds.length);
         }
+
+        // Persist the missing status updates in the background.
+        if (missingIds.length > 0) {
+          Promise.all(missingIds.map(id => dbMarkTrackMissing(id))).catch((err) => {
+            if (import.meta.env.DEV) console.warn('[DJ Store] Failed to persist missing status for tracks:', err);
+          });
+        }
+
         set({ tracks, isLoadingTracks: false });
       } catch (error) {
         console.error('[DJ Store] Failed to load tracks:', error);
@@ -1242,6 +1305,9 @@ export const useDJStore = create<DJState>()(
             trueStartTime,
             loudnessDb,
             gainDb,
+            status: 'ready',
+            sourceType: 'starter',
+            importedAt: Date.now(),
           };
 
           try {
@@ -1514,7 +1580,22 @@ export const useDJStore = create<DJState>()(
             continue;
           }
 
+        // Duplicate detection: skip re-importing the same file (same name + size + lastModified).
+        const isDuplicate = get().tracks.some(t =>
+          t.fileName === file.name &&
+          t.size === file.size &&
+          t.lastModified === file.lastModified &&
+          t.status !== 'deleted'
+        );
+        if (isDuplicate) {
+          if (import.meta.env.DEV) {
+            console.debug('[DJ Store] Skipping duplicate track:', file.name);
+          }
+          continue;
+        }
+
         const id = generateId();
+        const now = Date.now();
         const track: Track = {
           id,
           localPath: file.name,
@@ -1524,7 +1605,14 @@ export const useDJStore = create<DJState>()(
           hasBeat: false,
           analysisStatus: 'pending',
           fileBlob: file,
-          addedAt: Date.now(),
+          addedAt: now,
+          // Local-first registry fields
+          status: 'ready',
+          fileName: file.name,
+          size: file.size,
+          lastModified: file.lastModified,
+          sourceType: 'local-file',
+          importedAt: now,
         };
 
         // Try to get duration
@@ -1829,7 +1917,17 @@ export const useDJStore = create<DJState>()(
     loadTrackToDeck: async (trackId: string, deck: DeckId, offsetSeconds?: number) => {
       const state = get();
       const track = state.tracks.find(t => t.id === trackId);
-      if (!track?.fileBlob) return;
+      if (!track?.fileBlob) {
+        // File is not available – mark the track missing so the UI can reflect this.
+        if (track && track.status !== 'missing' && track.status !== 'deleted') {
+          void dbMarkTrackMissing(trackId);
+          set(s => ({
+            tracks: s.tracks.map(t => t.id === trackId ? { ...t, status: 'missing' as TrackStatus } : t),
+          }));
+          toast({ title: 'Track unavailable', description: `"${track.displayName}" could not be loaded. Re-import to restore it.` });
+        }
+        return;
+      }
 
       // Apply track gain if auto volume match is enabled (compute on-demand if missing)
       const gainDb = await ensureGainDbForTrack(track, state.settings);
@@ -2696,8 +2794,8 @@ export const useDJStore = create<DJState>()(
       const firstTrackId = trackIds[0];
       const firstTrack = state.tracks.find(t => t.id === firstTrackId);
       
-      if (!firstTrack?.fileBlob) {
-        console.error('[DJ Store] First track has no fileBlob');
+      if (!firstTrack?.fileBlob || firstTrack.status !== 'ready') {
+        console.error('[DJ Store] First track has no fileBlob or is not ready');
         return;
       }
       
@@ -3269,6 +3367,65 @@ export const useDJStore = create<DJState>()(
     deletePlaylistById: async (id: string) => {
       await deletePlaylist(id);
       set(state => ({ playlists: state.playlists.filter(p => p.id !== id) }));
+    },
+
+    // --- Track registry helper implementations ---
+
+    markTrackMissing: async (trackId: string) => {
+      await dbMarkTrackMissing(trackId);
+      set(s => ({
+        tracks: s.tracks.map(t => t.id === trackId ? { ...t, status: 'missing' as TrackStatus } : t),
+      }));
+    },
+
+    getReadyTracks: () => {
+      return get().tracks.filter(t => t.fileBlob && t.status === 'ready');
+    },
+
+    getPlaylistTracks: (playlistId: string) => {
+      const state = get();
+      const playlist = state.playlists.find(p => p.id === playlistId);
+      if (!playlist) return [];
+      return playlist.trackIds
+        .map(id => state.tracks.find(t => t.id === id))
+        .filter((t): t is Track => t !== undefined);
+    },
+
+    getPlayablePlaylistTracks: (playlistId: string) => {
+      const state = get();
+      const playlist = state.playlists.find(p => p.id === playlistId);
+      if (!playlist) return [];
+      return playlist.trackIds
+        .map(id => state.tracks.find(t => t.id === id))
+        .filter((t): t is Track => !!t && !!t.fileBlob && t.status === 'ready');
+    },
+
+    /**
+     * Removes playlist references pointing to tracks that are missing or deleted
+     * so that playlists stay clean over time.  Does NOT remove the track registry entry.
+     */
+    cleanupMissingTracks: async () => {
+      const state = get();
+      const unavailableTrackIds = new Set(state.tracks.filter(t => t.status !== 'ready').map(t => t.id));
+      if (unavailableTrackIds.size === 0) return;
+
+      const playlistsToUpdate = state.playlists.filter(p =>
+        p.trackIds.some(id => unavailableTrackIds.has(id))
+      );
+
+      await Promise.all(playlistsToUpdate.map(async p => {
+        const newTrackIds = p.trackIds.filter(id => !unavailableTrackIds.has(id));
+        await updatePlaylist(p.id, { trackIds: newTrackIds });
+      }));
+
+      set(s => ({
+        playlists: s.playlists.map(p => ({
+          ...p,
+          trackIds: p.trackIds.filter(id => !unavailableTrackIds.has(id)),
+        })),
+      }));
+
+      toast({ title: 'Playlists cleaned up', description: `Removed ${unavailableTrackIds.size} unavailable track reference(s).` });
     },
 
     // Helper methods

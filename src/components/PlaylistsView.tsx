@@ -1,5 +1,5 @@
 import { Plus, ListMusic, Trash2, Music, Play, Edit2, ArrowUpDown, GripVertical, Shield } from 'lucide-react';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useDJStore } from '@/stores/djStore';
 import { cn, formatDuration } from '@/lib/utils';
 import { useNavigate } from 'react-router-dom';
@@ -52,7 +52,8 @@ function PlaylistTrackList({
             "track-item group transition-all",
             isReordering && "cursor-grab active:cursor-grabbing",
             draggedIndex === index && "opacity-50",
-            dragOverIndex === index && draggedIndex !== index && "border-t-2 border-primary"
+            dragOverIndex === index && draggedIndex !== index && "border-t-2 border-primary",
+            track.status !== 'ready' && !isReordering && "opacity-60"
           )}
           draggable={isReordering}
           onDragStart={() => handleDragStart(index)}
@@ -69,11 +70,14 @@ function PlaylistTrackList({
             <Music className="w-5 h-5 text-white/60" />
           </div>
           <div className="flex-1 min-w-0">
-            <h5 className="text-sm font-medium truncate">{track.displayName}</h5>
+            <h5 className={cn("text-sm font-medium truncate", track.status !== 'ready' && "text-muted-foreground")}>{track.displayName}</h5>
             <p className="text-xs text-muted-foreground flex items-center gap-2">
-              {track.bpm ? `${Math.round(track.bpm)} BPM` : 'No BPM'}
-              <span>•</span>
-              <span>{formatDuration(track.duration)}</span>
+              {track.status === 'missing' && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">Unavailable</span>
+              )}
+              {track.status === 'ready' && track.bpm ? `${Math.round(track.bpm)} BPM` : (track.status === 'ready' ? 'No BPM' : '')}
+              {track.status === 'ready' && <span>•</span>}
+              {track.status === 'ready' && <span>{formatDuration(track.duration)}</span>}
             </p>
           </div>
           {!isReordering && (
@@ -108,19 +112,27 @@ export function PlaylistsView() {
 
   const handlePlayPlaylist = async (playlistId: string) => {
     const playlist = playlists.find(p => p.id === playlistId);
-    if (playlist && playlist.trackIds.length > 0) {
-      await startPartyMode({ type: 'playlist', playlistId });
-      // Navigate to party mode tab
-      navigate('/app?tab=party');
-    }
+    if (!playlist) return;
+    // Only proceed if there is at least one ready (playable) track in the playlist.
+    const hasReady = playlist.trackIds.some(id => {
+      const t = tracks.find(t => t.id === id);
+      return t && t.fileBlob && t.status === 'ready';
+    });
+    if (!hasReady) return;
+    await startPartyMode({ type: 'playlist', playlistId });
+    navigate('/app?tab=party');
   };
 
   const selectedPlaylistData = playlists.find(p => p.id === selectedPlaylist);
+  // Include all known tracks for the playlist (both ready and missing) so the UI
+  // can show unavailable tracks instead of silently hiding them.
   const playlistTracks = selectedPlaylistData
     ? selectedPlaylistData.trackIds
         .map(id => tracks.find(t => t.id === id))
         .filter((t): t is Track => t !== undefined)
     : [];
+  const playlistReadyCount = playlistTracks.filter(t => t.status === 'ready' && t.fileBlob).length;
+  const playlistMissingCount = playlistTracks.length - playlistReadyCount;
 
   const handleClearPlaylist = async (playlistId: string) => {
     const playlist = playlists.find(p => p.id === playlistId);
@@ -142,12 +154,17 @@ export function PlaylistsView() {
             ← Back to Playlists
           </button>
           <h2 className="text-[28px] font-bold text-gradient-accent">{selectedPlaylistData.name}</h2>
-          <p className="text-sm text-muted-foreground">{playlistTracks.length} tracks</p>
+          <p className="text-sm text-muted-foreground">
+            {playlistReadyCount} track{playlistReadyCount !== 1 ? 's' : ''}
+            {playlistMissingCount > 0 && (
+              <span className="ml-1.5 text-yellow-400">· {playlistMissingCount} unavailable</span>
+            )}
+          </p>
         </div>
 
         {/* Action Buttons */}
         <div className="flex gap-3 mb-5">
-          {playlistTracks.length > 0 && (
+          {playlistReadyCount > 0 && (
             <button
               onClick={() => handlePlayPlaylist(selectedPlaylist)}
               className="btn-primary-gradient flex items-center justify-center gap-2.5 flex-1 py-4 text-[15px]"
@@ -209,6 +226,20 @@ export function PlaylistsView() {
     );
   }
 
+  // Precompute ready/total counts for all playlist cards to avoid per-render inline scans.
+  const playlistCardStats = useMemo(() => {
+    const stats: Record<string, { ready: number; total: number }> = {};
+    for (const playlist of playlists) {
+      let ready = 0;
+      for (const id of playlist.trackIds) {
+        const t = tracks.find(t => t.id === id);
+        if (t && t.status === 'ready') ready++;
+      }
+      stats[playlist.id] = { ready, total: playlist.trackIds.length };
+    }
+    return stats;
+  }, [playlists, tracks]);
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -247,12 +278,16 @@ export function PlaylistsView() {
 
             <h5 className="text-[13px] font-semibold mb-0.5 truncate">{playlist.name}</h5>
             <p className="text-[10px] text-muted-foreground">
-              {playlist.trackIds.length} tracks
+              {(() => {
+                const { ready, total } = playlistCardStats[playlist.id] ?? { ready: 0, total: 0 };
+                if (ready < total) return `${ready}/${total} tracks`;
+                return `${total} track${total !== 1 ? 's' : ''}`;
+              })()}
             </p>
 
             {/* Actions */}
             <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              {playlist.trackIds.length > 0 && (
+              {(playlistCardStats[playlist.id]?.ready ?? 0) > 0 && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();

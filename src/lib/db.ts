@@ -2,6 +2,18 @@ import { openDB, deleteDB, DBSchema, IDBPDatabase } from 'idb';
 
 export const MEJAY_DB_NAME = 'me-jay-db';
 
+/**
+ * Lifecycle status of a track in the local registry.
+ * - ready:   File blob is available and the track is playable.
+ * - missing: The track was registered but its file cannot be resolved right now
+ *            (e.g. after a refresh when the blob was not persisted, or the file
+ *            was moved/deleted).  References in playlists are preserved so the
+ *            user can re-link or clean up later.
+ * - deleted: The track was explicitly removed from the library by the user.
+ * - error:   The file exists but could not be decoded / analysed.
+ */
+export type TrackStatus = 'ready' | 'missing' | 'deleted' | 'error';
+
 export interface Track {
   id: string;
   localPath: string;
@@ -11,7 +23,7 @@ export interface Track {
   isStarter?: boolean;
   duration: number;
   /**
-   * Precomputed “musical end” time (seconds) used for transition planning.
+   * Precomputed "musical end" time (seconds) used for transition planning.
    * This trims streaming padding / trailing silence so auto-mix avoids dead air.
    */
   trueEndTime?: number;
@@ -28,6 +40,25 @@ export interface Track {
   // Auto volume matching
   loudnessDb?: number; // Measured loudness in dB (RMS proxy)
   gainDb?: number; // Calculated gain to apply
+
+  // --- Local-first track registry fields ---
+  /** Availability status.  Defaults to "ready" for pre-existing tracks. */
+  status: TrackStatus;
+  /** Original file name (e.g. "my-song.mp3").  Alias of localPath kept for clarity. */
+  fileName?: string;
+  /** File size in bytes – used for duplicate detection on re-import. */
+  size?: number;
+  /** File last-modified timestamp (ms) – used for duplicate detection on re-import. */
+  lastModified?: number;
+  /** Where the track came from. "local-file" = user import; "starter" = bundled pack. */
+  sourceType?: 'local-file' | 'starter';
+  /** When the track was first imported (ms). Mirrors addedAt for new imports. */
+  importedAt?: number;
+  /**
+   * Temporary object URL created via URL.createObjectURL(fileBlob).
+   * Never persisted – generated at runtime when the blob is loaded.
+   */
+  objectUrl?: string;
 }
 
 export interface Playlist {
@@ -127,7 +158,7 @@ export async function getDB(): Promise<IDBPDatabase<MeJayDB>> {
     if (import.meta.env.DEV) {
       console.debug('[DB] Opening IndexedDB...');
     }
-    dbInstance = await openDB<MeJayDB>(MEJAY_DB_NAME, 3, {
+    dbInstance = await openDB<MeJayDB>(MEJAY_DB_NAME, 4, {
       async upgrade(db, oldVersion, newVersion, transaction) {
         if (import.meta.env.DEV) {
           console.debug('[DB] Upgrading from version', oldVersion, 'to', newVersion);
@@ -171,6 +202,26 @@ export async function getDB(): Promise<IDBPDatabase<MeJayDB>> {
             }
           } catch (error) {
             console.error('[DB] Failed to migrate settings to v3:', error);
+          }
+        }
+
+        // v4: backfill `status` field on existing tracks.
+        // Tracks that have a fileBlob persisted are "ready"; others are "missing"
+        // until the user re-imports or relinks them.
+        if (oldVersion < 4) {
+          try {
+            const trackStore = transaction.objectStore('tracks');
+            let cursor = await trackStore.openCursor();
+            while (cursor) {
+              const track = cursor.value as Track;
+              if (!track.status) {
+                const status: TrackStatus = track.fileBlob ? 'ready' : 'missing';
+                await cursor.update({ ...track, status, importedAt: track.importedAt ?? track.addedAt });
+              }
+              cursor = await cursor.continue();
+            }
+          } catch (error) {
+            console.error('[DB] Failed to migrate tracks to v4:', error);
           }
         }
       },
@@ -400,4 +451,45 @@ export async function updateSettings(updates: Partial<Settings>): Promise<void> 
 // Generate unique ID
 export function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
+
+// --- Track registry helpers ---
+
+/**
+ * Returns all tracks whose status is "ready" (file blob is accessible).
+ */
+export async function getReadyTracks(): Promise<Track[]> {
+  const tracks = await getAllTracks();
+  return tracks.filter(t => t.status === 'ready');
+}
+
+/**
+ * Returns the Track objects referenced by a playlist, in playlist order.
+ * Tracks that no longer exist in the registry are silently omitted.
+ */
+export async function getPlaylistTracks(playlist: Playlist): Promise<Track[]> {
+  const db = await getDB();
+  const results: Track[] = [];
+  for (const id of playlist.trackIds) {
+    const track = await db.get('tracks', id);
+    if (track) results.push(track);
+  }
+  return results;
+}
+
+/**
+ * Returns only the "ready" tracks referenced by a playlist, in playlist order.
+ * Missing/deleted/error tracks are excluded so callers can safely play them.
+ */
+export async function getPlayablePlaylistTracks(playlist: Playlist): Promise<Track[]> {
+  const tracks = await getPlaylistTracks(playlist);
+  return tracks.filter(t => t.status === 'ready' && t.fileBlob);
+}
+
+/**
+ * Marks a track's status as "missing" in the persistent registry.
+ * Use this when a track cannot be resolved at runtime (e.g. no fileBlob after reload).
+ */
+export async function markTrackMissing(id: string): Promise<void> {
+  await updateTrack(id, { status: 'missing' });
 }
