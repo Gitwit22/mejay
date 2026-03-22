@@ -228,11 +228,13 @@ export function PlaylistsView() {
 
   // Precompute ready/total counts for all playlist cards to avoid per-render inline scans.
   const playlistCardStats = useMemo(() => {
+    // Build a track-ID → track map for O(1) lookups inside the playlist loops.
+    const trackMap = new Map(tracks.map(t => [t.id, t]));
     const stats: Record<string, { ready: number; total: number }> = {};
     for (const playlist of playlists) {
       let ready = 0;
       for (const id of playlist.trackIds) {
-        const t = tracks.find(t => t.id === id);
+        const t = trackMap.get(id);
         if (t && t.status === 'ready') ready++;
       }
       stats[playlist.id] = { ready, total: playlist.trackIds.length };
