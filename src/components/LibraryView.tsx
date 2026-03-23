@@ -102,7 +102,7 @@ export function LibraryView() {
               ? 'bg-white/5 hover:bg-white/10 border border-white/10'
               : 'bg-white/5 border border-white/10 opacity-50 cursor-not-allowed'
           )}
-          title={playableCount > 0 ? 'Play all tracks in the Live Room' : 'Import music first from the Import tab'}
+          title={playableCount > 0 ? 'Play all tracks in Play Mode' : 'Import music first from the Import tab'}
           type="button"
         >
           <Play className="w-4 h-4" />

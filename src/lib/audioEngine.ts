@@ -2,6 +2,7 @@
 // Provides dual-deck playback, crossfading, tempo control, and volume matching
 
 import { computeClampedTempoRatio } from './tempoMatch';
+import TimerWorker from './timerWorker?worker&inline';
 
 export type DeckId = 'A' | 'B';
 
@@ -26,6 +27,12 @@ interface DeckState {
   trackGainDb: number; // Applied gain adjustment
   scheduledStartAt: number | null;
   scheduledStartTimeoutId: number | null;
+  /** One-shot flag: onTrackEnd has already fired for this playback cycle. */
+  trackEndFired: boolean;
+  /** Hard cutoff time (seconds) at which tickDecks fires onTrackEnd.
+   *  Stacks trueEndTime and endEarlySeconds: musicalEnd − endEarlySeconds.
+   *  0 means "not set" – fall back to getEffectiveEndTime(). */
+  autoAdvanceCutoff: number;
   tempoRamp: {
     startTime: number;
     endTime: number;
@@ -60,6 +67,7 @@ class AudioEngine {
   private onMixTrigger: (() => void) | null = null;
   private animationFrameId: number | null = null;
   private backgroundTimerId: ReturnType<typeof setInterval> | null = null;
+  private timerWorker: Worker | null = null;
   private mixCheckEnabled: boolean = false;
   private mixTriggerMode: 'remaining' | 'elapsed' | 'manual' = 'remaining';
   private mixTriggerSeconds: number = 20;
@@ -85,6 +93,8 @@ class AudioEngine {
       trackGainDb: 0,
       scheduledStartAt: null,
       scheduledStartTimeoutId: null,
+      trackEndFired: false,
+      autoAdvanceCutoff: 0,
       tempoRamp: null,
     };
   }
@@ -417,6 +427,7 @@ class AudioEngine {
     const delayMs = Math.max(0, (safeWhen - this.audioContext.currentTime) * 1000);
     deckState.scheduledStartTimeoutId = window.setTimeout(() => {
       deckState.isPlaying = true;
+      deckState.trackEndFired = false;
       deckState.scheduledStartTimeoutId = null;
       deckState.scheduledStartAt = null;
     }, delayMs);
@@ -535,7 +546,9 @@ class AudioEngine {
         const time = this.getCurrentTime('A');
         this.onTimeUpdate?.('A', time);
         this.checkMixTrigger('A', time);
-        if (time >= this.decks.A.duration && this.decks.A.duration > 0) {
+        const endA = this.getAutoAdvanceTime('A');
+        if (!this.decks.A.trackEndFired && time >= endA && endA > 0) {
+          this.decks.A.trackEndFired = true;
           this.onTrackEnd?.('A');
         }
       }
@@ -543,7 +556,9 @@ class AudioEngine {
         const time = this.getCurrentTime('B');
         this.onTimeUpdate?.('B', time);
         this.checkMixTrigger('B', time);
-        if (time >= this.decks.B.duration && this.decks.B.duration > 0) {
+        const endB = this.getAutoAdvanceTime('B');
+        if (!this.decks.B.trackEndFired && time >= endB && endB > 0) {
+          this.decks.B.trackEndFired = true;
           this.onTrackEnd?.('B');
         }
       }
@@ -556,9 +571,18 @@ class AudioEngine {
     };
     this.animationFrameId = requestAnimationFrame(rafLoop);
 
-    // setInterval fallback so mix-trigger checks keep running in background tabs
-    // (requestAnimationFrame is paused by browsers when the tab is hidden)
+    // setInterval fallback (throttled to ~1s in background tabs on desktop)
     this.backgroundTimerId = setInterval(tickDecks, 250);
+
+    // Web Worker timer: NOT throttled by tab visibility, so mix-trigger checks
+    // keep running reliably even when the browser tab is hidden or on mobile.
+    try {
+      this.timerWorker = new TimerWorker();
+      this.timerWorker.onmessage = () => tickDecks();
+      this.timerWorker.postMessage({ command: 'start' });
+    } catch {
+      // Worker failed (e.g. CSP restrictions) — setInterval is the fallback.
+    }
   }
 
   private checkMixTrigger(deck: DeckId, currentTime: number): void {
@@ -668,6 +692,8 @@ class AudioEngine {
     this.decks[deck].audioBuffer = audioBuffer;
     this.decks[deck].duration = audioBuffer.duration;
     this.decks[deck].trueEndTime = null;
+    this.decks[deck].trackEndFired = false;
+    this.decks[deck].autoAdvanceCutoff = 0;
     this.decks[deck].currentTime = 0;
     this.decks[deck].pausedAt = 0;
     this.decks[deck].baseBpm = bpm || 120;
@@ -779,6 +805,7 @@ class AudioEngine {
     deckState.trackAtLastCtx = offset;
     deckState.lastCtx = this.audioContext.currentTime;
     deckState.isPlaying = true;
+    deckState.trackEndFired = false;
 
     // Handle track end
     source.onended = () => {
@@ -829,6 +856,8 @@ class AudioEngine {
     deckState.trackAtLastCtx = 0;
     deckState.lastCtx = 0;
     deckState.currentTime = 0;
+    deckState.trackEndFired = false;
+    deckState.autoAdvanceCutoff = 0;
     deckState.tempoRamp = null;
   }
 
@@ -844,6 +873,26 @@ class AudioEngine {
 
   getDuration(deck: DeckId): number {
     return this.decks[deck].duration;
+  }
+
+  getEffectiveEndTime(deck: DeckId): number {
+    const d = this.decks[deck];
+    return (typeof d.trueEndTime === 'number' && Number.isFinite(d.trueEndTime) && d.trueEndTime > 0)
+      ? d.trueEndTime
+      : d.duration;
+  }
+
+  /** Set the hard auto-advance cutoff for a deck (in seconds).
+   *  tickDecks will fire onTrackEnd when currentTime reaches this value. */
+  setAutoAdvanceCutoff(deck: DeckId, cutoff: number): void {
+    this.decks[deck].autoAdvanceCutoff = (Number.isFinite(cutoff) && cutoff > 0) ? cutoff : 0;
+  }
+
+  /** Get the time (seconds) at which this deck should auto-advance.
+   *  Returns autoAdvanceCutoff if set, else falls back to getEffectiveEndTime(). */
+  private getAutoAdvanceTime(deck: DeckId): number {
+    const cutoff = this.decks[deck].autoAdvanceCutoff;
+    return cutoff > 0 ? cutoff : this.getEffectiveEndTime(deck);
   }
 
   isPlaying(deck: DeckId): boolean {
@@ -1057,6 +1106,11 @@ class AudioEngine {
     if (this.backgroundTimerId !== null) {
       clearInterval(this.backgroundTimerId);
       this.backgroundTimerId = null;
+    }
+    if (this.timerWorker) {
+      this.timerWorker.postMessage({ command: 'stop' });
+      this.timerWorker.terminate();
+      this.timerWorker = null;
     }
     this.stop('A');
     this.stop('B');

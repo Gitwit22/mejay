@@ -45,8 +45,12 @@ export function NowPlaying() {
   const startPct = currentDeck.duration > 0 ? (startAt / currentDeck.duration) * 100 : 0;
 
   const endEarlySeconds = Math.max(0, Math.min(settings.endEarlySeconds ?? 0, 60));
+  // End marker stacks trueEndTime (silence trim) and endEarlySeconds (user setting)
+  const musicalEnd = (currentTrack?.trueEndTime && currentTrack.trueEndTime > 0)
+    ? Math.min(currentTrack.trueEndTime, currentDeck.duration)
+    : currentDeck.duration;
   const endAt = currentDeck.duration > 0
-    ? Math.max(0, Math.min(currentDeck.duration, currentDeck.duration - endEarlySeconds))
+    ? Math.max(0, musicalEnd - endEarlySeconds)
     : 0;
   const endPct = currentDeck.duration > 0 ? (endAt / currentDeck.duration) * 100 : 0;
 

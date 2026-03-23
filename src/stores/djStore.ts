@@ -583,6 +583,27 @@ export const useDJStore = create<DJState>()(
     return clamp(base, 0, Math.max(0, duration - 0.25));
   };
 
+  /** Compute the hard cutoff time (track-seconds) at which the deck should auto-advance.
+   *  Stacks trueEndTime (silence trim) and endEarlySeconds (user setting). */
+  const computeAutoAdvanceCutoff = (track: Track | undefined, settings: Settings | undefined): number => {
+    if (!track) return 0;
+    const duration = track.duration ?? 0;
+    if (!duration || !Number.isFinite(duration) || duration <= 0) return 0;
+    const musicalEnd = (typeof track.trueEndTime === 'number' && Number.isFinite(track.trueEndTime) && track.trueEndTime > 0)
+      ? track.trueEndTime
+      : duration;
+    const endEarly = clamp(settings?.endEarlySeconds ?? 0, 0, 60);
+    const cutoff = musicalEnd - endEarly;
+    // Ensure at least 1 second of playback
+    return Math.max(1, cutoff);
+  };
+
+  /** Set the autoAdvanceCutoff on the engine for a given deck based on its track + settings. */
+  const applyAutoAdvanceCutoff = (deck: DeckId, track: Track | undefined, settings: Settings | undefined) => {
+    const cutoff = computeAutoAdvanceCutoff(track, settings);
+    audioEngine.setAutoAdvanceCutoff(deck, cutoff);
+  };
+
   const getDeckState = (state: DJState, deck: DeckId) => (deck === 'A' ? state.deckA : state.deckB);
 
   const getDeckTrack = (state: DJState, deck: DeckId) => {
@@ -892,13 +913,13 @@ export const useDJStore = create<DJState>()(
 
     const outgoingDeck = state.activeDeck;
     const outgoingDeckState = getDeckState(state, outgoingDeck);
-    const durationTrack = audioEngine.getDuration(outgoingDeck) || outgoingDeckState.duration || 0;
+    const effectiveEndTrack = audioEngine.getEffectiveEndTime(outgoingDeck) || outgoingDeckState.duration || 0;
     const rate = Math.max(0.25, audioEngine.getTempo(outgoingDeck) || outgoingDeckState.playbackRate || 1);
 
     const wantedSecondsTrack = computeAutoMixTriggerSecondsTrack(state);
 
     // Ensure at least MIN_AUTOMIX_PLAY_WINDOW_REAL_SEC of real playback before auto-mix can trigger.
-    const maxSecondsTrack = Math.max(0, durationTrack - (MIN_AUTOMIX_PLAY_WINDOW_REAL_SEC * rate));
+    const maxSecondsTrack = Math.max(0, effectiveEndTrack - (MIN_AUTOMIX_PLAY_WINDOW_REAL_SEC * rate));
     const safeSecondsTrack = Math.max(0, Math.min(wantedSecondsTrack, maxSecondsTrack));
 
     audioEngine.setMixTriggerConfig('remaining', safeSecondsTrack);
@@ -1059,6 +1080,13 @@ export const useDJStore = create<DJState>()(
 
   audioEngine.setOnTrackEnd((deck) => {
     const state = get();
+    if (import.meta.env.DEV) {
+      const ct = audioEngine.getCurrentTime(deck);
+      const effEnd = audioEngine.getEffectiveEndTime(deck);
+      console.debug('[DJ] onTrackEnd deck=%s  currentTime=%.2f  musicalEnd=%.2f  endEarly=%s  cutoff=%s',
+        deck, ct, effEnd, state.settings.endEarlySeconds,
+        (effEnd - (state.settings.endEarlySeconds ?? 0)).toFixed(2));
+    }
     if (state.isPartyMode) {
       if (state.settings.repeatMode === 'track') {
         get().restartCurrentTrack({ deck, reason: 'repeat_end', silent: true });
@@ -1775,8 +1803,15 @@ export const useDJStore = create<DJState>()(
           // If this track is currently loaded on a deck, update the engine immediately.
           try {
             const sNow = get();
-            if (sNow.deckA.trackId === id) audioEngine.setTrueEndTime('A', updates.trueEndTime);
-            if (sNow.deckB.trackId === id) audioEngine.setTrueEndTime('B', updates.trueEndTime);
+            const updatedTrack = sNow.tracks.find(t => t.id === id);
+            if (sNow.deckA.trackId === id) {
+              audioEngine.setTrueEndTime('A', updates.trueEndTime);
+              applyAutoAdvanceCutoff('A', updatedTrack, sNow.settings);
+            }
+            if (sNow.deckB.trackId === id) {
+              audioEngine.setTrueEndTime('B', updates.trueEndTime);
+              applyAutoAdvanceCutoff('B', updatedTrack, sNow.settings);
+            }
           } catch {
             // ignore
           }
@@ -1946,6 +1981,7 @@ export const useDJStore = create<DJState>()(
       // Provide the analyzed “musical end” (if available) so automix avoids trailing silence.
       try {
         audioEngine.setTrueEndTime(deck, track.trueEndTime);
+        applyAutoAdvanceCutoff(deck, track, get().settings);
       } catch {
         // ignore
       }
@@ -2139,6 +2175,7 @@ export const useDJStore = create<DJState>()(
         // Provide the analyzed "musical end" so automix avoids trailing silence.
         try {
           audioEngine.setTrueEndTime(targetDeck, previousTrack.trueEndTime);
+          applyAutoAdvanceCutoff(targetDeck, previousTrack, state.settings);
         } catch {
           // ignore
         }
@@ -2208,6 +2245,7 @@ export const useDJStore = create<DJState>()(
         // Provide the analyzed "musical end" so automix avoids trailing silence.
         try {
           audioEngine.setTrueEndTime(prevDeck, previousTrack.trueEndTime);
+          applyAutoAdvanceCutoff(prevDeck, previousTrack, get().settings);
         } catch {
           // ignore
         }
@@ -2228,6 +2266,9 @@ export const useDJStore = create<DJState>()(
           audioEngine.scheduleCrossfade(effectiveCrossfadeSeconds, fadeAt);
 
           const stopAt = fadeAt + effectiveCrossfadeSeconds;
+          // Guard against onended firing from the scheduled stop — it's not a natural track end.
+          const stopGuardMs = Math.max(1000, (stopAt - (audioEngine.getAudioContextTime() ?? ctxNow)) * 1000 + 500);
+          audioEngine.ignoreEndedFor(targetDeck, stopGuardMs);
           audioEngine.scheduleStop(targetDeck, stopAt + 0.02);
 
           const now = audioEngine.getAudioContextTime() ?? ctxNow;
@@ -2422,7 +2463,7 @@ export const useDJStore = create<DJState>()(
       if (ctxNow === null) return;
 
       // DJ Logic timing
-      const startOffsetSeconds = isSelfBlend ? 0 : clamp(settings.nextSongStartOffset ?? 0, 0, 120);
+      const startOffsetSeconds = isSelfBlend ? 0 : getEffectiveStartTimeSec(nextTrack, settings);
       const endEarlySeconds = clamp(settings.endEarlySeconds ?? 0, 0, 60);
       const effectiveCrossfadeSeconds = clamp(settings.crossfadeSeconds ?? 8, 1, 20);
 
@@ -2436,9 +2477,11 @@ export const useDJStore = create<DJState>()(
       const isManualImmediate = reason === 'user' || reason === 'end' || reason === 'switch';
 
       // Use engine timing for scheduling math to avoid drift between store state and WebAudio.
-      const outgoingDurationTrack = audioEngine.getDuration(currentDeck) || currentDeckState.duration || 0;
+      // Use getEffectiveEndTime (trueEndTime if available) so crossfade aligns with the
+      // musical end rather than trailing silence at the end of the file.
+      const outgoingEffectiveEnd = audioEngine.getEffectiveEndTime(currentDeck) || currentDeckState.duration || 0;
       const outgoingTimeTrack = audioEngine.getCurrentTime(currentDeck) || currentDeckState.currentTime || 0;
-      const outgoingRemainingTrack = Math.max(0, outgoingDurationTrack - outgoingTimeTrack);
+      const outgoingRemainingTrack = Math.max(0, outgoingEffectiveEnd - outgoingTimeTrack);
       const outgoingRate = Math.max(0.25, audioEngine.getTempo(currentDeck) || currentDeckState.playbackRate || 1);
       const outgoingRemainingReal = outgoingRemainingTrack / outgoingRate;
       const outgoingEndCtx = ctxNow + outgoingRemainingReal;
@@ -2602,6 +2645,7 @@ export const useDJStore = create<DJState>()(
         // Provide the analyzed "musical end" so automix avoids trailing silence.
         try {
           audioEngine.setTrueEndTime(nextDeck, nextTrack.trueEndTime);
+          applyAutoAdvanceCutoff(nextDeck, nextTrack, get().settings);
         } catch {
           // ignore
         }
@@ -2725,6 +2769,9 @@ export const useDJStore = create<DJState>()(
         audioEngine.scheduleCrossfade(effectiveCrossfadeSeconds, fadeAt);
 
         const stopAt = fadeAt + effectiveCrossfadeSeconds;
+        // Guard against onended firing from the scheduled stop — it's not a natural track end.
+        const stopGuardMs = Math.max(1000, (stopAt - (audioEngine.getAudioContextTime() ?? ctxNow)) * 1000 + 500);
+        audioEngine.ignoreEndedFor(currentDeck, stopGuardMs);
         audioEngine.scheduleStop(currentDeck, stopAt + 0.02);
 
         const now = audioEngine.getAudioContextTime() ?? ctxNow;
@@ -2842,9 +2889,9 @@ export const useDJStore = create<DJState>()(
         return;
       }
       
-      // Apply Start Offset to the first track in Party Mode as well.
-      const startOffsetSeconds = clamp(get().settings.nextSongStartOffset ?? 0, 0, 120);
-      await get().loadTrackToDeck(firstTrackId, 'A', startOffsetSeconds);
+      // Apply Start Offset (and trueStartTime silence skip) to the first track in Party Mode.
+      const startAt = getEffectiveStartTimeSec(firstTrack, get().settings);
+      await get().loadTrackToDeck(firstTrackId, 'A', startAt);
 
       // If Auto Match is enabled but has no baseline yet (fresh installs / old settings),
       // capture it from what's currently playing (relative lock starting at 0).
@@ -3288,6 +3335,15 @@ export const useDJStore = create<DJState>()(
           // Re-evaluate immediately using the new threshold.
           armAutoMixTriggerForState(get());
         }
+      }
+
+      // When endEarlySeconds changes, recompute the auto-advance cutoff for all loaded decks.
+      if (updates.endEarlySeconds !== undefined && state.isPartyMode) {
+        const s = get();
+        const deckATrack = s.deckA.trackId ? s.tracks.find(t => t.id === s.deckA.trackId) : undefined;
+        const deckBTrack = s.deckB.trackId ? s.tracks.find(t => t.id === s.deckB.trackId) : undefined;
+        if (deckATrack) applyAutoAdvanceCutoff('A', deckATrack, s.settings);
+        if (deckBTrack) applyAutoAdvanceCutoff('B', deckBTrack, s.settings);
       }
 
       if (enablingRepeatTrack) {

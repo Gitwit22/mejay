@@ -1,15 +1,20 @@
-import { Upload, Music, Trash2, CheckCircle2 } from 'lucide-react';
+import { Upload, Music, Trash2, CheckCircle2, Play } from 'lucide-react';
 import { useState, useRef } from 'react';
 import { useDJStore } from '@/stores/djStore';
 import { cn, formatDuration } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
+import { useNavigate } from 'react-router-dom';
 
 export function ImportRoomView() {
+  const navigate = useNavigate();
   const {
     tracks,
     isLoadingTracks,
     importTracks,
     clearAllImports,
+    loadTrackToDeck,
+    deckA,
+    switchPartySourceSmooth,
   } = useDJStore();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [recentImportIds, setRecentImportIds] = useState<Set<string>>(new Set());
@@ -81,6 +86,17 @@ export function ImportRoomView() {
   };
 
   const recentTracks = tracks.filter(t => recentImportIds.has(t.id));
+  const playableRecentCount = recentTracks.filter(t => t.fileBlob && t.status === 'ready').length;
+
+  const handleTrackClick = async (trackId: string) => {
+    await loadTrackToDeck(trackId, 'A');
+  };
+
+  const handlePlayAll = async () => {
+    if (playableRecentCount === 0) return;
+    await switchPartySourceSmooth({ type: 'import' });
+    navigate('/app?tab=party');
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -139,18 +155,37 @@ export function ImportRoomView() {
         ) : recentTracks.length > 0 ? (
           <>
             {/* Recently imported */}
-            <div className="mb-2">
-              <h4 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
-                Recently Imported
-              </h4>
-              <p className="text-[11px] text-muted-foreground mb-3">
-                These tracks are now in your library. Go to <strong>My Music</strong> to browse, or <strong>Playlists</strong> to organize them.
-              </p>
+            <div className="mb-2 flex items-center justify-between">
+              <div>
+                <h4 className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+                  Recently Imported
+                </h4>
+                <p className="text-[11px] text-muted-foreground mb-3">
+                  Tap a track to preview it, or hit <strong>Play All</strong> to start Play Mode.
+                  Save tracks to a playlist before clearing.
+                </p>
+              </div>
+              {playableRecentCount > 0 && (
+                <button
+                  onClick={handlePlayAll}
+                  className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium bg-white/5 hover:bg-white/10 border border-white/10 transition-colors flex-shrink-0 ml-3"
+                  type="button"
+                >
+                  <Play className="w-3.5 h-3.5" />
+                  Play All
+                </button>
+              )}
             </div>
             {recentTracks.map((track) => (
               <div
                 key={track.id}
-                className="track-item group relative"
+                onClick={() => track.status === 'ready' ? handleTrackClick(track.id) : undefined}
+                className={cn(
+                  'track-item group relative',
+                  track.status === 'ready' && 'cursor-pointer',
+                  deckA.trackId === track.id && 'playing',
+                  track.status !== 'ready' && 'opacity-60 cursor-not-allowed'
+                )}
               >
                 <div className="album-art w-12 h-12 !rounded-lg flex-shrink-0">
                   <Music className="w-5 h-5 text-white/60" />

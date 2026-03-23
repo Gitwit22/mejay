@@ -11,13 +11,13 @@ describe('TabBar', () => {
     expect(screen.getByText('My Music')).toBeInTheDocument();
     expect(screen.getByText('Playlists')).toBeInTheDocument();
     expect(screen.getByText('Import')).toBeInTheDocument();
-    expect(screen.getByText('Live Room')).toBeInTheDocument();
+    expect(screen.getByText('Play Mode')).toBeInTheDocument();
   });
 
   it('should highlight the active tab', () => {
     render(<TabBar activeTab="party" onTabChange={mockOnTabChange} />);
     
-    const partyButton = screen.getByText('Live Room').closest('button');
+    const partyButton = screen.getByText('Play Mode').closest('button');
     expect(partyButton).toHaveClass('text-primary');
   });
 
@@ -34,7 +34,7 @@ describe('TabBar', () => {
   it('should call onTabChange with correct tab id when clicked', () => {
     render(<TabBar activeTab="library" onTabChange={mockOnTabChange} />);
     
-    const partyButton = screen.getByText('Live Room');
+    const partyButton = screen.getByText('Play Mode');
     fireEvent.click(partyButton);
     
     expect(mockOnTabChange).toHaveBeenCalledWith('party');
@@ -55,7 +55,7 @@ describe('TabBar', () => {
     expect(mockOnTabChange).toHaveBeenCalledWith('import');
     
     mockOnTabChange.mockClear();
-    fireEvent.click(screen.getByText('Live Room'));
+    fireEvent.click(screen.getByText('Play Mode'));
     expect(mockOnTabChange).toHaveBeenCalledWith('party');
   });
 

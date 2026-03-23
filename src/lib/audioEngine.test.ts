@@ -15,12 +15,12 @@ describe('AudioEngine background timer', () => {
     vi.restoreAllMocks()
   })
 
-  it('backgroundIntervalId defaults to null before initialization', async () => {
-    // The singleton is created at module load time; backgroundIntervalId
+  it('backgroundTimerId defaults to null before initialization', async () => {
+    // The singleton is created at module load time; backgroundTimerId
     // starts as null and only gets a value after initialize() is called.
     const { audioEngine } = await import('./audioEngine')
     // Before initialize(), the field should exist and be null.
-    expect((audioEngine as any).backgroundIntervalId).toSatisfy(
+    expect((audioEngine as any).backgroundTimerId).toSatisfy(
       (v: unknown) => v === null || typeof v === 'number',
     )
   })
@@ -30,12 +30,12 @@ describe('AudioEngine background timer', () => {
     const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval')
 
     // Manually set a fake interval ID to simulate initialized state
-    ;(audioEngine as any).backgroundIntervalId = 12345
+    ;(audioEngine as any).backgroundTimerId = 12345
 
     audioEngine.destroy()
 
     // Verify clearInterval was called with the interval ID
     expect(clearIntervalSpy).toHaveBeenCalledWith(12345)
-    expect((audioEngine as any).backgroundIntervalId).toBeNull()
+    expect((audioEngine as any).backgroundTimerId).toBeNull()
   })
 })

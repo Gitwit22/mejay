@@ -59,7 +59,7 @@ export function PartyModeView() {
       {/* Header (always visible) */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3 flex-shrink-0">
         <div>
-          <h2 className="text-[22px] sm:text-[24px] font-bold text-gradient-accent">Live Room</h2>
+          <h2 className="text-[22px] sm:text-[24px] font-bold text-gradient-accent">Play Mode</h2>
           {isPartyMode && partySource && (
             <div className="flex items-center gap-1.5 mt-1">
               {partySource.type === 'import' ? (
@@ -141,7 +141,7 @@ export function PartyModeView() {
                           if (!id) {
                             toast({
                               title: 'Could not save playlist',
-                              description: 'Enter a name and make sure the Live Room has tracks.',
+                              description: 'Enter a name and make sure Play Mode has tracks.',
                               variant: 'destructive',
                             });
                             return;

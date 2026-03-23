@@ -12,7 +12,7 @@ const tabs: { id: TabId; label: string; icon: typeof Music }[] = [
   { id: 'library', label: 'My Music', icon: Music },
   { id: 'playlists', label: 'Playlists', icon: ListMusic },
   { id: 'import', label: 'Import', icon: Upload },
-  { id: 'party', label: 'Live Room', icon: Play },
+  { id: 'party', label: 'Play Mode', icon: Play },
 ];
 
 export function TabBar({ activeTab, onTabChange }: TabBarProps) {
