@@ -1,9 +1,10 @@
-import { Plus, ListMusic, Trash2, Music, Play, Edit2, ArrowUpDown, GripVertical, Shield } from 'lucide-react';
-import { useState, useCallback, useMemo } from 'react';
+import { Plus, ListMusic, Trash2, Music, Play, Edit2, ArrowUpDown, GripVertical, Shield, Upload, Check } from 'lucide-react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import { useDJStore } from '@/stores/djStore';
 import { cn, formatDuration } from '@/lib/utils';
 import { useNavigate } from 'react-router-dom';
 import { Track } from '@/lib/db';
+import { toast } from '@/hooks/use-toast';
 
 // Playlist Track List Component with drag reordering
 function PlaylistTrackList({ 
@@ -96,11 +97,13 @@ function PlaylistTrackList({
 
 export function PlaylistsView() {
   const navigate = useNavigate();
-  const { playlists, tracks, createPlaylist, deletePlaylistById, startPartyMode, removeFromPlaylist, clearPlaylistTracks } = useDJStore();
+  const { playlists, tracks, createPlaylist, deletePlaylistById, startPartyMode, removeFromPlaylist, clearPlaylistTracks, importTracks, addTrackToPlaylist } = useDJStore();
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [selectedPlaylist, setSelectedPlaylist] = useState<string | null>(null);
   const [isReordering, setIsReordering] = useState(false);
+  const [recentImportIds, setRecentImportIds] = useState<Set<string>>(new Set());
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleCreate = async () => {
     if (newPlaylistName.trim()) {
@@ -122,6 +125,68 @@ export function PlaylistsView() {
     await startPartyMode({ type: 'playlist', playlistId });
     navigate('/app?tab=party');
   };
+
+  const handleImportForPlaylist = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0 || !selectedPlaylist) return;
+
+    const audioExtRe = /\.(mp3|wav|m4a|aac|flac|ogg)$/i;
+    const invalid = Array.from(files).find((f) => {
+      const type = (f.type || '').toLowerCase();
+      return !(type.startsWith('audio/') || audioExtRe.test(f.name));
+    });
+    if (invalid) {
+      toast({ title: 'Audio files only', description: 'Please select an audio file (mp3, wav, m4a, etc.).', variant: 'destructive' });
+      e.target.value = '';
+      return;
+    }
+
+    const beforeIds = new Set(useDJStore.getState().tracks.map(t => t.id));
+    try {
+      await importTracks(files);
+      const afterTracks = useDJStore.getState().tracks;
+      const newIds = new Set<string>();
+      for (const t of afterTracks) {
+        if (!beforeIds.has(t.id)) newIds.add(t.id);
+      }
+      setRecentImportIds(prev => {
+        const merged = new Set(prev);
+        for (const id of newIds) merged.add(id);
+        return merged;
+      });
+      if (newIds.size > 0) {
+        toast({ title: 'Import complete', description: `${newIds.size} track${newIds.size !== 1 ? 's' : ''} imported. Tap + to add to this playlist.` });
+      }
+    } catch {
+      toast({ title: 'Import failed', description: 'Something went wrong. Try again.', variant: 'destructive' });
+    }
+    e.target.value = '';
+  };
+
+  const handleQuickAdd = async (trackId: string) => {
+    if (!selectedPlaylist) return;
+    await addTrackToPlaylist(selectedPlaylist, trackId);
+    const playlist = playlists.find(p => p.id === selectedPlaylist);
+    toast({ title: 'Added to playlist', description: `Track added to "${playlist?.name}"` });
+  };
+
+  const handleAddAllImported = async () => {
+    if (!selectedPlaylist) return;
+    const playlist = playlists.find(p => p.id === selectedPlaylist);
+    if (!playlist) return;
+    let addedCount = 0;
+    for (const track of recentlyImportedTracks) {
+      if (track.status === 'ready' && !playlist.trackIds.includes(track.id)) {
+        await addTrackToPlaylist(selectedPlaylist, track.id);
+        addedCount++;
+      }
+    }
+    if (addedCount > 0) {
+      toast({ title: 'Added to playlist', description: `${addedCount} track${addedCount !== 1 ? 's' : ''} added to "${playlist.name}"` });
+    }
+  };
+
+  const recentlyImportedTracks = tracks.filter(t => recentImportIds.has(t.id));
 
   const selectedPlaylistData = playlists.find(p => p.id === selectedPlaylist);
   // Include all known tracks for the playlist (both ready and missing) so the UI
@@ -203,14 +268,85 @@ export function PlaylistsView() {
           </button>
         </div>
 
+        {/* Import Button for Playlist */}
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className="flex items-center justify-center gap-2.5 w-full py-3 text-[13px] rounded-xl border border-primary/40 text-primary bg-primary/10 hover:bg-primary/15 transition-colors mb-4"
+        >
+          <Upload className="w-4 h-4" />
+          Import Songs to Add
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="audio/*,application/octet-stream,.mp3,.wav,.m4a,.aac,.flac,.ogg"
+          multiple
+          onChange={handleImportForPlaylist}
+          className="sr-only"
+        />
+
+        {/* Recently Imported Section */}
+        {recentlyImportedTracks.length > 0 && (
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-xs text-muted-foreground uppercase tracking-wider">Recently Imported — Tap + to add</h4>
+              {(() => {
+                const notYetAdded = recentlyImportedTracks.filter(t => t.status === 'ready' && !selectedPlaylistData?.trackIds.includes(t.id));
+                return notYetAdded.length > 0 ? (
+                  <button
+                    onClick={handleAddAllImported}
+                    className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-medium btn-primary-gradient"
+                    type="button"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Add All ({notYetAdded.length})
+                  </button>
+                ) : null;
+              })()}
+            </div>
+            <div className="flex flex-col gap-1.5">
+              {recentlyImportedTracks.map((track) => {
+                const alreadyInPlaylist = selectedPlaylistData?.trackIds.includes(track.id);
+                return (
+                  <div key={track.id} className="track-item group">
+                    <div className="album-art w-10 h-10 !rounded-lg flex-shrink-0">
+                      <Music className="w-4 h-4 text-white/60" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h5 className="text-sm font-medium truncate">{track.displayName}</h5>
+                      <p className="text-xs text-muted-foreground flex items-center gap-2">
+                        <span>{formatDuration(track.duration)}</span>
+                        {track.bpm ? <span>{Math.round(track.bpm)} BPM</span> : null}
+                      </p>
+                    </div>
+                    {alreadyInPlaylist ? (
+                      <span className="p-2 text-primary"><Check className="w-4 h-4" /></span>
+                    ) : (
+                      <button
+                        onClick={() => handleQuickAdd(track.id)}
+                        disabled={track.status !== 'ready'}
+                        className="p-2 rounded-lg bg-primary/20 hover:bg-primary/30 transition-colors disabled:opacity-40"
+                        title="Add to this playlist"
+                      >
+                        <Plus className="w-4 h-4 text-primary" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Track List */}
         <div className="flex flex-col gap-2 flex-1 overflow-y-auto pb-[calc(84px+env(safe-area-inset-bottom,0)+24px)]">
-          {playlistTracks.length === 0 ? (
+          {playlistTracks.length === 0 && recentlyImportedTracks.length === 0 ? (
             <div className="text-center py-10">
               <Music className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
               <h4 className="text-lg font-semibold mb-2">Empty Playlist</h4>
               <p className="text-sm text-muted-foreground">
-                Add tracks from <strong>My Music</strong> using the ⋯ menu on each track.
+                Import songs above or add tracks from <strong>My Music</strong> using the ⋯ menu.
               </p>
             </div>
           ) : (
@@ -304,7 +440,7 @@ export function PlaylistsView() {
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  setSelectedPlaylist(playlist.id);
+                  navigate(`/app/playlist/${playlist.id}/edit`);
                 }}
                 className="p-2 rounded-lg bg-background/80 hover:bg-white/20 transition-colors"
                 title="Edit"

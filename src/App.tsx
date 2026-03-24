@@ -24,6 +24,7 @@ import TermsPage from "./app/pages/TermsPage";
 import ContactPage from "./app/pages/ContactPage";
 import PrivacyPage from "./app/pages/PrivacyPage";
 import DevAdminPage from "./app/pages/DevAdminPage";
+import PlaylistEditorPage from "./pages/PlaylistEditorPage";
 
 const queryClient = new QueryClient();
 
@@ -540,6 +541,7 @@ const AnimatedRoutes = () => {
             <Route path="privacy" element={<PrivacyPage mode="app" />} />
             <Route path="contact" element={<ContactPage mode="app" />} />
           </Route>
+          <Route path="playlist/:playlistId/edit" element={<PlaylistEditorPage />} />
           {/* Dev-only admin page */}
           {import.meta.env.DEV && <Route path="dev-admin" element={<DevAdminPage />} />}
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}

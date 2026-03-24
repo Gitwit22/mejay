@@ -1,4 +1,4 @@
-import { Search, Music, MoreVertical, ListPlus, Check, Plus, X, Play, Shield } from 'lucide-react';
+import { Search, Music, MoreVertical, ListPlus, Check, Plus, X, Play, Shield, CheckSquare, Square } from 'lucide-react';
 import { useState } from 'react';
 import { useDJStore } from '@/stores/djStore';
 import { cn, formatDuration } from '@/lib/utils';
@@ -28,6 +28,10 @@ export function LibraryView() {
   const [showAddToPlaylist, setShowAddToPlaylist] = useState<string | null>(null);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [playlistSearchQuery, setPlaylistSearchQuery] = useState('');
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedTrackIds, setSelectedTrackIds] = useState<Set<string>>(new Set());
+  // When true, the modal adds multiple selected tracks instead of a single one
+  const [showAddSelectedToPlaylist, setShowAddSelectedToPlaylist] = useState(false);
 
   // Count only tracks that are "ready" (have a fileBlob and status === "ready")
   const playableTracks = tracks.filter(t => t.fileBlob && t.status === 'ready');
@@ -41,7 +45,45 @@ export function LibraryView() {
     p.name.toLowerCase().includes(playlistSearchQuery.toLowerCase())
   );
 
+  const toggleTrackSelection = (trackId: string) => {
+    setSelectedTrackIds(prev => {
+      const next = new Set(prev);
+      if (next.has(trackId)) next.delete(trackId);
+      else next.add(trackId);
+      return next;
+    });
+  };
+
+  const selectAllFiltered = () => {
+    const allFilteredIds = new Set(filteredTracks.map(t => t.id));
+    const allSelected = filteredTracks.every(t => selectedTrackIds.has(t.id));
+    if (allSelected) {
+      // Deselect all filtered
+      setSelectedTrackIds(prev => {
+        const next = new Set(prev);
+        for (const id of allFilteredIds) next.delete(id);
+        return next;
+      });
+    } else {
+      // Select all filtered
+      setSelectedTrackIds(prev => {
+        const next = new Set(prev);
+        for (const id of allFilteredIds) next.add(id);
+        return next;
+      });
+    }
+  };
+
+  const exitSelectMode = () => {
+    setIsSelectMode(false);
+    setSelectedTrackIds(new Set());
+  };
+
   const handleTrackClick = async (trackId: string) => {
+    if (isSelectMode) {
+      toggleTrackSelection(trackId);
+      return;
+    }
     await loadTrackToDeck(trackId, 'A');
   };
 
@@ -55,20 +97,53 @@ export function LibraryView() {
     setShowAddToPlaylist(null);
   };
 
+  const handleAddSelectedToPlaylist = async (playlistId: string) => {
+    const playlist = playlists.find(p => p.id === playlistId);
+    if (!playlist) return;
+    let addedCount = 0;
+    for (const trackId of selectedTrackIds) {
+      if (!playlist.trackIds.includes(trackId)) {
+        await addTrackToPlaylist(playlistId, trackId);
+        addedCount++;
+      }
+    }
+    toast({
+      title: 'Added to playlist',
+      description: `${addedCount} track${addedCount !== 1 ? 's' : ''} added to "${playlist.name}"`,
+    });
+    setShowAddSelectedToPlaylist(false);
+    exitSelectMode();
+  };
+
   const handleCreateAndAdd = async (trackId: string) => {
     if (!newPlaylistName.trim()) return;
     await createPlaylist(newPlaylistName.trim());
-    // Find the newly created playlist
     const newPlaylist = useDJStore.getState().playlists.find(p => p.name === newPlaylistName.trim());
     if (newPlaylist) {
-      await addTrackToPlaylist(newPlaylist.id, trackId);
-      toast({
-        title: 'Created & added',
-        description: `Track added to "${newPlaylistName.trim()}"`,
-      });
+      if (showAddSelectedToPlaylist) {
+        let addedCount = 0;
+        for (const id of selectedTrackIds) {
+          if (!newPlaylist.trackIds.includes(id)) {
+            await addTrackToPlaylist(newPlaylist.id, id);
+            addedCount++;
+          }
+        }
+        toast({
+          title: 'Created & added',
+          description: `${addedCount} track${addedCount !== 1 ? 's' : ''} added to "${newPlaylistName.trim()}"`,
+        });
+        setShowAddSelectedToPlaylist(false);
+        exitSelectMode();
+      } else {
+        await addTrackToPlaylist(newPlaylist.id, trackId);
+        toast({
+          title: 'Created & added',
+          description: `Track added to "${newPlaylistName.trim()}"`,
+        });
+        setShowAddToPlaylist(null);
+      }
     }
     setNewPlaylistName('');
-    setShowAddToPlaylist(null);
   };
 
   const handlePlayAll = async () => {
@@ -84,6 +159,10 @@ export function LibraryView() {
     navigate('/app?tab=party');
   };
 
+  // Determine which track IDs to use for the modal
+  const modalTrackIds = showAddSelectedToPlaylist ? selectedTrackIds : (showAddToPlaylist ? new Set([showAddToPlaylist]) : new Set<string>());
+  const isModalOpen = showAddToPlaylist !== null || showAddSelectedToPlaylist;
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -93,22 +172,74 @@ export function LibraryView() {
           <h2 className="text-[28px] font-bold text-gradient-accent">My Music</h2>
         </div>
 
-        <button
-          onClick={handlePlayAll}
-          disabled={playableCount === 0}
-          className={cn(
-            'mt-1 inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors',
-            playableCount > 0
-              ? 'bg-white/5 hover:bg-white/10 border border-white/10'
-              : 'bg-white/5 border border-white/10 opacity-50 cursor-not-allowed'
+        <div className="flex items-center gap-2 mt-1">
+          {!isSelectMode && tracks.length > 0 && (
+            <button
+              onClick={() => setIsSelectMode(true)}
+              className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium bg-white/5 hover:bg-white/10 border border-white/10 transition-colors"
+              title="Select multiple tracks"
+              type="button"
+            >
+              <CheckSquare className="w-4 h-4" />
+              Select
+            </button>
           )}
-          title={playableCount > 0 ? 'Play all tracks in Play Mode' : 'Import music first from the Import tab'}
-          type="button"
-        >
-          <Play className="w-4 h-4" />
-          Play All
-        </button>
+          {isSelectMode && (
+            <button
+              onClick={exitSelectMode}
+              className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium bg-white/5 hover:bg-white/10 border border-white/10 transition-colors"
+              type="button"
+            >
+              <X className="w-4 h-4" />
+              Cancel
+            </button>
+          )}
+          <button
+            onClick={handlePlayAll}
+            disabled={playableCount === 0}
+            className={cn(
+              'inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors',
+              playableCount > 0
+                ? 'bg-white/5 hover:bg-white/10 border border-white/10'
+                : 'bg-white/5 border border-white/10 opacity-50 cursor-not-allowed'
+            )}
+            title={playableCount > 0 ? 'Play all tracks in Play Mode' : 'Import music first from the Import tab'}
+            type="button"
+          >
+            <Play className="w-4 h-4" />
+            Play All
+          </button>
+        </div>
       </div>
+
+      {/* Selection Action Bar */}
+      {isSelectMode && (
+        <div className="flex items-center gap-3 mb-4 p-3 rounded-xl bg-primary/10 border border-primary/30">
+          <button
+            onClick={selectAllFiltered}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+            type="button"
+          >
+            {filteredTracks.length > 0 && filteredTracks.every(t => selectedTrackIds.has(t.id)) ? (
+              <><CheckSquare className="w-3.5 h-3.5" /> Deselect All</>
+            ) : (
+              <><Square className="w-3.5 h-3.5" /> Select All</>
+            )}
+          </button>
+          <span className="text-xs text-muted-foreground flex-1">
+            {selectedTrackIds.size} track{selectedTrackIds.size !== 1 ? 's' : ''} selected
+          </span>
+          <button
+            onClick={() => setShowAddSelectedToPlaylist(true)}
+            disabled={selectedTrackIds.size === 0}
+            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium btn-primary-gradient disabled:opacity-40"
+            type="button"
+          >
+            <ListPlus className="w-4 h-4" />
+            Add to Playlist
+          </button>
+        </div>
+      )}
 
       {/* Search Bar */}
       <div className="flex items-center gap-3 glass-card !p-3 !rounded-xl mb-4">
@@ -146,10 +277,22 @@ export function LibraryView() {
               onClick={() => track.status === 'ready' ? handleTrackClick(track.id) : undefined}
               className={cn(
                 'track-item group relative',
-                deckA.trackId === track.id && 'playing',
-                track.status !== 'ready' && 'opacity-50 cursor-not-allowed'
+                deckA.trackId === track.id && !isSelectMode && 'playing',
+                track.status !== 'ready' && 'opacity-50 cursor-not-allowed',
+                isSelectMode && 'cursor-pointer',
+                isSelectMode && selectedTrackIds.has(track.id) && 'bg-primary/10 border-primary/30'
               )}
             >
+              {/* Selection checkbox */}
+              {isSelectMode && (
+                <div className="flex-shrink-0">
+                  {selectedTrackIds.has(track.id) ? (
+                    <CheckSquare className="w-5 h-5 text-primary" />
+                  ) : (
+                    <Square className="w-5 h-5 text-muted-foreground" />
+                  )}
+                </div>
+              )}
               {/* Album Art Placeholder */}
               <div className="album-art w-12 h-12 !rounded-lg flex-shrink-0">
                 <Music className="w-5 h-5 text-white/60" />
@@ -187,8 +330,8 @@ export function LibraryView() {
                   </div>
                 ) : null}
                 
-                {/* 3-dot menu */}
-                <DropdownMenu>
+                {/* 3-dot menu (hidden in select mode) */}
+                {!isSelectMode && (
                   <DropdownMenuTrigger asChild>
                     <button
                       onClick={(e) => e.stopPropagation()}
@@ -218,18 +361,20 @@ export function LibraryView() {
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
+                )}
               </div>
             </div>
           ))
         )}
       </div>
 
-      {/* Add to Playlist Modal */}
-      {showAddToPlaylist && (
+      {/* Add to Playlist Modal (single or multi-track) */}
+      {isModalOpen && (
         <div 
           className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50"
           onClick={() => {
             setShowAddToPlaylist(null);
+            setShowAddSelectedToPlaylist(false);
           }}
         >
           <div 
@@ -237,10 +382,15 @@ export function LibraryView() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold">Add to Playlist</h3>
+              <h3 className="text-lg font-bold">
+                {showAddSelectedToPlaylist
+                  ? `Add ${selectedTrackIds.size} Track${selectedTrackIds.size !== 1 ? 's' : ''} to Playlist`
+                  : 'Add to Playlist'}
+              </h3>
               <button
                 onClick={() => {
                   setShowAddToPlaylist(null);
+                  setShowAddSelectedToPlaylist(false);
                 }}
                 className="p-1 rounded-lg hover:bg-white/10"
               >
@@ -272,15 +422,22 @@ export function LibraryView() {
                 </p>
               ) : (
                 filteredPlaylists.map((playlist) => {
-                  const isAlreadyIn = playlist.trackIds.includes(showAddToPlaylist);
+                  const allAlreadyIn = [...modalTrackIds].every(id => playlist.trackIds.includes(id));
                   return (
                     <button
                       key={playlist.id}
-                      onClick={() => !isAlreadyIn && handleAddToPlaylist(playlist.id, showAddToPlaylist)}
-                      disabled={isAlreadyIn}
+                      onClick={() => {
+                        if (allAlreadyIn) return;
+                        if (showAddSelectedToPlaylist) {
+                          handleAddSelectedToPlaylist(playlist.id);
+                        } else if (showAddToPlaylist) {
+                          handleAddToPlaylist(playlist.id, showAddToPlaylist);
+                        }
+                      }}
+                      disabled={allAlreadyIn}
                       className={cn(
                         'w-full flex items-center gap-3 p-3 rounded-lg transition-colors text-left',
-                        isAlreadyIn 
+                        allAlreadyIn 
                           ? 'bg-white/5 opacity-50 cursor-not-allowed' 
                           : 'hover:bg-white/10'
                       )}
@@ -292,7 +449,7 @@ export function LibraryView() {
                         <p className="text-sm font-medium truncate">{playlist.name}</p>
                         <p className="text-xs text-muted-foreground">{playlist.trackIds.length} tracks</p>
                       </div>
-                      {isAlreadyIn && (
+                      {allAlreadyIn && (
                         <Check className="w-4 h-4 text-primary" />
                       )}
                     </button>
@@ -313,7 +470,7 @@ export function LibraryView() {
                   className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
                 />
                 <button
-                  onClick={() => handleCreateAndAdd(showAddToPlaylist)}
+                  onClick={() => handleCreateAndAdd(showAddToPlaylist ?? '')}
                   disabled={!newPlaylistName.trim()}
                   className="btn-primary-gradient px-4 py-2 text-sm disabled:opacity-50"
                 >

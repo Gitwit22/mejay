@@ -167,6 +167,7 @@ interface DJState {
   clearPlaylistTracks: (playlistId: string) => Promise<void>;
   reorderPlaylistTracks: (playlistId: string, fromIndex: number, toIndex: number) => Promise<void>;
   deletePlaylistById: (id: string) => Promise<void>;
+  updatePlaylistDetails: (playlistId: string, updates: { name?: string; trackIds?: string[] }) => Promise<void>;
 
   // --- Track registry helpers ---
   /** Mark a track as missing (no resolvable file). */
@@ -3466,6 +3467,20 @@ export const useDJStore = create<DJState>()(
     deletePlaylistById: async (id: string) => {
       await deletePlaylist(id);
       set(state => ({ playlists: state.playlists.filter(p => p.id !== id) }));
+    },
+
+    updatePlaylistDetails: async (playlistId: string, updates: { name?: string; trackIds?: string[] }) => {
+      const playlist = get().playlists.find(p => p.id === playlistId);
+      if (!playlist) return;
+      const dbUpdates: Partial<import('@/lib/db').Playlist> = {};
+      if (updates.name !== undefined) dbUpdates.name = updates.name;
+      if (updates.trackIds !== undefined) dbUpdates.trackIds = updates.trackIds;
+      await updatePlaylist(playlistId, dbUpdates);
+      set(state => ({
+        playlists: state.playlists.map(p =>
+          p.id === playlistId ? { ...p, ...dbUpdates, updatedAt: Date.now() } : p,
+        ),
+      }));
     },
 
     // --- Track registry helper implementations ---
