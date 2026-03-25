@@ -332,7 +332,7 @@ export function LibraryView() {
                 
                 {/* 3-dot menu (hidden in select mode) */}
                 {!isSelectMode && (
-                  <>
+                  <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <button
                         onClick={(e) => e.stopPropagation()}
@@ -361,9 +361,8 @@ export function LibraryView() {
                         </span>
                       </DropdownMenuItem>
                     </DropdownMenuContent>
-                  </>
+                  </DropdownMenu>
                 )}
-                </DropdownMenu>
               </div>
             </div>
           ))
