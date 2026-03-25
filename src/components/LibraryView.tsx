@@ -332,36 +332,38 @@ export function LibraryView() {
                 
                 {/* 3-dot menu (hidden in select mode) */}
                 {!isSelectMode && (
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      onClick={(e) => e.stopPropagation()}
-                      className="p-2 rounded-lg transition-opacity hover:bg-white/10"
-                      aria-label="Track actions"
-                    >
-                      <MoreVertical className="w-4 h-4 text-muted-foreground" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-                    <DropdownMenuItem onSelect={() => setShowAddToPlaylist(track.id)}>
-                      <span className="flex items-center gap-2">
-                        <ListPlus className="w-4 h-4" />
-                        Add to Playlist...
-                      </span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      className="text-destructive focus:text-destructive"
-                      onSelect={() => {
-                        removeFromLibrary(track.id);
-                      }}
-                    >
-                      <span className="flex items-center gap-2">
-                        <X className="w-4 h-4" />
-                        Delete
-                      </span>
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                  <>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        onClick={(e) => e.stopPropagation()}
+                        className="p-2 rounded-lg transition-opacity hover:bg-white/10"
+                        aria-label="Track actions"
+                      >
+                        <MoreVertical className="w-4 h-4 text-muted-foreground" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                      <DropdownMenuItem onSelect={() => setShowAddToPlaylist(track.id)}>
+                        <span className="flex items-center gap-2">
+                          <ListPlus className="w-4 h-4" />
+                          Add to Playlist...
+                        </span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onSelect={() => {
+                          removeFromLibrary(track.id);
+                        }}
+                      >
+                        <span className="flex items-center gap-2">
+                          <X className="w-4 h-4" />
+                          Delete
+                        </span>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </>
                 )}
+                </DropdownMenu>
               </div>
             </div>
           ))
