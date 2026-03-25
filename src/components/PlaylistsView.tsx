@@ -405,7 +405,7 @@ export function PlaylistsView() {
           >
             {/* Cover Art Grid */}
             <div 
-              onClick={() => setSelectedPlaylist(playlist.id)}
+              onClick={() => handlePlayPlaylist(playlist.id)}
               className="aspect-square rounded-lg mb-2 grid grid-cols-2 grid-rows-2 gap-0.5 overflow-hidden cursor-pointer"
             >
               <div className="bg-gradient-to-br from-primary to-secondary" />
