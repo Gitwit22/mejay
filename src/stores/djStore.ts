@@ -57,6 +57,7 @@ interface DJState {
 
   // Internal guard to prevent overlapping mixes
   mixInProgress: boolean;
+  _mixInProgressSince: number | null;
 
   // UI hint when tempo matching is disabled for a transition.
   lastTransitionTempoMatchDisabled: boolean;
@@ -550,6 +551,7 @@ export const useDJStore = create<DJState>()(
 
     set({
       mixInProgress: false,
+      _mixInProgressSince: null,
       pendingNextIndex: null,
       nowPlayingIndex: index,
       activeDeck: 'A',
@@ -653,6 +655,7 @@ export const useDJStore = create<DJState>()(
       pendingSourceSwitch: null,
       queuedSourceSwitch: null,
       mixInProgress: opts?.mixInProgress ?? false,
+      _mixInProgressSince: (opts?.mixInProgress) ? Date.now() : null,
     });
 
     // Re-anchor crossfade to whichever deck we believe is active.
@@ -1142,6 +1145,7 @@ export const useDJStore = create<DJState>()(
     settings: defaultSettings,
     crossfadeValue: 0,
     mixInProgress: false,
+    _mixInProgressSince: null,
     lastTransitionTempoMatchDisabled: false,
     lastTransitionTempoMatchRequiredPct: null,
     lastTransitionTempoMatchCeilingPct: null,
@@ -1465,6 +1469,7 @@ export const useDJStore = create<DJState>()(
         queuedSourceSwitch: null,
         crossfadeValue: 0,
         mixInProgress: false,
+        _mixInProgressSince: null,
         lastTempoDebug: null,
         settings: defaultSettings,
       });
@@ -1512,6 +1517,7 @@ export const useDJStore = create<DJState>()(
         queuedSourceSwitch: null,
         crossfadeValue: 0,
         mixInProgress: false,
+        _mixInProgressSince: null,
       });
 
       toast({
@@ -2034,11 +2040,21 @@ export const useDJStore = create<DJState>()(
     },
 
     togglePlayPause: (deck?: DeckId) => {
-      const targetDeck = deck || get().activeDeck;
-      const deckState = targetDeck === 'A' ? get().deckA : get().deckB;
+      const state = get();
+      const targetDeck = deck || state.activeDeck;
+      const deckState = targetDeck === 'A' ? state.deckA : state.deckB;
       
       if (deckState.isPlaying) {
         get().pause(targetDeck);
+      } else if (!deckState.trackId && state.isPartyMode && state.partyTrackIds.length > 0) {
+        // Deck is empty but party mode has tracks — load the current track and play
+        const trackId = state.partyTrackIds[state.nowPlayingIndex];
+        const track = state.tracks.find(t => t.id === trackId);
+        if (track?.fileBlob && track.status === 'ready') {
+          get().loadTrackToDeck(trackId, targetDeck).then(() => {
+            get().play(targetDeck);
+          });
+        }
       } else {
         get().play(targetDeck);
       }
@@ -2229,7 +2245,7 @@ export const useDJStore = create<DJState>()(
       const effectiveCrossfadeSeconds = clamp(state.settings.crossfadeSeconds ?? 8, 1, 20);
       const gainDbPromise = ensureGainDbForTrack(previousTrack, state.settings);
 
-      set({ mixInProgress: true });
+      set({ mixInProgress: true, _mixInProgressSince: Date.now() });
 
       audioEngine.loadTrackWithOffset(
         prevDeck,
@@ -2294,6 +2310,7 @@ export const useDJStore = create<DJState>()(
               pendingSourceSwitch: null,
               queuedSourceSwitch: null,
               mixInProgress: false,
+              _mixInProgressSince: null,
               crossfadeValue: prevDeck === 'A' ? 0 : 1,
               playHistoryTrackIds: nextHistory,
             }));
@@ -2350,7 +2367,15 @@ export const useDJStore = create<DJState>()(
       const { partyTrackIds, nowPlayingIndex, pendingNextIndex, settings, activeDeck, tracks } = state;
       
       if (!state.isPartyMode || partyTrackIds.length === 0) return;
-      if (state.mixInProgress) return;
+      if (state.mixInProgress) {
+        // Safety: auto-reset if mixInProgress has been stuck for over 15 seconds
+        if (state._mixInProgressSince && Date.now() - state._mixInProgressSince > 15000) {
+          console.warn('[DJ Store] mixInProgress stuck for >15s, force-resetting');
+          cancelPendingTransition({ mixInProgress: false, reason: 'stuck_safety_reset' });
+        } else {
+          return;
+        }
+      }
 
       // Hard guard: Repeat Track mode should never auto-mix or auto-advance.
       if (settings.repeatMode === 'track' && (reason === 'auto' || reason === 'end')) {
@@ -2628,7 +2653,7 @@ export const useDJStore = create<DJState>()(
         }));
       }
 
-      set({ mixInProgress: true });
+      set({ mixInProgress: true, _mixInProgressSince: Date.now() });
 
       // Load next track with offset
       audioEngine.loadTrackWithOffset(
@@ -2794,6 +2819,7 @@ export const useDJStore = create<DJState>()(
             activeDeck: nextDeck,
             nowPlayingIndex: postNowPlayingIndex,
             mixInProgress: false,
+            _mixInProgressSince: null,
             playHistoryTrackIds: isSelfBlend ? s.playHistoryTrackIds : pushHistory(s.playHistoryTrackIds, outgoingTrackId),
           }));
 
@@ -2969,6 +2995,7 @@ export const useDJStore = create<DJState>()(
         queuedSourceSwitch: null,
         playHistoryTrackIds: [],
         mixInProgress: false,
+        _mixInProgressSince: null,
         activeDeck: 'A',
         crossfadeValue: 0,
         deckA: { ...initialDeckState, playbackRate: state.deckA.playbackRate },
@@ -3085,6 +3112,11 @@ export const useDJStore = create<DJState>()(
       const state = get();
       if (index < 0 || index >= state.partyTrackIds.length) return;
       
+      // Force-cancel any in-progress mix so the user's explicit action always works
+      if (state.mixInProgress) {
+        cancelPendingTransition({ mixInProgress: false, reason: 'playNow_override' });
+      }
+
       // Set pending next and trigger skip immediately
       set({ pendingNextIndex: index });
       get().skip('user');
