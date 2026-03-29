@@ -9,8 +9,6 @@ const DEFAULT_CROSSFADE_SECONDS = 8;
 export function MixControls() {
   const { settings, updateUserSettings, tracks, partyTrackIds, nowPlayingIndex, mixInProgress } = useDJStore();
 
-  const timingDisabled = mixInProgress;
-
   const nextIndex = nowPlayingIndex + 1;
   const nextTrackId = nextIndex < partyTrackIds.length ? partyTrackIds[nextIndex] : settings.repeatMode === 'playlist' ? partyTrackIds[0] : null;
   const nextTrack = nextTrackId ? tracks.find(t => t.id === nextTrackId) : null;
@@ -52,7 +50,6 @@ export function MixControls() {
         <Slider
           value={[settings.nextSongStartOffset]}
           onValueChange={([v]) => updateUserSettings({ nextSongStartOffset: v })}
-          disabled={timingDisabled}
           min={0}
           max={startOffsetMax}
           step={1}
@@ -72,7 +69,6 @@ export function MixControls() {
         <Slider
           value={[settings.endEarlySeconds ?? 0]}
           onValueChange={([v]) => updateUserSettings({ endEarlySeconds: v })}
-          disabled={timingDisabled}
           min={0}
           max={60}
           step={1}
@@ -94,7 +90,6 @@ export function MixControls() {
         <Slider
           value={[settings.crossfadeSeconds]}
           onValueChange={([v]) => updateUserSettings({ crossfadeSeconds: v })}
-          disabled={timingDisabled}
           min={1}
           max={20}
           step={1}
@@ -105,7 +100,7 @@ export function MixControls() {
 
       {mixInProgress && (
         <p className="text-[9px] text-muted-foreground">
-          Transition in progress — timing changes apply next mix
+          Transition in progress — changes will apply to the next mix
         </p>
       )}
 

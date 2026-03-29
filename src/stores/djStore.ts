@@ -222,6 +222,11 @@ export const useDJStore = create<DJState>()(
   let settingsSaveTimeout: ReturnType<typeof setTimeout> | null = null;
   let queuedSettingsUpdates: Partial<Settings> = {};
 
+  // Monotonically increasing nonce — each new transition increments this.
+  // The .then() callback checks its captured nonce against the current value;
+  // if they differ the transition was superseded and the callback is a no-op.
+  let transitionNonce: number = 0;
+
   // Guard against repeated seed attempts within a single document lifetime.
   let didAttemptStarterSeedThisSession = false;
   
@@ -625,6 +630,9 @@ export const useDJStore = create<DJState>()(
       console.debug('[DJ Store] cancelPendingTransition:', opts.reason);
     }
 
+    // Invalidate any in-flight .then() callbacks from a previous transition.
+    ++transitionNonce;
+
     // Cancels any scheduled transition timeouts (state updates, pause/stop hooks, etc).
     clearScheduledTimeouts();
 
@@ -639,12 +647,21 @@ export const useDJStore = create<DJState>()(
     // If a previous transition scheduled `sourceNode.stop(atTime)`, the only reliable way to
     // cancel it is to replace the underlying source nodes. Seeking to the current time forces
     // a pause/play cycle (new source node) without changing position.
+    // Also stop the non-active deck (incoming track from the cancelled transition) so it
+    // doesn't keep playing in the background.
     try {
-      for (const deck of ['A', 'B'] as DeckId[]) {
-        if (audioEngine.isPlaying(deck)) {
-          const t = audioEngine.getCurrentTime(deck);
-          audioEngine.seek(deck, t);
-        }
+      const activeDeck = get().activeDeck;
+      const incomingDeck: DeckId = activeDeck === 'A' ? 'B' : 'A';
+      // Reset the crossfade to the active deck so any half-finished fade is undone.
+      audioEngine.setCrossfade(activeDeck === 'A' ? 0 : 1);
+      // Restart active deck source to cancel any scheduled sourceNode.stop()
+      if (audioEngine.isPlaying(activeDeck)) {
+        const t = audioEngine.getCurrentTime(activeDeck);
+        audioEngine.seek(activeDeck, t);
+      }
+      // Stop the incoming deck from the cancelled transition.
+      if (audioEngine.isPlaying(incomingDeck)) {
+        audioEngine.stop(incomingDeck);
       }
     } catch {
       // ignore
@@ -2368,8 +2385,12 @@ export const useDJStore = create<DJState>()(
       
       if (!state.isPartyMode || partyTrackIds.length === 0) return;
       if (state.mixInProgress) {
-        // Safety: auto-reset if mixInProgress has been stuck for over 15 seconds
-        if (state._mixInProgressSince && Date.now() - state._mixInProgressSince > 15000) {
+        if (reason === 'user' || reason === 'switch') {
+          // User-initiated skip should always work — cancel the in-progress mix
+          // and start a new transition immediately.
+          cancelPendingTransition({ mixInProgress: false, reason: 'user_skip_override' });
+        } else if (state._mixInProgressSince && Date.now() - state._mixInProgressSince > 15000) {
+          // Safety: auto-reset if mixInProgress has been stuck for over 15 seconds
           console.warn('[DJ Store] mixInProgress stuck for >15s, force-resetting');
           cancelPendingTransition({ mixInProgress: false, reason: 'stuck_safety_reset' });
         } else {
@@ -2653,6 +2674,8 @@ export const useDJStore = create<DJState>()(
         }));
       }
 
+      // Bump transition nonce so any previously-pending .then() becomes a no-op.
+      const myNonce = ++transitionNonce;
       set({ mixInProgress: true, _mixInProgressSince: Date.now() });
 
       // Load next track with offset
@@ -2663,7 +2686,11 @@ export const useDJStore = create<DJState>()(
         nextTrack.bpm,
         undefined
       ).then((duration) => {
+        // Guard: if a newer transition superseded this one, bail out.
+        if (myNonce !== transitionNonce) return;
+
         void gainDbPromise.then((gainDb) => {
+          if (myNonce !== transitionNonce) return;
           if (gainDb !== undefined) audioEngine.setTrackGain(nextDeck, gainDb);
           else audioEngine.setTrackGain(nextDeck, 0);
         });
@@ -2757,6 +2784,12 @@ export const useDJStore = create<DJState>()(
           }));
         }
 
+        // Guard: if a newer transition superseded this one, bail out before side effects.
+        if (myNonce !== transitionNonce) {
+          set({ mixInProgress: false, _mixInProgressSince: null });
+          return;
+        }
+
         // Start incoming early (inaudible until crossfade begins).
         audioEngine.playAt(nextDeck, incomingStartAt);
 
@@ -2805,6 +2838,7 @@ export const useDJStore = create<DJState>()(
         const stopDelayMs = Math.max(0, (stopAt - now) * 1000);
 
         scheduledTimeouts.push(setTimeout(() => {
+          if (myNonce !== transitionNonce) return;
           if (nextDeck === 'A') {
             set(s => ({ deckA: { ...s.deckA, isPlaying: true } }));
           } else {
@@ -2813,6 +2847,7 @@ export const useDJStore = create<DJState>()(
         }, startDelayMs));
 
         scheduledTimeouts.push(setTimeout(() => {
+          if (myNonce !== transitionNonce) return;
           get().pause(currentDeck);
           audioEngine.resetMixTrigger();
           set((s) => ({
