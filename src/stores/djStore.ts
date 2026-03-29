@@ -2905,10 +2905,28 @@ export const useDJStore = create<DJState>()(
           }
         }, stopDelayMs));
 
+        // Preserve the deck's current playbackRate so tempo mode doesn't appear to reset
+        // between loading the incoming track and the first time-update tick.
         if (nextDeck === 'A') {
-          set({ deckA: { ...initialDeckState, trackId: nextTrackId, duration } });
+          set((s) => ({
+            deckA: {
+              ...initialDeckState,
+              trackId: nextTrackId,
+              duration,
+              currentTime: startOffsetSeconds,
+              playbackRate: s.deckA.playbackRate,
+            },
+          }));
         } else {
-          set({ deckB: { ...initialDeckState, trackId: nextTrackId, duration } });
+          set((s) => ({
+            deckB: {
+              ...initialDeckState,
+              trackId: nextTrackId,
+              duration,
+              currentTime: startOffsetSeconds,
+              playbackRate: s.deckB.playbackRate,
+            },
+          }));
         }
       }).catch((error) => {
         console.error('[DJ Store] skip() failed to load next track:', error);

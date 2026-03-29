@@ -272,4 +272,36 @@ describe('DJ Store transition tempo plan regression', () => {
       expect(plan?.rampSecActual).toBe(null)
     }
   })
+
+  it('preserves incoming deck playbackRate during skip transition', async () => {
+    // Use preset mode so incoming deck definitely gets a non-1.0 tempo ratio.
+    ;(audioEngine.getBaseBpm as any).mockImplementation((deck: string) => (deck === 'B' ? 150 : 100))
+
+    useDJStore.setState((s) => ({
+      ...s,
+      tracks: [makeTrack('t1', 100), makeTrack('t2', 150)],
+      partyTrackIds: ['t1', 't2'],
+      activeDeck: 'A',
+      deckA: { ...s.deckA, trackId: 't1', isPlaying: true, playbackRate: 1 },
+      deckB: { ...s.deckB, trackId: null, isPlaying: false, playbackRate: 1 },
+      settings: {
+        ...s.settings,
+        tempoMode: 'preset',
+        tempoPreset: 'club',
+      },
+    }))
+
+    useDJStore.getState().skip('user')
+    await flush()
+
+    const after = useDJStore.getState()
+    expect(after.deckB.trackId).toBe('t2')
+
+    // Regression check: transition should not clobber the incoming deck tempo back to 1.0.
+    expect(after.deckB.playbackRate).not.toBe(1)
+
+    const incomingTempoCall = (audioEngine.setTempo as any).mock.calls.find((call: any[]) => call[0] === 'B')
+    expect(incomingTempoCall).toBeTruthy()
+    expect(after.deckB.playbackRate).toBeCloseTo(incomingTempoCall[1], 6)
+  })
 })
