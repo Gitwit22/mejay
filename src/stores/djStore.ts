@@ -2472,6 +2472,10 @@ export const useDJStore = create<DJState>()(
         return { possibleHalfDouble: false, altTargetBpm: null as number | null };
       })();
 
+      // Compute outgoing rate early — needed by computeTransitionTargetBpm (preset mode)
+      // and later by scheduling/quantization logic.
+      const outgoingRate = Math.max(0.25, audioEngine.getTempo(currentDeck) || currentDeckState.playbackRate || 1);
+
       const computeTransitionTargetBpm = (): number => {
         if (!tempoControlEnabled) return nextBaseBpm;
         if (settings.tempoMode === 'locked') {
@@ -2529,7 +2533,6 @@ export const useDJStore = create<DJState>()(
       const outgoingEffectiveEnd = audioEngine.getEffectiveEndTime(currentDeck) || currentDeckState.duration || 0;
       const outgoingTimeTrack = audioEngine.getCurrentTime(currentDeck) || currentDeckState.currentTime || 0;
       const outgoingRemainingTrack = Math.max(0, outgoingEffectiveEnd - outgoingTimeTrack);
-      const outgoingRate = Math.max(0.25, audioEngine.getTempo(currentDeck) || currentDeckState.playbackRate || 1);
       const outgoingRemainingReal = outgoingRemainingTrack / outgoingRate;
       const outgoingEndCtx = ctxNow + outgoingRemainingReal;
 
