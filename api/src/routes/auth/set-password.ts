@@ -16,6 +16,7 @@ type Env = {
   DB: any
   SESSION_PEPPER?: string
   AUTH_TOKEN_SECRET?: string
+  COOKIE_SAME_SITE?: 'lax' | 'none' | 'strict'
   // Optional safety switch: allow dev-only behavior outside localhost.
   ALLOW_DEV_ENDPOINTS?: string
 }
@@ -67,56 +68,63 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
     // Hash password.
     const passwordHash = await hashPassword(password)
 
-    // Find or create user.
-    let user = (await env.DB
-      .prepare('SELECT id, email FROM users WHERE email = ?1')
-      .bind(email)
-      .first()) as {id: string; email: string} | null
-
-    if (purpose === 'password_reset') {
-      if (!user) return json({ok: false, error: 'user_not_found'}, {status: 400})
-
-      await env.DB
-        .prepare('UPDATE users SET password_hash = ?1, updated_at = ?2 WHERE id = ?3')
-        .bind(passwordHash, nowIso(), user.id)
-        .run()
-    } else {
-      // signup_verify: create-or-update in a race-safe way.
-      const userId = user?.id ?? crypto.randomUUID()
-      await env.DB
-        .prepare(
-          [
-            'INSERT INTO users (id, email, password_hash, updated_at) VALUES (?1, ?2, ?3, ?4)',
-            'ON CONFLICT(email) DO UPDATE SET',
-            'password_hash=excluded.password_hash,',
-            'updated_at=excluded.updated_at',
-          ].join(' '),
-        )
-        .bind(userId, email, passwordHash, nowIso())
-        .run()
-
-      user = (await env.DB
-        .prepare('SELECT id, email FROM users WHERE email = ?1')
-        .bind(email)
-        .first()) as {id: string; email: string} | null
-
-      if (!user) throw new Error('user_upsert_failed')
-    }
-
-    // Create session.
     const ttlMs = rememberMe ? SESSION_TTL_MS : SHORT_SESSION_TTL_MS
     const sessionToken = crypto.randomUUID() + crypto.randomUUID()
     const sessionPepper = env.SESSION_PEPPER || 'dev-session-pepper'
     const tokenHash = await sha256Hex(`session:${sessionToken}:${sessionPepper}`)
     const expiresAt = addMsIso(ttlMs)
 
-    await env.DB
-      .prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?1, ?2, ?3)')
-      .bind(tokenHash, user.id, expiresAt)
-      .run()
+    const user = await env.DB.transaction(async (database: any) => {
+      let currentUser = (await database
+        .prepare('SELECT id, email FROM users WHERE email = ?1')
+        .bind(email)
+        .first()) as {id: string; email: string} | null
+
+      if (purpose === 'password_reset') {
+        if (!currentUser) return null
+
+        await database
+          .prepare('UPDATE users SET password_hash = ?1, updated_at = ?2 WHERE id = ?3')
+          .bind(passwordHash, nowIso(), currentUser.id)
+          .run()
+        await database.prepare('DELETE FROM sessions WHERE user_id = ?1').bind(currentUser.id).run()
+      } else {
+        const userId = currentUser?.id ?? crypto.randomUUID()
+        await database
+          .prepare(
+            [
+              'INSERT INTO users (id, email, password_hash, updated_at) VALUES (?1, ?2, ?3, ?4)',
+              'ON CONFLICT(email) DO UPDATE SET',
+              'password_hash=excluded.password_hash,',
+              'updated_at=excluded.updated_at',
+            ].join(' '),
+          )
+          .bind(userId, email, passwordHash, nowIso())
+          .run()
+
+        currentUser = (await database
+          .prepare('SELECT id, email FROM users WHERE email = ?1')
+          .bind(email)
+          .first()) as {id: string; email: string} | null
+        if (!currentUser) throw new Error('user_upsert_failed')
+      }
+
+      await database.prepare('DELETE FROM sessions WHERE expires_at < ?1').bind(nowIso()).run()
+      await database
+        .prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?1, ?2, ?3)')
+        .bind(tokenHash, currentUser.id, expiresAt)
+        .run()
+      return currentUser
+    })
+
+    if (!user) return json({ok: false, error: 'user_not_found'}, {status: 400})
 
     const secure = new URL(request.url).protocol === 'https:'
-    const cookie = makeSessionCookie(sessionToken, {secure, maxAgeSeconds: Math.floor(ttlMs / 1000)})
+    const cookie = makeSessionCookie(sessionToken, {
+      secure,
+      sameSite: env.COOKIE_SAME_SITE,
+      maxAgeSeconds: Math.floor(ttlMs / 1000),
+    })
 
     return new Response(JSON.stringify({ok: true}), {
       status: 200,

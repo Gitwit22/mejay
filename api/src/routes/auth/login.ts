@@ -5,6 +5,7 @@ import {SESSION_TTL_MS, SHORT_SESSION_TTL_MS, addMsIso, makeSessionCookie, norma
 type Env = {
   DB: any
   SESSION_PEPPER?: string
+  COOKIE_SAME_SITE?: 'lax' | 'none' | 'strict'
 }
 
 const json = (body: unknown, init?: ResponseInit) =>
@@ -60,7 +61,11 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
       .run()
 
     const secure = new URL(request.url).protocol === 'https:'
-    const cookie = makeSessionCookie(sessionToken, {secure, maxAgeSeconds: Math.floor(ttlMs / 1000)})
+    const cookie = makeSessionCookie(sessionToken, {
+      secure,
+      sameSite: env.COOKIE_SAME_SITE,
+      maxAgeSeconds: Math.floor(ttlMs / 1000),
+    })
 
     return new Response(JSON.stringify({ok: true}), {
       status: 200,

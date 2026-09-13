@@ -3,6 +3,7 @@ import {cookieHeaderForLogout, deleteSession} from '../_auth'
 type Env = {
   DB: any
   SESSION_PEPPER?: string
+  COOKIE_SAME_SITE?: 'lax' | 'none' | 'strict'
 }
 
 const json = (body: unknown, init?: ResponseInit) =>
@@ -29,7 +30,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
     headers: {
       'content-type': 'application/json; charset=utf-8',
       'cache-control': 'no-store, max-age=0',
-      'Set-Cookie': cookieHeaderForLogout(secure),
+      'Set-Cookie': cookieHeaderForLogout({secure, sameSite: env.COOKIE_SAME_SITE}),
     },
   })
 }

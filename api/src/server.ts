@@ -4,18 +4,18 @@ import {Database} from './db/client'
 import {apiCors} from './middleware/cors'
 import {adaptRoute, routes} from './routes'
 import {createDownloadsBucket} from './services/r2'
+import {loadConfig} from './config/env'
+import {apiOriginGuard} from './middleware/origin-guard'
 
-const databaseUrl = process.env.DATABASE_URL
-if (!databaseUrl) throw new Error('DATABASE_URL is required')
-
-const port = Number(process.env.PORT || 4000)
-const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:8080'
-const database = new Database(databaseUrl)
-const env = {...process.env, DB: database, DOWNLOADS: createDownloadsBucket(process.env)}
+const config = loadConfig()
+const port = Number(config.PORT)
+const database = new Database(config.DATABASE_URL)
+const env = {...config, DB: database, DOWNLOADS: createDownloadsBucket(config)}
 const app = express()
 
 app.set('trust proxy', 1)
-app.use(apiCors(frontendUrl))
+app.use(apiCors(config.FRONTEND_URL))
+app.use(apiOriginGuard(config.FRONTEND_URL, ['/api/stripe-webhook']))
 app.use(express.raw({type: '*/*', limit: '2mb'}))
 
 app.get('/api/health', async (_request, response, next) => {

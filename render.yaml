@@ -15,7 +15,9 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: FRONTEND_URL
-        value: https://staging.mejayapp.com
+        value: https://mejay2.pages.dev
+      - key: COOKIE_SAME_SITE
+        value: none
       - key: SESSION_PEPPER
         generateValue: true
       - key: AUTH_CODE_PEPPER

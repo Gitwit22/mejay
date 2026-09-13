@@ -6,6 +6,7 @@ export type EnvWithDb = {
   SESSION_PEPPER?: string
   /** Optional dedicated secret for verified token signing. Falls back to SESSION_PEPPER. */
   AUTH_TOKEN_SECRET?: string
+  COOKIE_SAME_SITE?: 'lax' | 'none' | 'strict'
 }
 
 export type AccessType = 'free' | 'pro' | 'full_program'
@@ -154,25 +155,35 @@ export function parseCookies(req: Request) {
   return out
 }
 
-export function cookieHeaderForLogout(isSecure: boolean): string {
+export type SessionCookieOptions = {
+  secure: boolean
+  sameSite?: 'lax' | 'none' | 'strict'
+}
+
+function sameSiteAttribute(sameSite: SessionCookieOptions['sameSite']): string {
+  const value = sameSite || 'lax'
+  return `SameSite=${value[0].toUpperCase()}${value.slice(1)}`
+}
+
+export function cookieHeaderForLogout(options: SessionCookieOptions): string {
   return [
     `mejay_session=`,
     'Path=/',
     'HttpOnly',
-    'SameSite=Lax',
-    isSecure ? 'Secure' : '',
+    sameSiteAttribute(options.sameSite),
+    options.secure ? 'Secure' : '',
     'Max-Age=0',
   ]
     .filter(Boolean)
     .join('; ')
 }
 
-export function makeSessionCookie(token: string, opts: {secure: boolean; maxAgeSeconds: number}): string {
+export function makeSessionCookie(token: string, opts: SessionCookieOptions & {maxAgeSeconds: number}): string {
   return [
     `mejay_session=${encodeURIComponent(token)}`,
     'Path=/',
     'HttpOnly',
-    'SameSite=Lax',
+    sameSiteAttribute(opts.sameSite),
     opts.secure ? 'Secure' : '',
     `Max-Age=${Math.floor(opts.maxAgeSeconds)}`,
   ]

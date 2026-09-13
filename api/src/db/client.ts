@@ -1,4 +1,4 @@
-import {Pool, types} from 'pg'
+import {Pool, types, type PoolClient} from 'pg'
 
 types.setTypeParser(1114, (value) => new Date(`${value}Z`).toISOString())
 types.setTypeParser(1184, (value) => new Date(value).toISOString())
@@ -11,11 +11,13 @@ function toPostgresSql(sql: string): string {
     .replace(/\(strftime\('\%Y-\%m-\%dT\%H:\%M:\%fZ','now'\)\)/gi, 'CURRENT_TIMESTAMP')
 }
 
+type Queryable = Pick<PoolClient, 'query'>
+
 class Statement {
   private values: unknown[] = []
 
   constructor(
-    private readonly pool: Pool,
+    private readonly pool: Queryable,
     private readonly sql: string,
   ) {}
 
@@ -47,8 +49,8 @@ class Statement {
 export class Database {
   readonly pool: Pool
 
-  constructor(connectionString: string) {
-    this.pool = new Pool({connectionString, ssl: connectionString.includes('localhost') ? false : {rejectUnauthorized: false}})
+  constructor(connectionString: string, pool?: Pool) {
+    this.pool = pool ?? new Pool({connectionString, ssl: connectionString.includes('localhost') ? false : {rejectUnauthorized: false}})
   }
 
   prepare(sql: string): Statement {
@@ -66,6 +68,22 @@ export class Database {
       }
       await client.query('COMMIT')
       return results
+    } catch (error) {
+      await client.query('ROLLBACK')
+      throw error
+    } finally {
+      client.release()
+    }
+  }
+
+  async transaction<T>(callback: (database: Pick<Database, 'prepare'>) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect()
+    const database = {prepare: (sql: string) => new Statement(client, sql)}
+    try {
+      await client.query('BEGIN')
+      const result = await callback(database)
+      await client.query('COMMIT')
+      return result
     } catch (error) {
       await client.query('ROLLBACK')
       throw error

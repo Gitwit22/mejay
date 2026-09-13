@@ -1,0 +1,80 @@
+export type CookieSameSite = 'lax' | 'none' | 'strict'
+
+export type AppConfig = NodeJS.ProcessEnv & {
+  NODE_ENV: 'development' | 'test' | 'production'
+  PORT: string
+  DATABASE_URL: string
+  FRONTEND_URL: string
+  SESSION_PEPPER: string
+  AUTH_CODE_PEPPER: string
+  AUTH_TOKEN_SECRET: string
+  COOKIE_SAME_SITE: CookieSameSite
+}
+
+const developmentSecrets = {
+  SESSION_PEPPER: 'dev-session-pepper',
+  AUTH_CODE_PEPPER: 'dev-auth-code-pepper',
+  AUTH_TOKEN_SECRET: 'dev-auth-token-secret',
+} as const
+
+function requireValue(env: NodeJS.ProcessEnv, key: string): string {
+  const value = env[key]?.trim()
+  if (!value) throw new Error(`Missing required environment variable: ${key}`)
+  return value
+}
+
+function parseSameSite(value: string | undefined): CookieSameSite {
+  const normalized = value?.trim().toLowerCase() || 'lax'
+  if (normalized === 'lax' || normalized === 'none' || normalized === 'strict') return normalized
+  throw new Error('COOKIE_SAME_SITE must be lax, none, or strict')
+}
+
+function validateUrl(value: string, key: string): string {
+  try {
+    return new URL(value).origin
+  } catch {
+    throw new Error(`${key} must be a valid absolute URL`)
+  }
+}
+
+function productionSecret(env: NodeJS.ProcessEnv, key: keyof typeof developmentSecrets): string {
+  const value = requireValue(env, key)
+  if (value.length < 32 || value === developmentSecrets[key] || value.startsWith('replace-with-')) {
+    throw new Error(`${key} must be a non-placeholder secret of at least 32 characters`)
+  }
+  return value
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  const nodeEnv = env.NODE_ENV === 'production' || env.NODE_ENV === 'test' ? env.NODE_ENV : 'development'
+  const production = nodeEnv === 'production'
+  const sameSite = parseSameSite(env.COOKIE_SAME_SITE)
+
+  if (sameSite === 'none' && !production && env.COOKIE_SECURE !== 'true') {
+    throw new Error('COOKIE_SAME_SITE=none requires secure cookies')
+  }
+
+  const config: AppConfig = {
+    ...env,
+    NODE_ENV: nodeEnv,
+    PORT: env.PORT?.trim() || '4000',
+    DATABASE_URL: requireValue(env, 'DATABASE_URL'),
+    FRONTEND_URL: env.FRONTEND_URL?.trim() || 'http://localhost:8080',
+    SESSION_PEPPER: production ? productionSecret(env, 'SESSION_PEPPER') : env.SESSION_PEPPER?.trim() || developmentSecrets.SESSION_PEPPER,
+    AUTH_CODE_PEPPER: production ? productionSecret(env, 'AUTH_CODE_PEPPER') : env.AUTH_CODE_PEPPER?.trim() || developmentSecrets.AUTH_CODE_PEPPER,
+    AUTH_TOKEN_SECRET: production ? productionSecret(env, 'AUTH_TOKEN_SECRET') : env.AUTH_TOKEN_SECRET?.trim() || developmentSecrets.AUTH_TOKEN_SECRET,
+    COOKIE_SAME_SITE: sameSite,
+  }
+
+  config.FRONTEND_URL = config.FRONTEND_URL
+    .split(',')
+    .map((value) => validateUrl(value.trim(), 'FRONTEND_URL'))
+    .join(',')
+
+  if (!Number.isInteger(Number(config.PORT)) || Number(config.PORT) <= 0) throw new Error('PORT must be a positive integer')
+  if (production && sameSite === 'none' && env.COOKIE_SECURE === 'false') {
+    throw new Error('COOKIE_SAME_SITE=none cannot be used with COOKIE_SECURE=false')
+  }
+
+  return config
+}
