@@ -1,8 +1,3 @@
 name = "mejay"
 compatibility_date = "2026-02-07"
 pages_build_output_dir = "dist"
-
-[[d1_databases]]
-binding = "DB"
-database_name = "mejaydb"
-database_id = "1218d7a8-4fa7-4ed7-a31c-d673a2450229"

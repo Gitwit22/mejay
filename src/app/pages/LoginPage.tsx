@@ -4,6 +4,7 @@ import {toast} from '@/hooks/use-toast'
 import {MEJAY_LOGO_URL} from '@/lib/branding'
 import {usePlanStore} from '@/stores/planStore'
 import {setOnboarded, setStarterPromptPending} from '@/lib/starterPacksPrefs'
+import {apiFetch} from '@/lib/api'
 
 type Mode = 'password' | 'code' | 'setPassword'
 type CodeStep = 'email' | 'code'
@@ -57,7 +58,7 @@ export default function LoginPage() {
   const login = async () => {
     setBusy(true)
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await apiFetch('/api/auth/login', {
         method: 'POST',
         credentials: 'include',
         headers: {'content-type': 'application/json'},
@@ -97,7 +98,7 @@ export default function LoginPage() {
   const startCode = async () => {
     setBusy(true)
     try {
-      const res = await fetch('/api/auth/start', {
+      const res = await apiFetch('/api/auth/start', {
         method: 'POST',
         headers: {'content-type': 'application/json'},
         body: JSON.stringify({email, purpose}),
@@ -128,7 +129,7 @@ export default function LoginPage() {
   const verifyCode = async () => {
     setBusy(true)
     try {
-      const res = await fetch('/api/auth/verify-code', {
+      const res = await apiFetch('/api/auth/verify-code', {
         method: 'POST',
         headers: {'content-type': 'application/json'},
         body: JSON.stringify({email, code, purpose}),
@@ -170,7 +171,7 @@ export default function LoginPage() {
 
     setBusy(true)
     try {
-      const res = await fetch('/api/auth/set-password', {
+      const res = await apiFetch('/api/auth/set-password', {
         method: 'POST',
         credentials: 'include',
         headers: {'content-type': 'application/json'},

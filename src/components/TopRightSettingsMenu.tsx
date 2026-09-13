@@ -37,6 +37,7 @@ import {getNextRequiredCheckBy} from '@/licensing/licensePolicy'
 import {openBillingPortal} from '@/lib/checkout'
 import {getSettingsEntryNavigateOptions} from '@/app/navigation/settingsReturnTo'
 import {DownloadPacksModal} from '@/components/DownloadPacksModal'
+import {apiFetch} from '@/lib/api'
 
 type TopRightSettingsMenuProps = {
   className?: string
@@ -108,7 +109,7 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
 
     // Call the logout API to clear the server-side session
     try {
-      const res = await fetch('/api/auth/logout', {
+      const res = await apiFetch('/api/auth/logout', {
         method: 'POST',
         credentials: 'include',
         headers: {'Content-Type': 'application/json'},

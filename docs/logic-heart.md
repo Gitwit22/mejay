@@ -25,7 +25,7 @@ This doc is the “brain dump” for the app’s most **non-obvious** logic: how
 	- [Local/offline license tokens](#localoffline-license-tokens)
 	- [Stripe checkout + D1 entitlements (never-downgrade bias)](#stripe-checkout--d1-entitlements-never-downgrade-bias)
 	- [Auth (email codes + password) and dev bypass](#auth-email-codes--password-and-dev-bypass)
-	- [Cloudflare deployment topology (Pages Functions + optional Worker)](#cloudflare-deployment-topology-pages-functions--optional-worker)
+	- [Deployment topology (Pages + Render + Neon)](#deployment-topology-pages--render--neon)
 	- [Testing determinism (timers + store cleanup)](#testing-determinism-timers--store-cleanup)
 
 ---
@@ -248,13 +248,13 @@ Notable behavior:
 ## Stripe checkout + D1 entitlements (never-downgrade bias)
 
 Files:
-- `functions/api/checkout.ts`
-- `functions/api/checkout-status.ts`
-- `functions/api/billing/sync.ts`
-- `functions/api/billing-portal.ts`
-- `functions/api/stripe-webhook.ts`
-- `functions/api/entitlements.ts`
-- `migrations/*`
+- `api/src/routes/checkout.ts`
+- `api/src/routes/checkout-status.ts`
+- `api/src/routes/billing/sync.ts`
+- `api/src/routes/billing-portal.ts`
+- `api/src/routes/stripe-webhook.ts`
+- `api/src/routes/entitlements.ts`
+- `api/src/db/migrate.ts`
 
 Notable behavior:
 - Checkout is bound to an authenticated session user
@@ -270,9 +270,9 @@ Client integration:
 ## Auth (email codes + password) and dev bypass
 
 Files:
-- `functions/api/auth/*`
-- `functions/api/_auth.ts`
-- `functions/api/_password.ts`
+- `api/src/routes/auth/*`
+- `api/src/routes/_auth.ts`
+- `api/src/routes/_password.ts`
 - `src/app/pages/LoginPage.tsx`
 - `src/stores/planStore.ts` (auth bypass flags)
 
@@ -284,17 +284,19 @@ Notable behavior:
 - Password login verifies stored hash and sets session
 - Dev/demo bypass for `/app` routing exists (client-side), but does not create a server session
 
-## Cloudflare deployment topology (Pages Functions + optional Worker)
+## Deployment topology (Pages + Render + Neon)
 
 Files:
-- `functions/api/**` (Pages Functions routes)
-- `src/worker.ts` (optional Worker API entrypoint)
-- `wrangler.toml`
+- `src/**` (Cloudflare Pages frontend)
+- `api/src/**` (Render API service)
+- `api/src/db/migrate.ts` (Neon schema)
+- `wrangler.toml` (static Pages build configuration)
 - `public/_redirects` (SPA deep-link support)
 
 Notable behavior:
-- Repo supports Pages Functions by default
-- Also contains an optional Worker implementation for similar endpoints
+- Cloudflare Pages serves only the Vite `dist` output
+- `VITE_API_URL` points the frontend to the Render API
+- Render uses `DATABASE_URL` for Neon and optional S3-compatible credentials for R2
 
 ## Testing determinism (timers + store cleanup)
 

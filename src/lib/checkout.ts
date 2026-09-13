@@ -1,4 +1,5 @@
 import {usePlanStore, type Plan} from '@/stores/planStore'
+import {apiFetch, apiUrl} from '@/lib/api'
 
 // NOTE: Only `startCheckout` + `getCheckoutStatus` are used by the app.
 
@@ -76,7 +77,7 @@ export async function startCheckout(plan: 'pro' | 'full_program', intent?: 'tria
 
   const checkoutToken = getOrCreateCheckoutToken()
 
-  const res = await fetch('/api/checkout', {
+  const res = await apiFetch('/api/checkout', {
     method: 'POST',
     credentials: 'include',
     headers: { 'content-type': 'application/json' },
@@ -116,7 +117,7 @@ export async function startCheckout(plan: 'pro' | 'full_program', intent?: 'tria
 }
 
 export async function getCheckoutStatus(sessionId: string): Promise<CheckoutStatus> {
-  const url = new URL('/api/checkout-status', window.location.origin)
+  const url = new URL(apiUrl('/api/checkout-status'), window.location.origin)
   url.searchParams.set('session_id', sessionId)
 
   let checkoutToken: string | null = null
@@ -126,7 +127,7 @@ export async function getCheckoutStatus(sessionId: string): Promise<CheckoutStat
     checkoutToken = null
   }
 
-  const res = await fetch(url.toString(), {
+  const res = await apiFetch(url.toString(), {
     method: 'GET',
     cache: 'no-store',
     headers: {
@@ -183,7 +184,7 @@ export async function openBillingPortal() {
     throw new Error('Manage billing is disabled while Login Bypass is enabled. Disable bypass and sign in to manage billing.')
   }
 
-  const res = await fetch('/api/billing-portal', {
+  const res = await apiFetch('/api/billing-portal', {
     method: 'POST',
     credentials: 'include',
     headers: {'content-type': 'application/json'},

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import {apiFetch} from '@/lib/api';
 
 export type Plan = 'free' | 'pro' | 'full_program';
 export type PlanSource = 'runtime' | 'dev';
@@ -398,7 +399,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       return true
     }
 
-    const res = await fetch('/api/account/me', {
+    const res = await apiFetch('/api/account/me', {
       method: 'GET',
       cache: 'no-store',
       credentials: 'include',

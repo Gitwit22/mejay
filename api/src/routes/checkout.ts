@@ -1,5 +1,3 @@
-// functions/api/checkout.ts
-
 type Plan = "pro" | "full_program";
 
 type CheckoutRequestBody = {
@@ -18,6 +16,7 @@ type Env = {
   SESSION_PEPPER?: string;
   /** Optional: allow enabling Full Program checkout explicitly. */
   ALLOW_FULL_PROGRAM_CHECKOUT?: string;
+  FRONTEND_URL?: string;
 };
 
 type EntitlementsRow = {
@@ -168,9 +167,8 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
     }, 500);
   }
 
-  // Build absolute origin from request
-  const url = new URL(request.url);
-  const origin = `${url.protocol}//${url.host}`;
+  const requestUrl = new URL(request.url);
+  const origin = env.FRONTEND_URL?.split(',')[0]?.trim() || `${requestUrl.protocol}//${requestUrl.host}`;
 
   const isPro = plan === "pro";
   const priceId = isPro ? proPrice : fullPrice;
@@ -209,7 +207,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
       }
     }
   } catch {
-    // Best-effort check; don't block checkout if D1 is down.
+    // Best-effort check; don't block checkout if the database is unavailable.
   }
 
   try {

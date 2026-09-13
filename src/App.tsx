@@ -13,6 +13,7 @@ import { toast } from "@/hooks/use-toast";
 import { handleBecameOnline, periodicPolicyTick, startupCheck } from "@/licensing/licenseService";
 import { useLicenseStore } from "@/licensing/licenseStore";
 import { initMediaSession } from "@/lib/mediaSession";
+import {apiFetch} from "@/lib/api";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import WelcomePage from "./app/pages/WelcomePage";
@@ -376,7 +377,7 @@ const AppBillingBootstrap = () => {
             // 1a) Fast-path activation: ask the server to sync+persist from Stripe once.
             // This updates D1 so the subsequent refreshFromServer() reflects the new plan immediately.
             try {
-              const syncRes = await fetch('/api/billing/sync', {
+              const syncRes = await apiFetch('/api/billing/sync', {
                 method: 'POST',
                 credentials: 'include',
                 headers: {'content-type': 'application/json'},
