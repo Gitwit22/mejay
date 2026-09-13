@@ -10,7 +10,7 @@ export const onRequest: PagesFunction<Env> = async ({request, env}) => {
   const headers = new Headers(request.headers)
   headers.delete('host')
 
-  return fetch(
+  const upstreamResponse = await fetch(
     new Request(targetUrl, {
       method: request.method,
       headers,
@@ -18,4 +18,20 @@ export const onRequest: PagesFunction<Env> = async ({request, env}) => {
       redirect: 'manual',
     }),
   )
+
+  const responseHeaders = new Headers(upstreamResponse.headers)
+  const sessionCookie = responseHeaders.get('set-cookie')
+  if (sessionCookie?.startsWith('mejay_session=')) {
+    responseHeaders.set('set-cookie', sessionCookie.replace(/SameSite=None/i, 'SameSite=Lax'))
+  }
+  responseHeaders.set(
+    'x-mejay-proxy-session',
+    request.headers.get('cookie')?.includes('mejay_session=') ? 'present' : 'absent',
+  )
+
+  return new Response(upstreamResponse.body, {
+    status: upstreamResponse.status,
+    statusText: upstreamResponse.statusText,
+    headers: responseHeaders,
+  })
 }
