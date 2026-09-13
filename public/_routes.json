@@ -1,16 +1,5 @@
 {
   "version": 1,
-  "include": ["/*"],
-  "exclude": [
-    "/assets/*",
-    "/*.png",
-    "/*.jpg",
-    "/*.jpeg",
-    "/*.svg",
-    "/*.ico",
-    "/*.webp",
-    "/*.css",
-    "/*.js",
-    "/*.map"
-  ]
+  "include": ["/api/*"],
+  "exclude": []
 }

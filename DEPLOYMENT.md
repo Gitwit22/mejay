@@ -15,7 +15,7 @@ Configure the Pages project with:
 - Build output directory: `dist`
 - Environment variable: `VITE_API_URL=https://api-staging.mejayapp.com`
 
-The frontend contains no Pages Functions. `public/_redirects` continues to provide SPA routing.
+On `mejay2.pages.dev`, the frontend uses the `/api/*` Pages Function proxy so session cookies remain first-party. The proxy targets `https://mejay-api.onrender.com` by default; set the Pages runtime variable `API_ORIGIN` to override it. `public/_redirects` continues to provide SPA routing.
 
 ## Render
 
