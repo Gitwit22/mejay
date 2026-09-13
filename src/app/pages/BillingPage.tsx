@@ -1,4 +1,4 @@
-import {useState} from 'react'
+import {useEffect, useState} from 'react'
 import {Link, useLocation, useNavigate} from 'react-router-dom'
 
 import {toast} from '@/hooks/use-toast'
@@ -19,11 +19,24 @@ export default function BillingPage({ mode = 'app' }: BillingPageProps) {
   const authStatus = usePlanStore((s) => s.authStatus)
   const billingEnabled = usePlanStore((s) => s.billingEnabled)
   const authBypassEnabled = usePlanStore((s) => s.authBypassEnabled)
+  const stripeCustomerId = usePlanStore((s) => s.stripeCustomerId)
+  const billingCadence = usePlanStore((s) => s.billingCadence)
+  const cancelAtPeriodEnd = usePlanStore((s) => s.cancelAtPeriodEnd)
+  const currentPeriodEnd = usePlanStore((s) => s.currentPeriodEnd)
 
   const [busy, setBusy] = useState(false)
 
   const hasPaidPlan = authStatus === 'authenticated' && plan !== 'free'
   const isFullProgramOwner = authStatus === 'authenticated' && plan === 'full_program'
+  const canOpenPortal = authStatus === 'authenticated' && (hasPaidPlan || Boolean(stripeCustomerId))
+  const periodEndLabel = currentPeriodEnd
+    ? new Intl.DateTimeFormat(undefined, {dateStyle: 'medium'}).format(new Date(currentPeriodEnd))
+    : null
+
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get('portal') !== 'return') return
+    void usePlanStore.getState().refreshFromServer({reason: 'billingPortalReturn'})
+  }, [location.search])
 
   const handleBack = () => {
     if (mode === 'public') {
@@ -100,7 +113,13 @@ export default function BillingPage({ mode = 'app' }: BillingPageProps) {
             <span className="plan-badge current">Current plan</span>
             <div className="plan-name">{hasPaidPlan ? (plan === 'pro' ? 'MEJay Pro' : 'Full Program') : 'Free (Demo)'}</div>
             <div className="plan-description">
-              {hasPaidPlan ? 'Your plan is active on this account.' : 'You’re currently on the Free plan.'}
+              {isFullProgramOwner
+                ? 'Permanent access is active on this account.'
+                : plan === 'pro'
+                  ? cancelAtPeriodEnd && periodEndLabel
+                    ? `Your ${billingCadence ?? 'Pro'} subscription cancels on ${periodEndLabel}.`
+                    : `Your ${billingCadence ?? 'Pro'} subscription is active.`
+                  : 'You’re currently on the Free plan.'}
             </div>
 
             <ul className="plan-features">
@@ -129,7 +148,11 @@ export default function BillingPage({ mode = 'app' }: BillingPageProps) {
                   ) : (
                     isFullProgramOwner
                       ? 'Everything is unlocked. Open the account portal only if you need receipts or account details.'
-                      : 'Open the billing portal only when you choose.'
+                      : plan === 'pro'
+                        ? 'Use Stripe’s secure portal to manage or cancel your subscription.'
+                        : stripeCustomerId
+                          ? 'Open the billing portal for receipts or billing history.'
+                          : 'Choose a plan when you’re ready to upgrade.'
                   )
                 ) : (
                   'Billing is disabled in this build (dev mode).'
@@ -138,9 +161,11 @@ export default function BillingPage({ mode = 'app' }: BillingPageProps) {
             </div>
 
             <div style={{display: 'grid', gap: '0.75rem', marginTop: '1.25rem'}}>
-              <button type="button" className="plan-cta" onClick={handleManageBilling} disabled={busy || !billingEnabled}>
-                {busy ? 'Opening…' : isFullProgramOwner ? 'Account portal' : 'Manage billing'}
-              </button>
+              {canOpenPortal && (
+                <button type="button" className="plan-cta" onClick={handleManageBilling} disabled={busy || !billingEnabled}>
+                  {busy ? 'Opening…' : plan === 'pro' ? 'Manage or cancel subscription' : 'Account portal'}
+                </button>
+              )}
               {!isFullProgramOwner && (
                 <button type="button" className="plan-cta secondary" onClick={handleChangePlan}>
                   Change plan

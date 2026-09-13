@@ -1,9 +1,13 @@
+import {cadenceFromPrice, persistSubscriptionState, stripeTimestampToIso, type SubscriptionState} from '../services/billing'
+
 type D1Database = any
 
 type Env = {
   DB: D1Database
   STRIPE_SECRET_KEY: string
   STRIPE_WEBHOOK_SECRET: string
+  STRIPE_PRICE_PRO: string
+  STRIPE_PRICE_YEARLY: string
 }
 
 type AccessType = 'free' | 'pro' | 'full_program'
@@ -181,6 +185,29 @@ function getPlanFromMetadata(meta: any): AccessType | null {
   return null
 }
 
+function subscriptionState(sub: any, env: Env): SubscriptionState {
+  const priceId = sub?.items?.data?.[0]?.price?.id
+  return {
+    status: typeof sub?.status === 'string' ? sub.status : 'canceled',
+    cancelAtPeriodEnd: sub?.cancel_at_period_end === true,
+    currentPeriodEnd: stripeTimestampToIso(sub?.current_period_end),
+    cadence: cadenceFromPrice(priceId, env.STRIPE_PRICE_PRO, env.STRIPE_PRICE_YEARLY),
+  }
+}
+
+async function subscriptionUserId(db: D1Database, sub: any): Promise<string | null> {
+  const metadataUserId = getUserIdFromMetadata(sub?.metadata)
+  if (metadataUserId) return metadataUserId
+
+  const subscriptionId = typeof sub?.id === 'string' ? sub.id : ''
+  if (!subscriptionId) return null
+  const row = (await db
+    .prepare('SELECT user_id FROM entitlements WHERE stripe_subscription_id = ?1 LIMIT 1')
+    .bind(subscriptionId)
+    .first()) as {user_id: string} | null
+  return row?.user_id ?? null
+}
+
 export const onRequest = async (context: {request: Request; env: Env}): Promise<Response> => {
   const {request, env} = context
 
@@ -200,6 +227,7 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     const event = JSON.parse(payload) as any
     const type = String(event?.type ?? '')
     const obj = event?.data?.object
+    const eventCreatedAt = stripeTimestampToIso(event?.created) ?? new Date().toISOString()
 
     if (type === 'checkout.session.completed') {
       const session = obj
@@ -237,20 +265,14 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
         if (!subId) return json({ok: true, ignored: true})
 
         const sub = await stripeGet(secretKey, `/v1/subscriptions/${encodeURIComponent(subId)}`)
-        const status: string | undefined = sub?.status
-        const active = status === 'active' || status === 'trialing'
-
-        if (active) {
-          await upsertEntitlementsInD1({
-            db: env.DB,
-            userId,
-            customerId: customerId ?? (typeof sub?.customer === 'string' ? sub.customer : null),
-            email,
-            subscriptionId: subId,
-            accessType: 'pro',
-            hasFullAccess: true,
-          })
-        }
+        await persistSubscriptionState({
+          db: env.DB,
+          userId,
+          customerId: customerId ?? (typeof sub?.customer === 'string' ? sub.customer : null),
+          subscriptionId: subId,
+          state: subscriptionState(sub, env),
+          eventCreatedAt,
+        })
         return json({ok: true})
       }
 
@@ -259,33 +281,38 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
 
     if (type === 'customer.subscription.updated' || type === 'customer.subscription.created') {
       const sub = obj
-      const meta = sub?.metadata
-      const userId = getUserIdFromMetadata(meta)
-      const plan = getPlanFromMetadata(meta)
+      const userId = await subscriptionUserId(env.DB, sub)
+      const plan = getPlanFromMetadata(sub?.metadata)
       if (!userId || plan !== 'pro') return json({ok: true, ignored: true})
-
-      const status: string | undefined = sub?.status
-      const active = status === 'active' || status === 'trialing'
-      if (!active) return json({ok: true})
 
       const customerId = typeof sub?.customer === 'string' ? sub.customer : null
       const subId = typeof sub?.id === 'string' ? sub.id : null
 
-      await upsertEntitlementsInD1({
+      await persistSubscriptionState({
         db: env.DB,
         userId,
         customerId,
         subscriptionId: subId,
-        accessType: 'pro',
-        hasFullAccess: true,
+        state: subscriptionState(sub, env),
+        eventCreatedAt,
       })
 
       return json({ok: true})
     }
 
     if (type === 'customer.subscription.deleted') {
-      // We intentionally don't downgrade here to avoid accidental lockouts.
-      // (Downgrades can be handled via portal + periodic refresh strategy later.)
+      const sub = obj
+      const userId = await subscriptionUserId(env.DB, sub)
+      if (!userId) return json({ok: true, ignored: true})
+
+      await persistSubscriptionState({
+        db: env.DB,
+        userId,
+        customerId: typeof sub?.customer === 'string' ? sub.customer : null,
+        subscriptionId: typeof sub?.id === 'string' ? sub.id : null,
+        state: {...subscriptionState(sub, env), status: 'canceled'},
+        eventCreatedAt,
+      })
       return json({ok: true})
     }
 

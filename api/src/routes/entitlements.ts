@@ -11,6 +11,10 @@ type EntitlementsResponse = {
   accessType: AccessType
   hasFullAccess: boolean
   stripeCustomerId?: string
+  subscriptionStatus?: string
+  billingCadence?: 'monthly' | 'yearly'
+  cancelAtPeriodEnd: boolean
+  currentPeriodEnd?: string
   updatedAt?: string
 }
 
@@ -81,7 +85,7 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     if (!userId) return json({error: 'Unauthorized'}, {status: 401})
 
     const row = (await env.DB.prepare(
-      'SELECT access_type, has_full_access, stripe_customer_id, updated_at FROM entitlements WHERE user_id = ?1 LIMIT 1',
+      'SELECT access_type, has_full_access, stripe_customer_id, subscription_status, billing_cadence, cancel_at_period_end, current_period_end, updated_at FROM entitlements WHERE user_id = ?1 LIMIT 1',
     )
       .bind(userId)
       .first()) as
@@ -89,12 +93,16 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
           access_type: string
           has_full_access: number
           stripe_customer_id: string | null
+          subscription_status: string | null
+          billing_cadence: string | null
+          cancel_at_period_end: boolean
+          current_period_end: string | null
           updated_at: string | null
         }
       | null
 
     if (!row) {
-      return json({accessType: 'free', hasFullAccess: false} satisfies EntitlementsResponse, {status: 200})
+      return json({accessType: 'free', hasFullAccess: false, cancelAtPeriodEnd: false} satisfies EntitlementsResponse, {status: 200})
     }
 
     const accessType = normalizeAccessType(row.access_type)
@@ -106,9 +114,23 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
           accessType,
           hasFullAccess: true,
           stripeCustomerId: row.stripe_customer_id ?? undefined,
+          subscriptionStatus: row.subscription_status ?? undefined,
+          billingCadence:
+            row.billing_cadence === 'monthly' || row.billing_cadence === 'yearly' ? row.billing_cadence : undefined,
+          cancelAtPeriodEnd: row.cancel_at_period_end === true,
+          currentPeriodEnd: row.current_period_end ?? undefined,
           updatedAt: row.updated_at ?? undefined,
         }
-      : {accessType: 'free', hasFullAccess: false}
+      : {
+          accessType: 'free',
+          hasFullAccess: false,
+          stripeCustomerId: row.stripe_customer_id ?? undefined,
+          subscriptionStatus: row.subscription_status ?? undefined,
+          billingCadence:
+            row.billing_cadence === 'monthly' || row.billing_cadence === 'yearly' ? row.billing_cadence : undefined,
+          cancelAtPeriodEnd: row.cancel_at_period_end === true,
+          currentPeriodEnd: row.current_period_end ?? undefined,
+        }
 
     return json(normalized, {status: 200})
   } catch (e) {

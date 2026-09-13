@@ -184,8 +184,8 @@ export default function PricingPage({ mode = 'app' }: PricingPageProps) {
                 You're on this plan
               </button>
             ) : (
-              <Link to="/app" className="plan-cta secondary">
-                Try MEJay Free
+              <Link to="/app/settings/billing" className="plan-cta secondary">
+                Manage current plan
               </Link>
             )}
           </div>
@@ -212,13 +212,13 @@ export default function PricingPage({ mode = 'app' }: PricingPageProps) {
               <li>Smooth transitions & advanced timing</li>
               <li>Tempo control + BPM tools</li>
             </ul>
-            {currentPlanId === 'pro' || hasFullProgram ? (
-              <button
-                type="button"
-                className="plan-cta"
-                disabled
-              >
-                You're already upgraded
+            {currentPlanId === 'pro' ? (
+              <Link to="/app/settings/billing" className="plan-cta">
+                Manage or cancel subscription
+              </Link>
+            ) : hasFullProgram ? (
+              <button type="button" className="plan-cta" disabled>
+                Included with Full Program
               </button>
             ) : (
               <>

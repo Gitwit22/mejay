@@ -1,4 +1,5 @@
 import {getSessionUserId} from '../_auth'
+import {cadenceFromPrice, persistSubscriptionState, stripeTimestampToIso, subscriptionGrantsPro} from '../../services/billing'
 
 type D1Database = any
 
@@ -6,6 +7,7 @@ type Env = {
   DB: D1Database
   STRIPE_SECRET_KEY: string
   STRIPE_PRICE_PRO: string
+  STRIPE_PRICE_YEARLY: string
   STRIPE_PRICE_FULL_PROGRAM: string
 }
 
@@ -154,6 +156,7 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
   try {
     const secretKey = getRequiredEnv(env, 'STRIPE_SECRET_KEY').trim()
     const pricePro = getRequiredEnv(env, 'STRIPE_PRICE_PRO').trim()
+    const priceYearly = getRequiredEnv(env, 'STRIPE_PRICE_YEARLY').trim()
     const priceFull = getRequiredEnv(env, 'STRIPE_PRICE_FULL_PROGRAM').trim()
 
     const session = await stripeGet(
@@ -176,7 +179,7 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
       const lineItems = session?.line_items?.data as Array<{price?: {id?: string}}> | undefined
       const priceId = lineItems?.[0]?.price?.id
       if (priceId === priceFull) return 'full_program' as const
-      if (priceId === pricePro) return 'pro' as const
+      if (priceId === pricePro || priceId === priceYearly) return 'pro' as const
       return null
     })()
     const plan: AccessType | null = metaPlan ?? inferredPlan
@@ -207,22 +210,25 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
 
     const sub = session?.subscription
     const status: string | undefined = sub?.status
-    const active = status === 'active' || status === 'trialing'
+    const active = subscriptionGrantsPro(status ?? '')
     const subscriptionId = typeof sub?.id === 'string' ? sub.id : null
     const effectiveCustomerId =
       customerId ?? (typeof sub?.customer === 'string' ? sub.customer : null)
 
-    if (active) {
-      await upsertEntitlementsInD1({
-        db: env.DB,
-        userId,
-        customerId: effectiveCustomerId,
-        email,
-        subscriptionId,
-        accessType: 'pro',
-        hasFullAccess: true,
-      })
-    }
+    const subscriptionPriceId = sub?.items?.data?.[0]?.price?.id
+    await persistSubscriptionState({
+      db: env.DB,
+      userId,
+      customerId: effectiveCustomerId,
+      subscriptionId,
+      state: {
+        status: status ?? 'canceled',
+        cancelAtPeriodEnd: sub?.cancel_at_period_end === true,
+        currentPeriodEnd: stripeTimestampToIso(sub?.current_period_end),
+        cadence: cadenceFromPrice(subscriptionPriceId, pricePro, priceYearly),
+      },
+      eventCreatedAt: stripeTimestampToIso(sub?.created ?? session?.created) ?? new Date().toISOString(),
+    })
 
     const out: SyncResponse = {
       ok: true,

@@ -2,6 +2,7 @@ type Plan = "pro" | "full_program";
 
 type CheckoutRequestBody = {
   plan?: Plan;
+  cadence?: 'monthly' | 'yearly';
   /** Opaque client-generated token to help bind session verification to the initiating browser. */
   checkoutToken?: string;
   /** Intent to track which button/flow initiated checkout (e.g., 'trial' or 'upgrade'). */
@@ -11,6 +12,7 @@ type CheckoutRequestBody = {
 type Env = {
   STRIPE_SECRET_KEY: string;
   STRIPE_PRICE_PRO: string;
+  STRIPE_PRICE_YEARLY: string;
   STRIPE_PRICE_FULL_PROGRAM: string;
   DB: any;
   SESSION_PEPPER?: string;
@@ -155,15 +157,20 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
 
   const checkoutToken = typeof body?.checkoutToken === 'string' ? body.checkoutToken.trim() : '';
   const intent = typeof body?.intent === 'string' ? body.intent : 'unknown';
+  const cadence = body?.cadence ?? 'monthly';
+  if (cadence !== 'monthly' && cadence !== 'yearly') {
+    return json({error: 'Invalid cadence. Use "monthly" or "yearly".'}, 400)
+  }
 
   const secretKey = env.STRIPE_SECRET_KEY?.trim();
   const proPrice = env.STRIPE_PRICE_PRO?.trim();
+  const yearlyPrice = env.STRIPE_PRICE_YEARLY?.trim();
   const fullPrice = env.STRIPE_PRICE_FULL_PROGRAM?.trim();
 
-  if (!secretKey || !proPrice || !fullPrice) {
+  if (!secretKey || !proPrice || !yearlyPrice || !fullPrice) {
     return json({
       error:
-        "Missing env vars. Required: STRIPE_SECRET_KEY, STRIPE_PRICE_PRO, STRIPE_PRICE_FULL_PROGRAM",
+        "Missing env vars. Required: STRIPE_SECRET_KEY, STRIPE_PRICE_PRO, STRIPE_PRICE_YEARLY, STRIPE_PRICE_FULL_PROGRAM",
     }, 500);
   }
 
@@ -171,7 +178,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
   const origin = env.FRONTEND_URL?.split(',')[0]?.trim() || `${requestUrl.protocol}//${requestUrl.host}`;
 
   const isPro = plan === "pro";
-  const priceId = isPro ? proPrice : fullPrice;
+  const priceId = isPro ? (cadence === 'yearly' ? yearlyPrice : proPrice) : fullPrice;
 
   if (!priceId.startsWith("price_")) {
     return json(
@@ -225,6 +232,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
     params.set('client_reference_id', userId);
     params.set('metadata[userId]', userId);
     params.set('metadata[source_intent]', intent);
+    params.set('metadata[cadence]', cadence);
 
     // Ensure `session.customer` exists so activation can persist reliably.
     // (In payment mode, Stripe may otherwise leave `customer` null.)
@@ -238,6 +246,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
       params.set('subscription_data[metadata][userId]', userId)
       params.set('subscription_data[metadata][plan]', plan)
       params.set('subscription_data[metadata][source_intent]', intent)
+      params.set('subscription_data[metadata][cadence]', cadence)
     }
 
     if (checkoutToken) {

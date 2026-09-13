@@ -9,6 +9,11 @@ export type AppConfig = NodeJS.ProcessEnv & {
   AUTH_CODE_PEPPER: string
   AUTH_TOKEN_SECRET: string
   COOKIE_SAME_SITE: CookieSameSite
+  STRIPE_SECRET_KEY: string
+  STRIPE_WEBHOOK_SECRET: string
+  STRIPE_PRICE_PRO: string
+  STRIPE_PRICE_YEARLY: string
+  STRIPE_PRICE_FULL_PROGRAM: string
 }
 
 const developmentSecrets = {
@@ -64,6 +69,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     AUTH_CODE_PEPPER: production ? productionSecret(env, 'AUTH_CODE_PEPPER') : env.AUTH_CODE_PEPPER?.trim() || developmentSecrets.AUTH_CODE_PEPPER,
     AUTH_TOKEN_SECRET: production ? productionSecret(env, 'AUTH_TOKEN_SECRET') : env.AUTH_TOKEN_SECRET?.trim() || developmentSecrets.AUTH_TOKEN_SECRET,
     COOKIE_SAME_SITE: sameSite,
+    STRIPE_SECRET_KEY: production ? requireValue(env, 'STRIPE_SECRET_KEY') : env.STRIPE_SECRET_KEY?.trim() || '',
+    STRIPE_WEBHOOK_SECRET: production ? requireValue(env, 'STRIPE_WEBHOOK_SECRET') : env.STRIPE_WEBHOOK_SECRET?.trim() || '',
+    STRIPE_PRICE_PRO: production ? requireValue(env, 'STRIPE_PRICE_PRO') : env.STRIPE_PRICE_PRO?.trim() || '',
+    STRIPE_PRICE_YEARLY: production ? requireValue(env, 'STRIPE_PRICE_YEARLY') : env.STRIPE_PRICE_YEARLY?.trim() || '',
+    STRIPE_PRICE_FULL_PROGRAM: production
+      ? requireValue(env, 'STRIPE_PRICE_FULL_PROGRAM')
+      : env.STRIPE_PRICE_FULL_PROGRAM?.trim() || '',
   }
 
   config.FRONTEND_URL = config.FRONTEND_URL

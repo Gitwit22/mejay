@@ -50,6 +50,9 @@ interface PlanState {
   stripeCustomerId: string | null;
   /** Stripe subscription status for Pro gating. */
   subscriptionStatus: 'active' | 'trialing' | 'past_due' | 'canceled' | 'unpaid' | null;
+  billingCadence: 'monthly' | 'yearly' | null;
+  cancelAtPeriodEnd: boolean;
+  currentPeriodEnd: string | null;
   /** Dev override (used by DevPlanSwitcher). */
   setDevPlan: (plan: Plan) => void;
   /** Runtime plan updates (should not override dev selection). */
@@ -65,6 +68,9 @@ interface PlanState {
     hasFullAccess: boolean
     stripeCustomerId?: string
     subscriptionStatus?: string
+    billingCadence?: 'monthly' | 'yearly'
+    cancelAtPeriodEnd?: boolean
+    currentPeriodEnd?: string
     source: 'server' | 'stripe' | 'storage'
     reason?: string
   }) => void;
@@ -287,6 +293,9 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   upgradeModalOpen: false,
   stripeCustomerId: readInitialStripeCustomerId(),
   subscriptionStatus: null,
+  billingCadence: null,
+  cancelAtPeriodEnd: false,
+  currentPeriodEnd: null,
 
   setAuthBypassEnabled: (enabled) => {
     // In production, only allow runtime toggling if explicitly enabled.
@@ -339,14 +348,18 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       }
     }
 
-    // Update subscription status for Pro gating
     const subStatus = payload.subscriptionStatus
-    if (typeof subStatus === 'string') {
-      const validStatuses = ['active', 'trialing', 'past_due', 'canceled', 'unpaid']
-      if (validStatuses.includes(subStatus)) {
-        set({subscriptionStatus: subStatus as any})
-      }
-    }
+    const validStatuses = ['active', 'trialing', 'past_due', 'canceled', 'unpaid']
+    const subscriptionStatus =
+      typeof subStatus === 'string' && validStatuses.includes(subStatus)
+        ? (subStatus as PlanState['subscriptionStatus'])
+        : null
+    set({
+      subscriptionStatus,
+      billingCadence: payload.billingCadence ?? null,
+      cancelAtPeriodEnd: payload.cancelAtPeriodEnd === true,
+      currentPeriodEnd: payload.currentPeriodEnd ?? null,
+    })
 
     const prev = get()
     if (prev.plan === nextPlan && prev.planSource === 'runtime') return
@@ -418,11 +431,23 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     const data = (await res.json()) as any
     if (!data?.ok) throw new Error('Account fetch failed: invalid response')
 
-    const ent = data.entitlements as {accessType?: unknown; hasFullAccess?: unknown; subscriptionStatus?: unknown} | undefined
+    const ent = data.entitlements as {
+      accessType?: unknown
+      hasFullAccess?: unknown
+      stripeCustomerId?: unknown
+      subscriptionStatus?: unknown
+      billingCadence?: unknown
+      cancelAtPeriodEnd?: unknown
+      currentPeriodEnd?: unknown
+    } | undefined
     const hasFullAccess = ent?.hasFullAccess === true
     const accessTypeRaw = ent?.accessType
     const accessType = accessTypeRaw === 'pro' || accessTypeRaw === 'full_program' ? accessTypeRaw : 'free'
     const subscriptionStatus = typeof ent?.subscriptionStatus === 'string' ? ent.subscriptionStatus : undefined
+    const stripeCustomerId = typeof ent?.stripeCustomerId === 'string' ? ent.stripeCustomerId : undefined
+    const billingCadence = ent?.billingCadence === 'monthly' || ent?.billingCadence === 'yearly' ? ent.billingCadence : undefined
+    const cancelAtPeriodEnd = ent?.cancelAtPeriodEnd === true
+    const currentPeriodEnd = typeof ent?.currentPeriodEnd === 'string' ? ent.currentPeriodEnd : undefined
 
     const user = data.user as {id?: unknown; email?: unknown} | undefined
     if (typeof user?.id === 'string' && typeof user?.email === 'string') {
@@ -437,7 +462,11 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       get().applyEntitlements({
         accessType: accessType as 'free' | 'pro' | 'full_program',
         hasFullAccess,
+        stripeCustomerId,
         subscriptionStatus,
+        billingCadence,
+        cancelAtPeriodEnd,
+        currentPeriodEnd,
         source: 'server',
         reason: reason ?? 'refreshFromServer',
       })
@@ -451,8 +480,8 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       user && typeof user.email === 'string'
         ? { id: typeof user.id === 'string' ? user.id : (get().user?.id ?? 'unknown'), email: user.email }
         : get().user;
-    if (get().authStatus !== 'authenticated' || nextUser !== get().user) {
-      set({authStatus: 'authenticated', user: nextUser ?? null})
+    if (get().authStatus !== 'authenticated' || get().isGuestMode || nextUser !== get().user) {
+      set({authStatus: 'authenticated', user: nextUser ?? null, isGuestMode: false})
     }
   },
 

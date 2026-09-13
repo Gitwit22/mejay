@@ -1,6 +1,20 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { usePlanStore } from './planStore';
 
+describe('planStore authentication transitions', () => {
+  it('clears guest mode when a guest signs in', () => {
+    usePlanStore.setState({authStatus: 'anonymous', isGuestMode: true, user: null})
+
+    usePlanStore.getState().markAuthenticated({id: 'user-1', email: 'test@example.com'})
+
+    expect(usePlanStore.getState()).toMatchObject({
+      authStatus: 'authenticated',
+      isGuestMode: false,
+      user: {id: 'user-1', email: 'test@example.com'},
+    })
+  })
+})
+
 describe.skip('planStore - basic functionality', () => {
   beforeEach(() => {
     // Reset store state before each test if setState exists

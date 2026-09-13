@@ -8,7 +8,19 @@ type Env = {
 type AccessType = 'free' | 'pro' | 'full_program'
 
 type AccountMeResponse =
-  | {ok: true; user: {id: string; email: string; createdAt?: string | null}; entitlements: {accessType: AccessType; hasFullAccess: boolean}}
+  | {
+      ok: true
+      user: {id: string; email: string; createdAt?: string | null}
+      entitlements: {
+        accessType: AccessType
+        hasFullAccess: boolean
+        stripeCustomerId?: string
+        subscriptionStatus?: string
+        billingCadence?: 'monthly' | 'yearly'
+        cancelAtPeriodEnd: boolean
+        currentPeriodEnd?: string
+      }
+    }
   | {ok: false; error: 'unauthorized'}
 
 const json = (body: AccountMeResponse, init?: ResponseInit) =>
@@ -39,9 +51,19 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
   if (!userRow) return json({ok: false, error: 'unauthorized'}, {status: 401})
 
   const entRow = (await env.DB
-    .prepare('SELECT access_type, has_full_access FROM entitlements WHERE user_id = ?1')
+    .prepare(
+      'SELECT access_type, has_full_access, stripe_customer_id, subscription_status, billing_cadence, cancel_at_period_end, current_period_end FROM entitlements WHERE user_id = ?1',
+    )
     .bind(userId)
-    .first()) as {access_type: string; has_full_access: number} | null
+    .first()) as {
+      access_type: string
+      has_full_access: number
+      stripe_customer_id: string | null
+      subscription_status: string | null
+      billing_cadence: string | null
+      cancel_at_period_end: boolean
+      current_period_end: string | null
+    } | null
 
   const accessType = entRow ? normalizeAccessType(entRow.access_type) : 'free'
   const hasFullAccess = entRow ? Boolean(entRow.has_full_access) : false
@@ -53,6 +75,13 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
       entitlements: {
         accessType: hasFullAccess ? (accessType as AccessType) : 'free',
         hasFullAccess: hasFullAccess,
+        ...(entRow?.stripe_customer_id ? {stripeCustomerId: entRow.stripe_customer_id} : {}),
+        ...(entRow?.subscription_status ? {subscriptionStatus: entRow.subscription_status} : {}),
+        ...(entRow?.billing_cadence === 'monthly' || entRow?.billing_cadence === 'yearly'
+          ? {billingCadence: entRow.billing_cadence}
+          : {}),
+        cancelAtPeriodEnd: entRow?.cancel_at_period_end === true,
+        ...(entRow?.current_period_end ? {currentPeriodEnd: entRow.current_period_end} : {}),
       },
     },
     {status: 200},

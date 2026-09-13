@@ -55,7 +55,7 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   const keepImportsOnDevice = useDJStore((s) => s.settings.keepImportsOnDevice)
   const updateUserSettings = useDJStore((s) => s.updateUserSettings)
 
-  const {plan, authStatus, authBypassEnabled} = usePlanStore()
+  const {plan, authStatus, authBypassEnabled, stripeCustomerId} = usePlanStore()
 
   const {
     token,
@@ -140,11 +140,11 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
 
   const from = `${location.pathname}${location.search}`
 
-  const planDestination = hasPaidPlan
+  const planDestination = hasPaidPlan || stripeCustomerId
     ? `/app/settings/billing?returnTo=${encodeURIComponent(from)}`
     : `/app/settings/pricing?returnTo=${encodeURIComponent(from)}`
-  const planLabelInMenu = hasPaidPlan ? 'Manage plan' : 'View pricing'
-  const planLabelInSupport = hasPaidPlan ? 'Manage Plan' : 'Pricing'
+  const planLabelInMenu = hasPaidPlan || stripeCustomerId ? 'Manage plan' : 'View pricing'
+  const planLabelInSupport = hasPaidPlan || stripeCustomerId ? 'Manage Plan' : 'Pricing'
   const showManageBillingButton = plan !== 'full_program'
 
   const handleResetLocalData = async () => {

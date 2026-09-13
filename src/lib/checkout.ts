@@ -68,8 +68,8 @@ export async function startCheckout(plan: 'pro' | 'full_program', intent?: 'tria
     throw new Error('Checkout is disabled while Login Bypass is enabled. Disable bypass and sign in to upgrade.')
   }
 
-  // Guest mode: redirect to login first
-  if (isGuestMode || authStatus === 'anonymous') {
+  // Authenticated state wins over a stale guest flag during guest-to-user conversion.
+  if (authStatus !== 'authenticated' && (isGuestMode || authStatus === 'anonymous')) {
     const returnPath = `/app?tab=party&upgrade=${plan}`
     window.location.href = `/login?returnTo=${encodeURIComponent(returnPath)}`
     return

@@ -17,8 +17,19 @@ CREATE TABLE IF NOT EXISTS entitlements (
   has_full_access INTEGER NOT NULL DEFAULT 0,
   stripe_customer_id TEXT,
   stripe_subscription_id TEXT,
+  subscription_status TEXT,
+  billing_cadence TEXT,
+  cancel_at_period_end BOOLEAN NOT NULL DEFAULT FALSE,
+  current_period_end TIMESTAMPTZ,
+  stripe_event_created_at TIMESTAMPTZ,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE entitlements ADD COLUMN IF NOT EXISTS subscription_status TEXT;
+ALTER TABLE entitlements ADD COLUMN IF NOT EXISTS billing_cadence TEXT;
+ALTER TABLE entitlements ADD COLUMN IF NOT EXISTS cancel_at_period_end BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE entitlements ADD COLUMN IF NOT EXISTS current_period_end TIMESTAMPTZ;
+ALTER TABLE entitlements ADD COLUMN IF NOT EXISTS stripe_event_created_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS auth_codes (
   email TEXT PRIMARY KEY,

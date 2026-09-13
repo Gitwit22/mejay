@@ -2,6 +2,7 @@ type D1Database = any
 
 type Env = {
   STRIPE_SECRET_KEY: string
+  FRONTEND_URL: string
   DB: D1Database
   SESSION_PEPPER?: string
 }
@@ -122,9 +123,9 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
     )
   }
 
-  const url = new URL(request.url)
-  const origin = `${url.protocol}//${url.host}`
-  const returnUrl = `${origin}/app/pricing?portal=return`
+  const frontendOrigin = env.FRONTEND_URL?.split(',')[0]?.trim()
+  if (!frontendOrigin) return json({error: 'Missing env var: FRONTEND_URL'}, 500)
+  const returnUrl = `${frontendOrigin}/app/settings/billing?portal=return`
 
   try {
     const params = new URLSearchParams()

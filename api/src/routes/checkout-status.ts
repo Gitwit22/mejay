@@ -1,8 +1,11 @@
+import {cadenceFromPrice, persistSubscriptionState, stripeTimestampToIso, subscriptionGrantsPro} from '../services/billing'
+
 type D1Database = any
 
 type Env = {
   STRIPE_SECRET_KEY: string
   STRIPE_PRICE_PRO: string
+  STRIPE_PRICE_YEARLY: string
   STRIPE_PRICE_FULL_PROGRAM: string
   CHECKOUT_VERIFY_MAX_AGE_SECONDS?: string
   DB: D1Database
@@ -252,6 +255,7 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
 
     const secretKey = getRequiredEnv(env, 'STRIPE_SECRET_KEY').trim()
     const pricePro = getRequiredEnv(env, 'STRIPE_PRICE_PRO').trim()
+    const priceYearly = getRequiredEnv(env, 'STRIPE_PRICE_YEARLY').trim()
     const priceFull = getRequiredEnv(env, 'STRIPE_PRICE_FULL_PROGRAM').trim()
 
     const expectedLivemode = getExpectedLivemode(secretKey)
@@ -316,7 +320,7 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     } else {
       const lineItems = session?.line_items?.data as Array<{price?: {id?: string}}> | undefined
       const priceId = lineItems?.[0]?.price?.id
-      accessType = priceId === priceFull ? 'full_program' : priceId === pricePro ? 'pro' : 'free'
+      accessType = priceId === priceFull ? 'full_program' : priceId === pricePro || priceId === priceYearly ? 'pro' : 'free'
     }
 
     if (accessType === 'full_program') {
@@ -360,7 +364,7 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     if (accessType === 'pro') {
       const sub = session?.subscription
       const status: string | undefined = sub?.status
-      const active = status === 'active' || status === 'trialing'
+      const active = subscriptionGrantsPro(status ?? '')
 
       const subscriptionId = typeof sub?.id === 'string' ? sub.id : null
       const customerId =
@@ -373,14 +377,19 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
 
       if (userId) {
         try {
-          await upsertEntitlementsInD1({
+          const subscriptionPriceId = sub?.items?.data?.[0]?.price?.id
+          await persistSubscriptionState({
             db: env.DB,
             userId,
             customerId,
-            email,
             subscriptionId,
-            accessType: 'pro',
-            hasFullAccess: !!active,
+            state: {
+              status: status ?? 'canceled',
+              cancelAtPeriodEnd: sub?.cancel_at_period_end === true,
+              currentPeriodEnd: stripeTimestampToIso(sub?.current_period_end),
+              cadence: cadenceFromPrice(subscriptionPriceId, pricePro, priceYearly),
+            },
+            eventCreatedAt: stripeTimestampToIso(sub?.created ?? session?.created) ?? new Date().toISOString(),
           })
         } catch {
           // Best-effort persistence; never fail verification because D1 is down.

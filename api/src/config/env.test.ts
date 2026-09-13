@@ -9,6 +9,11 @@ const productionEnv = {
   AUTH_CODE_PEPPER: 'c'.repeat(48),
   AUTH_TOKEN_SECRET: 't'.repeat(48),
   COOKIE_SAME_SITE: 'none',
+  STRIPE_SECRET_KEY: 'sk_test_example',
+  STRIPE_WEBHOOK_SECRET: 'whsec_example',
+  STRIPE_PRICE_PRO: 'price_monthly',
+  STRIPE_PRICE_YEARLY: 'price_yearly',
+  STRIPE_PRICE_FULL_PROGRAM: 'price_full',
 }
 
 describe('loadConfig', () => {
@@ -30,5 +35,9 @@ describe('loadConfig', () => {
     expect(() => loadConfig({...productionEnv, SESSION_PEPPER: 'replace-with-a-long-random-value'})).toThrow(
       'SESSION_PEPPER',
     )
+  })
+
+  it('rejects a missing yearly Pro price in production', () => {
+    expect(() => loadConfig({...productionEnv, STRIPE_PRICE_YEARLY: ''})).toThrow('STRIPE_PRICE_YEARLY')
   })
 })
