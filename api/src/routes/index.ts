@@ -14,6 +14,19 @@ import {onRequest as devAdminUsers} from './dev-admin/users'
 import {onRequest as devAdminDeleteUser} from './dev-admin/users/[userId]'
 import {onRequestGet as downloadFullProgram} from './download/full-program'
 import {onRequest as entitlements} from './entitlements'
+import {
+  assignIsrc,
+  createArtist,
+  createAsset,
+  createPrice,
+  createProduct,
+  createProvider,
+  createRelease,
+  createRightsDeclaration,
+  createTrack,
+  replaceRevenueSplits,
+  transitionRelease,
+} from './marketplace'
 import {onRequest as stripeWebhook} from './stripe-webhook'
 
 export type RouteHandler = (context: any) => Promise<Response> | Response
@@ -34,6 +47,17 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'delete', path: '/api/dev-admin/users/:userId', handler: devAdminDeleteUser},
   {method: 'get', path: '/api/download/full-program', handler: downloadFullProgram},
   {method: 'get', path: '/api/entitlements', handler: entitlements},
+  {method: 'post', path: '/api/marketplace/providers', handler: createProvider},
+  {method: 'post', path: '/api/marketplace/artists', handler: createArtist},
+  {method: 'post', path: '/api/marketplace/releases', handler: createRelease},
+  {method: 'post', path: '/api/marketplace/releases/:releaseId/tracks', handler: createTrack},
+  {method: 'post', path: '/api/marketplace/assets', handler: createAsset},
+  {method: 'post', path: '/api/marketplace/rights-declarations', handler: createRightsDeclaration},
+  {method: 'post', path: '/api/marketplace/tracks/:trackId/isrc-assignments', handler: assignIsrc},
+  {method: 'post', path: '/api/marketplace/products', handler: createProduct},
+  {method: 'post', path: '/api/marketplace/products/:productId/prices', handler: createPrice},
+  {method: 'put', path: '/api/marketplace/tracks/:trackId/revenue-splits', handler: replaceRevenueSplits},
+  {method: 'post', path: '/api/marketplace/releases/:releaseId/transitions', handler: transitionRelease},
   {method: 'post', path: '/api/stripe-webhook', handler: stripeWebhook},
 ]
 

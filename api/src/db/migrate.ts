@@ -1,98 +1,6 @@
 import 'dotenv/config'
 import {Database} from './client'
-
-const migration = `
-CREATE TABLE IF NOT EXISTS users (
-  id TEXT PRIMARY KEY,
-  email TEXT NOT NULL UNIQUE,
-  display_name TEXT,
-  account_intent TEXT NOT NULL DEFAULT 'consumer',
-  password_hash TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMPTZ
-);
-
-ALTER TABLE users ADD COLUMN IF NOT EXISTS account_intent TEXT NOT NULL DEFAULT 'consumer';
-
-CREATE TABLE IF NOT EXISTS entitlements (
-  user_id TEXT PRIMARY KEY REFERENCES users(id),
-  access_type TEXT NOT NULL DEFAULT 'free',
-  has_full_access INTEGER NOT NULL DEFAULT 0,
-  stripe_customer_id TEXT,
-  stripe_subscription_id TEXT,
-  subscription_status TEXT,
-  billing_cadence TEXT,
-  cancel_at_period_end BOOLEAN NOT NULL DEFAULT FALSE,
-  current_period_end TIMESTAMPTZ,
-  stripe_event_created_at TIMESTAMPTZ,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-ALTER TABLE entitlements ADD COLUMN IF NOT EXISTS subscription_status TEXT;
-ALTER TABLE entitlements ADD COLUMN IF NOT EXISTS billing_cadence TEXT;
-ALTER TABLE entitlements ADD COLUMN IF NOT EXISTS cancel_at_period_end BOOLEAN NOT NULL DEFAULT FALSE;
-ALTER TABLE entitlements ADD COLUMN IF NOT EXISTS current_period_end TIMESTAMPTZ;
-ALTER TABLE entitlements ADD COLUMN IF NOT EXISTS stripe_event_created_at TIMESTAMPTZ;
-
-CREATE TABLE IF NOT EXISTS auth_codes (
-  email TEXT PRIMARY KEY,
-  code_hash TEXT NOT NULL,
-  expires_at TIMESTAMPTZ NOT NULL,
-  attempts INTEGER NOT NULL DEFAULT 0,
-  locked_until TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS sessions (
-  token_hash TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id),
-  expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
-
-CREATE TABLE IF NOT EXISTS email_codes (
-  email TEXT NOT NULL,
-  purpose TEXT NOT NULL,
-  code_hash TEXT NOT NULL,
-  expires_at TIMESTAMPTZ NOT NULL,
-  attempts INTEGER NOT NULL DEFAULT 0,
-  locked_until TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (email, purpose)
-);
-CREATE INDEX IF NOT EXISTS idx_email_codes_email ON email_codes(email);
-
-CREATE TABLE IF NOT EXISTS auth_ip_rates (
-  ip TEXT NOT NULL,
-  purpose TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  window_start TIMESTAMPTZ NOT NULL,
-  count INTEGER NOT NULL DEFAULT 0,
-  locked_until TIMESTAMPTZ,
-  PRIMARY KEY (ip, purpose, kind)
-);
-CREATE INDEX IF NOT EXISTS idx_auth_ip_rates_ip ON auth_ip_rates(ip);
-
-CREATE TABLE IF NOT EXISTS provider_profiles (
-  id TEXT PRIMARY KEY,
-  owner_user_id TEXT NOT NULL UNIQUE REFERENCES users(id),
-  display_name TEXT,
-  status TEXT NOT NULL DEFAULT 'pending_profile_completion',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_provider_profiles_owner_user_id ON provider_profiles(owner_user_id);
-
-CREATE TABLE IF NOT EXISTS provider_members (
-  provider_profile_id TEXT NOT NULL REFERENCES provider_profiles(id),
-  user_id TEXT NOT NULL REFERENCES users(id),
-  role TEXT NOT NULL DEFAULT 'owner',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (provider_profile_id, user_id)
-);
-CREATE INDEX IF NOT EXISTS idx_provider_members_user_id ON provider_members(user_id);
-`
+import {runMigrations} from './migrations'
 
 async function main() {
   const connectionString = process.env.DATABASE_URL
@@ -100,8 +8,13 @@ async function main() {
 
   const database = new Database(connectionString)
   try {
-    await database.pool.query(migration)
-    console.log('Neon schema is up to date')
+    const client = await database.pool.connect()
+    try {
+      const appliedCount = await runMigrations(client)
+      console.log(`Neon schema is up to date (${appliedCount} migration${appliedCount === 1 ? '' : 's'} applied)`)
+    } finally {
+      client.release()
+    }
   } finally {
     await database.close()
   }
