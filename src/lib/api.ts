@@ -1,18 +1,21 @@
 const DEFAULT_PRODUCTION_API_URL = 'https://mejay-api.onrender.com'
-const SAME_ORIGIN_API_HOSTS = new Set(['mejay2.pages.dev'])
-
-export function resolveApiBaseUrl(
-  options?: {configuredApiUrl?: string; isProd?: boolean; useSameOriginApi?: boolean; hostname?: string},
-): string {
-  const configured = String(options?.configuredApiUrl ?? import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '')
-  if (configured) return configured
-  if (!(options?.isProd ?? import.meta.env.PROD)) return ''
-  const hostname = (options?.hostname ?? (typeof window !== 'undefined' ? window.location.hostname : '')).toLowerCase()
-  if ((options?.useSameOriginApi ?? (import.meta.env.VITE_USE_SAME_ORIGIN_API === '1')) || SAME_ORIGIN_API_HOSTS.has(hostname)) return ''
-  return DEFAULT_PRODUCTION_API_URL
+export function resolveApiBase(configuredUrl: string, production: boolean, hostname: string): string {
+  const normalizedHostname = hostname.toLowerCase()
+  if (
+    normalizedHostname === 'mejay2.pages.dev' ||
+    normalizedHostname.endsWith('.mejay2.pages.dev') ||
+    import.meta.env.VITE_USE_SAME_ORIGIN_API === '1'
+  ) {
+    return ''
+  }
+  return String(configuredUrl || (production ? DEFAULT_PRODUCTION_API_URL : '')).replace(/\/$/, '')
 }
 
-const API_URL = resolveApiBaseUrl()
+const API_URL = resolveApiBase(
+  String(import.meta.env.VITE_API_URL || ''),
+  import.meta.env.PROD,
+  typeof window === 'undefined' ? '' : window.location.hostname,
+)
 
 export function apiUrl(path: string): string {
   if (/^https?:\/\//i.test(path)) return path

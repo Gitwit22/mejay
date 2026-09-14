@@ -4,7 +4,7 @@ import { Track, TrackStatus, Settings, getAllTracks, getSettings, addTrack, upda
 import { audioEngine, DeckId } from '@/lib/audioEngine';
 import { detectBPM } from '@/lib/bpmDetector';
 import { computeClampedTempoRatio, computeRequiredTempoShiftPercent, isOverTempoCap, resolveMaxTempoPercent } from '@/lib/tempoMatch';
-import { TEMPO_PRESET_RATIOS, TEMPO_PRESET_MAX_STRETCH, computePresetTempo } from '@/lib/tempoPresets';
+import { computePresetTempo } from '@/lib/tempoPresets';
 // Note: Energy Mode automation removed; mixing uses manual sliders only.
 import { usePlanStore } from '@/stores/planStore';
 import { toast } from '@/hooks/use-toast';
@@ -383,9 +383,6 @@ export const useDJStore = create<DJState>()(
   // Preset mode is intentionally more expressive than Auto/Locked.
   // Auto is capped for safety; presets should be able to reach their targets.
   const PRESET_MAX_TEMPO_PERCENT = 35;
-  // Default max stretch used when a preset's per-preset cap is not found.
-  const DEFAULT_PRESET_MAX_STRETCH_FALLBACK = 35;
-
   const getEffectiveMaxTempoPercent = (settings: Settings): number => {
     if (settings.tempoMode === 'preset') return PRESET_MAX_TEMPO_PERCENT;
     return settings.maxTempoPercent;
@@ -2486,20 +2483,7 @@ export const useDJStore = create<DJState>()(
           return getCanonicalTargetBpm(settings) ?? nextBaseBpm;
         }
         if (settings.tempoMode === 'preset') {
-          // Model A: the target for the incoming track is the CURRENT song's effective BPM.
-          // Effective BPM = outgoing track's native BPM × its current playback rate.
-          // This ensures Song B is tempo-matched to what the listener already hears — no
-          // audible "catch-up" ramp after Song B becomes audible.
-          const currentBpm = currentTrack?.bpm;
-          const hasCurrentBpm = Number.isFinite(currentBpm) && (currentBpm as number) > 0;
-          if (hasCurrentBpm) {
-            const currentEffectiveBpm = (currentBpm as number) * outgoingRate;
-            if (Number.isFinite(currentEffectiveBpm) && currentEffectiveBpm > 0) {
-              return currentEffectiveBpm;
-            }
-          }
-          // Fallback when BPM data is missing: play the incoming track at original tempo.
-          return nextBaseBpm;
+          return computePresetTempo(nextTrack.bpm, settings.tempoPreset ?? 'original').targetBpm ?? nextBaseBpm;
         }
         return nextBaseBpm;
       };
@@ -2713,18 +2697,10 @@ export const useDJStore = create<DJState>()(
           // Free mode: keep pitch/BPM normal.
           get().setTempo(nextDeck, 1);
         } else if (settings.tempoMode === 'preset') {
-          // Model A (preset mode): incoming track is pre-matched to the current song's effective BPM.
-          // Each preset has its own max-stretch cap; "original" = 0% = always plays at native speed.
           const preset = settings.tempoPreset ?? 'original';
-          const presetMaxStretch = TEMPO_PRESET_MAX_STRETCH[preset] ?? DEFAULT_PRESET_MAX_STRETCH_FALLBACK;
-          const computedIncoming = computeTempoForDeck(nextDeck, targetBpm, presetMaxStretch);
-          const incomingTargetRatio = computedIncoming.ratio;
-          set({ lastTempoDebug: computedIncoming.debug });
-          // Apply rate before playback starts — listener hears the correct tempo immediately.
+          const incomingTargetRatio = computePresetTempo(nextTrack.bpm, preset).ratio;
           get().setTempo(nextDeck, incomingTargetRatio);
 
-          // Preset mode: outgoing deck stays at its current effective rate (no audible ramp).
-          // The target IS the current effective BPM, so no speed change is needed or wanted.
           set((s) => ({
             lastTransitionTempoPlan: s.lastTransitionTempoPlan
               ? {

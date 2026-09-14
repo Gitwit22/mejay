@@ -14,9 +14,9 @@ Configure the Pages project with:
 - Build command: `npm run build`
 - Build output directory: `dist`
 - Environment variable: `VITE_API_URL=https://api-staging.mejayapp.com`
-- Optional same-origin proxy flag: `VITE_USE_SAME_ORIGIN_API=1` only when the Pages project is explicitly serving `/api/*`
+- Optional runtime flag: `VITE_USE_SAME_ORIGIN_API=1` when another Pages origin should also use a same-origin `/api/*` proxy.
 
-`public/_routes.json` and `public/_redirects` together control Pages routing. Keep non-static app paths such as `/app/provider` flowing through the SPA fallback, and only enable `VITE_USE_SAME_ORIGIN_API=1` when the deployed Pages origin really serves `/api/*` through a proxy or Pages Function.
+On `mejay2.pages.dev`, the frontend uses the `/api/*` Pages Function proxy so session cookies remain first-party. The proxy targets `https://mejay-api.onrender.com` by default; set the Pages runtime variable `API_ORIGIN` to override it. `public/_routes.json` keeps `/api/*` on the Pages Function path, and `public/_redirects` continues to provide SPA routing for app paths such as `/app/provider`.
 
 ## Render
 

@@ -1,17 +1,16 @@
 import {describe, expect, it} from 'vitest'
+import {resolveApiBase} from './api'
 
-import {resolveApiBaseUrl} from './api'
-
-describe('resolveApiBaseUrl', () => {
-  it('uses same-origin api for pages.dev in production when no override exists', async () => {
-    expect(resolveApiBaseUrl({configuredApiUrl: '', isProd: true, hostname: 'mejay2.pages.dev'})).toBe('')
+describe('resolveApiBase', () => {
+  it('uses the same-origin proxy on the production Pages domain', () => {
+    expect(resolveApiBase('https://mejay-api.onrender.com', true, 'mejay2.pages.dev')).toBe('')
   })
 
-  it('uses same-origin api when explicitly enabled', async () => {
-    expect(resolveApiBaseUrl({configuredApiUrl: '', isProd: true, useSameOriginApi: true})).toBe('')
+  it('uses the configured API on a custom frontend domain', () => {
+    expect(resolveApiBase('https://api.mejayapp.com/', true, 'app.mejayapp.com')).toBe('https://api.mejayapp.com')
   })
 
-  it('keeps explicit api overrides', async () => {
-    expect(resolveApiBaseUrl({configuredApiUrl: 'https://api.example.com/', isProd: true, hostname: 'mejay2.pages.dev'})).toBe('https://api.example.com')
+  it('uses the configured API on non-matching preview domains', () => {
+    expect(resolveApiBase('https://api.mejayapp.com/', true, 'other-project.pages.dev')).toBe('https://api.mejayapp.com')
   })
 })
