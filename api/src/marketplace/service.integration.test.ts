@@ -2,6 +2,7 @@ import {Pool} from 'pg'
 import {afterAll, beforeAll, describe, expect, it} from 'vitest'
 import {Database} from '../db/client'
 import {runMigrations} from '../db/migrations'
+import {AccountDeletionService} from '../account/deletion'
 import {MarketplaceService} from './service'
 
 const connectionString = process.env.TEST_DATABASE_URL
@@ -175,5 +176,29 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
     })
     expect(counts.rows[0].audits).toBeGreaterThanOrEqual(17)
     expect(provider.id).toBeTruthy()
+
+    await new AccountDeletionService(new Database(connectionString!, pool) as never).deleteCurrentUser({
+      userId: providerUserId,
+      email: 'provider@example.test',
+      forfeitFullProgram: false,
+    })
+
+    const deletion = await pool.query<{
+      users: number
+      providers: number
+      releases: number
+      identified_audits: number
+      snapshot_audits: number
+    }>(`SELECT
+      (SELECT COUNT(*)::integer FROM users WHERE id = $1) AS users,
+      (SELECT COUNT(*)::integer FROM provider_profiles WHERE id = $2) AS providers,
+      (SELECT COUNT(*)::integer FROM releases WHERE provider_profile_id = $2) AS releases,
+      (SELECT COUNT(*)::integer FROM marketplace_audit_events
+        WHERE provider_profile_id = $2 OR actor_user_id = $1) AS identified_audits,
+      (SELECT COUNT(*)::integer FROM marketplace_audit_events
+        WHERE entity_id IN ($2, $3, $4) AND (before_data IS NOT NULL OR after_data IS NOT NULL OR anonymized_at IS NULL)) AS snapshot_audits`,
+      [providerUserId, provider.id, release.id, track.id],
+    )
+    expect(deletion.rows[0]).toEqual({users: 0, providers: 0, releases: 0, identified_audits: 0, snapshot_audits: 0})
   })
 })

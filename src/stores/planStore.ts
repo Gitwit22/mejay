@@ -68,6 +68,7 @@ interface PlanState {
   isGuestMode: boolean;
   guestId: string | null;
   initializeGuestMode: () => void;
+  clearAccountSession: () => void;
   /** Optimistically mark auth state after a successful auth API call. */
   markAuthenticated: (user?: {id?: string; email?: string; accountIntent?: AccountIntent} | null) => void;
   /** Allows entering /app without a server session (dev/demo only). */
@@ -595,6 +596,30 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       safeWriteLocalStorage(GUEST_ID_KEY, guestId)
     }
     set({ isGuestMode: true, guestId, authStatus: 'anonymous', plan: 'free', planSource: 'runtime', providerProfile: null })
+  },
+
+  clearAccountSession: () => {
+    safeRemoveLocalStorage(ACCESS_PLAN_KEY)
+    safeRemoveLocalStorage(STRIPE_CUSTOMER_ID_KEY)
+    safeRemoveLocalStorage(AUTH_BYPASS_KEY)
+    safeRemoveLocalStorage(GUEST_ID_KEY)
+    safeRemoveLocalStorage('mejay:stripeSessionId')
+    set({
+      plan: 'free',
+      planSource: 'runtime',
+      authStatus: 'anonymous',
+      user: null,
+      providerProfile: null,
+      isGuestMode: false,
+      guestId: null,
+      authBypassEnabled: false,
+      stripeCustomerId: null,
+      subscriptionStatus: null,
+      billingCadence: null,
+      cancelAtPeriodEnd: false,
+      currentPeriodEnd: null,
+      upgradeModalOpen: false,
+    })
   },
   
   openUpgradeModal: () => set({ upgradeModalOpen: true }),

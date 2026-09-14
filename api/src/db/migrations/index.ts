@@ -2,9 +2,10 @@ import {createHash} from 'node:crypto'
 import type {PoolClient} from 'pg'
 import {existingSchemaMigration} from './0001-existing-schema'
 import {marketplaceFoundationMigration} from './0002-marketplace-foundation'
+import {accountDeletionMigration} from './0003-account-deletion'
 import type {Migration} from './types'
 
-export const migrations: readonly Migration[] = [existingSchemaMigration, marketplaceFoundationMigration]
+export const migrations: readonly Migration[] = [existingSchemaMigration, marketplaceFoundationMigration, accountDeletionMigration]
 
 const MIGRATION_LOCK_ID = 764_329_101
 

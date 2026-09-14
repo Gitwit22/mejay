@@ -1,5 +1,6 @@
 import type {RequestHandler} from 'express'
 import {onRequest as accountMe} from './account/me'
+import {onRequest as accountDelete} from './account/delete'
 import {onRequest as authLogin} from './auth/login'
 import {onRequest as authLogout} from './auth/logout'
 import {onRequest as authSetPassword} from './auth/set-password'
@@ -33,6 +34,7 @@ export type RouteHandler = (context: any) => Promise<Response> | Response
 
 export const routes: Array<{method: string; path: string; handler: RouteHandler}> = [
   {method: 'get', path: '/api/account/me', handler: accountMe},
+  {method: 'delete', path: '/api/account', handler: accountDelete},
   {method: 'post', path: '/api/auth/login', handler: authLogin},
   {method: 'post', path: '/api/auth/logout', handler: authLogout},
   {method: 'post', path: '/api/auth/set-password', handler: authSetPassword},

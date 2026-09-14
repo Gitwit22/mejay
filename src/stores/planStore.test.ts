@@ -13,6 +13,43 @@ describe('planStore authentication transitions', () => {
       user: {id: 'user-1', email: 'test@example.com'},
     })
   })
+
+  it('clears all persisted account state on logout', () => {
+    localStorage.setItem('mejay:accessPlan', 'pro')
+    localStorage.setItem('mejay:stripeCustomerId', 'cus_test')
+    localStorage.setItem('mejay:authBypassEnabled', 'true')
+    localStorage.setItem('mejay:guestId', 'guest-test')
+    localStorage.setItem('mejay:stripeSessionId', 'cs_test')
+    usePlanStore.setState({
+      plan: 'pro',
+      planSource: 'runtime',
+      authStatus: 'authenticated',
+      user: {id: 'user-1', email: 'test@example.com', accountIntent: 'consumer'},
+      isGuestMode: true,
+      guestId: 'guest-test',
+      authBypassEnabled: true,
+      stripeCustomerId: 'cus_test',
+      subscriptionStatus: 'active',
+    })
+
+    usePlanStore.getState().clearAccountSession()
+
+    expect(usePlanStore.getState()).toMatchObject({
+      plan: 'free',
+      authStatus: 'anonymous',
+      user: null,
+      isGuestMode: false,
+      guestId: null,
+      authBypassEnabled: false,
+      stripeCustomerId: null,
+      subscriptionStatus: null,
+    })
+    expect(localStorage.getItem('mejay:accessPlan')).toBeNull()
+    expect(localStorage.getItem('mejay:stripeCustomerId')).toBeNull()
+    expect(localStorage.getItem('mejay:authBypassEnabled')).toBeNull()
+    expect(localStorage.getItem('mejay:guestId')).toBeNull()
+    expect(localStorage.getItem('mejay:stripeSessionId')).toBeNull()
+  })
 })
 
 describe.skip('planStore - basic functionality', () => {

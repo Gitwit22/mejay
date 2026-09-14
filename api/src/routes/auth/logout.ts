@@ -22,15 +22,20 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
   const {request, env} = ctx
   if (request.method !== 'POST') return json({ok: false, error: 'Method not allowed'}, {status: 405})
 
-  await deleteSession(request, env)
-
-  const secure = new URL(request.url).protocol === 'https:'
-  return new Response(JSON.stringify({ok: true}), {
-    status: 200,
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': 'no-store, max-age=0',
-      'Set-Cookie': cookieHeaderForLogout({secure, sameSite: env.COOKIE_SAME_SITE}),
-    },
-  })
+  try {
+    await deleteSession(request, env)
+    const secure = new URL(request.url).protocol === 'https:'
+    return new Response(JSON.stringify({ok: true}), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store, max-age=0',
+        'Set-Cookie': cookieHeaderForLogout({secure, sameSite: env.COOKIE_SAME_SITE}),
+      },
+    })
+  } catch (error) {
+    const errorId = crypto.randomUUID()
+    console.error('[logout] failed', {errorId, error})
+    return json({ok: false, error: 'logout_failed', errorId}, {status: 500})
+  }
 }
