@@ -2,12 +2,12 @@ const DEFAULT_PRODUCTION_API_URL = 'https://mejay-api.onrender.com'
 
 export function resolveApiBaseUrl(
   hostname?: string,
-  options?: {configuredApiUrl?: string; isProd?: boolean},
+  options?: {configuredApiUrl?: string; isProd?: boolean; useSameOriginApi?: boolean},
 ): string {
   const configured = String(options?.configuredApiUrl ?? import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '')
   if (configured) return configured
   if (!(options?.isProd ?? import.meta.env.PROD)) return ''
-  if (hostname?.toLowerCase().endsWith('.pages.dev')) return ''
+  if (options?.useSameOriginApi ?? (import.meta.env.VITE_USE_SAME_ORIGIN_API === '1')) return ''
   return DEFAULT_PRODUCTION_API_URL
 }
 

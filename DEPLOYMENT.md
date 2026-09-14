@@ -14,8 +14,9 @@ Configure the Pages project with:
 - Build command: `npm run build`
 - Build output directory: `dist`
 - Environment variable: `VITE_API_URL=https://api-staging.mejayapp.com`
+- Optional same-origin proxy flag: `VITE_USE_SAME_ORIGIN_API=1` only when the Pages project is explicitly serving `/api/*`
 
-The frontend contains no Pages Functions. `public/_redirects` continues to provide SPA routing.
+`public/_redirects` provides SPA routing for app paths like `/app/provider`. `public/_routes.json` is narrowed to `/api/*` so Pages Functions can be introduced for API proxying without breaking client-side routes.
 
 ## Render
 
