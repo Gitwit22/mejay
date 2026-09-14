@@ -12,6 +12,19 @@ type CodeStep = 'email' | 'code'
 type Purpose = 'signup_verify' | 'password_reset'
 type AccountIntent = 'consumer' | 'provider'
 
+type AuthResponse = {
+  ok?: boolean
+  error?: string
+}
+
+type StartCodeResponse = AuthResponse & {
+  devCode?: string
+}
+
+type VerifyCodeResponse = AuthResponse & {
+  verifiedToken?: string
+}
+
 export default function LoginPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -47,8 +60,6 @@ export default function LoginPage() {
     const intent = (searchParams.get('intent') ?? '').toLowerCase()
     if (intent !== 'signup') return
     goToCreateAccount(parseAccountIntent(searchParams.get('accountIntent')))
-    // Only run when intent changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
   const goToCreateAccount = (nextIntent: AccountIntent = 'consumer') => {
@@ -68,7 +79,7 @@ export default function LoginPage() {
         headers: {'content-type': 'application/json'},
         body: JSON.stringify({email, password, rememberMe}),
       })
-      const data = (await res.json().catch(() => null)) as any
+      const data = (await res.json().catch(() => null)) as AuthResponse | null
       if (res.ok && data?.ok) {
         toast({title: 'Signed in', description: 'Welcome back.'})
         // Avoid /app redirect loop by marking authenticated immediately.
@@ -107,7 +118,7 @@ export default function LoginPage() {
         headers: {'content-type': 'application/json'},
         body: JSON.stringify({email, purpose, accountIntent}),
       })
-      const data = (await res.json().catch(() => null)) as any
+      const data = (await res.json().catch(() => null)) as StartCodeResponse | null
       if (!res.ok || !data?.ok) {
         throw new Error(typeof data?.error === 'string' ? data.error : `Start failed (${res.status})`)
       }
@@ -138,7 +149,7 @@ export default function LoginPage() {
         headers: {'content-type': 'application/json'},
         body: JSON.stringify({email, code, purpose}),
       })
-      const data = (await res.json().catch(() => null)) as any
+      const data = (await res.json().catch(() => null)) as VerifyCodeResponse | null
       if (!res.ok || !data?.ok) {
         throw new Error(typeof data?.error === 'string' ? data.error : `Verify failed (${res.status})`)
       }
@@ -181,7 +192,7 @@ export default function LoginPage() {
         headers: {'content-type': 'application/json'},
         body: JSON.stringify({email, verifiedToken, password, rememberMe, accountIntent}),
       })
-      const data = (await res.json().catch(() => null)) as any
+      const data = (await res.json().catch(() => null)) as AuthResponse | null
       if (!res.ok || !data?.ok) {
         throw new Error(typeof data?.error === 'string' ? data.error : `Set password failed (${res.status})`)
       }

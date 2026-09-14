@@ -59,8 +59,7 @@ const shouldRedirectToWelcomeOnMount = () => {
     | undefined;
   const entry = entries?.[0];
 
-  // eslint-disable-next-line deprecation/deprecation
-  const legacyType = (window.performance as any)?.navigation?.type;
+  const legacyType = (window.performance as Performance & {navigation?: {type?: number}})?.navigation?.type;
   const isReload = entry?.type === "reload" || legacyType === 1;
   if (!isReload) return false;
 

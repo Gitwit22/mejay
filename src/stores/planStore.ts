@@ -7,6 +7,36 @@ export type PlanSource = 'runtime' | 'dev';
 
 export type Feature = 'autoVolume' | 'advancedMixTiming' | 'tempoControl';
 
+type EntitlementsChangedMessage = {
+  type: 'entitlements_changed'
+  sender: string
+  entitlementsVersion: number
+  reason?: string
+}
+
+type AccountMePayload = {
+  ok?: boolean
+  user?: {
+    id?: unknown
+    email?: unknown
+    accountIntent?: unknown
+  }
+  provider?: {
+    id?: unknown
+    status?: unknown
+    role?: unknown
+  }
+  entitlements?: {
+    accessType?: unknown
+    hasFullAccess?: unknown
+    stripeCustomerId?: unknown
+    subscriptionStatus?: unknown
+    billingCadence?: unknown
+    cancelAtPeriodEnd?: unknown
+    currentPeriodEnd?: unknown
+  }
+}
+
 const PLAN_FEATURES: Record<Plan, Record<Feature, boolean>> = {
   free: {
     autoVolume: false,
@@ -244,7 +274,7 @@ if (typeof window !== 'undefined') {
     if (typeof BroadcastChannel === 'function') {
       const bc = new BroadcastChannel(ENTITLEMENTS_CHANNEL)
       bc.addEventListener('message', (ev) => {
-        const msg = ev.data as any
+        const msg = ev.data as EntitlementsChangedMessage | null
         if (!msg || msg.type !== 'entitlements_changed') return
         if (msg.sender === TAB_ID) return
         void usePlanStore
@@ -431,18 +461,10 @@ export const usePlanStore = create<PlanState>((set, get) => ({
 
     if (!res.ok) throw new Error(`Account fetch failed (${res.status})`)
 
-    const data = (await res.json()) as any
+    const data = (await res.json()) as AccountMePayload
     if (!data?.ok) throw new Error('Account fetch failed: invalid response')
 
-    const ent = data.entitlements as {
-      accessType?: unknown
-      hasFullAccess?: unknown
-      stripeCustomerId?: unknown
-      subscriptionStatus?: unknown
-      billingCadence?: unknown
-      cancelAtPeriodEnd?: unknown
-      currentPeriodEnd?: unknown
-    } | undefined
+    const ent = data.entitlements
     const hasFullAccess = ent?.hasFullAccess === true
     const accessTypeRaw = ent?.accessType
     const accessType = accessTypeRaw === 'pro' || accessTypeRaw === 'full_program' ? accessTypeRaw : 'free'
@@ -452,8 +474,8 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     const cancelAtPeriodEnd = ent?.cancelAtPeriodEnd === true
     const currentPeriodEnd = typeof ent?.currentPeriodEnd === 'string' ? ent.currentPeriodEnd : undefined
 
-    const user = data.user as {id?: unknown; email?: unknown; accountIntent?: unknown} | undefined
-    const provider = data.provider as {id?: unknown; status?: unknown; role?: unknown} | undefined
+    const user = data.user
+    const provider = data.provider
     const providerStatus = parseProviderStatus(provider?.status)
     const providerProfile =
       typeof provider?.id === 'string' && providerStatus && typeof provider?.role === 'string'

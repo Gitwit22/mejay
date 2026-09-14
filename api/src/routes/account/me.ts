@@ -1,7 +1,13 @@
 import {getSessionUserId, normalizeAccessType} from '../_auth'
 
 type Env = {
-  DB: any
+  DB: {
+    prepare: (sql: string) => {
+      bind: (...values: unknown[]) => {
+        first: <T = Record<string, unknown>>() => Promise<T | null>
+      }
+    }
+  }
   SESSION_PEPPER?: string
 }
 
