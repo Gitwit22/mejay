@@ -585,8 +585,8 @@ const App = () => (
       <AppLifetimeAudioCleanup />
       <AppMediaSessionBootstrap />
       <AppLicenseBootstrap />
-      <AppBillingBootstrap />
       <BrowserRouter>
+        <AppBillingBootstrap />
         <AnimatedRoutes />
       </BrowserRouter>
     </TooltipProvider>

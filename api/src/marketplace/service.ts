@@ -17,6 +17,7 @@ import type {
 type Statement = {
   bind: (...values: unknown[]) => Statement
   first: <T = Record<string, unknown>>() => Promise<T | null>
+  all: <T = Record<string, unknown>>() => Promise<{results: T[]}>
   run: () => Promise<unknown>
 }
 
@@ -171,6 +172,55 @@ async function inserted<T>(statement: {first: <R>() => Promise<R | null>}): Prom
 
 export class MarketplaceService {
   constructor(private readonly database: Database) {}
+
+  async getDashboard(userId: string): Promise<unknown> {
+    const context = await providerContext(this.database, userId, false)
+    const provider = await this.database.prepare(
+      `SELECT id, display_name, legal_name, slug, contact_email, country_code, bio, status, created_at, updated_at
+       FROM provider_profiles WHERE id = ?1`,
+    ).bind(context.providerId).first()
+    if (!provider) throw new MarketplaceError(404, 'not_found', 'Provider profile was not found')
+
+    const counts = await this.database.prepare(
+      `SELECT
+        (SELECT COUNT(*)::integer FROM artists WHERE provider_profile_id = ?1) AS artists,
+        (SELECT COUNT(*)::integer FROM releases WHERE provider_profile_id = ?1) AS releases,
+        (SELECT COUNT(*)::integer FROM releases WHERE provider_profile_id = ?1 AND status = 'DRAFT') AS drafts,
+        (SELECT COUNT(*)::integer FROM releases WHERE provider_profile_id = ?1 AND status = 'LIVE') AS live_releases,
+        (SELECT COUNT(*)::integer FROM isrc_assignments WHERE provider_profile_id = ?1 AND revoked_at IS NULL) AS active_isrcs`,
+    ).bind(context.providerId).first()
+
+    return {provider: {...provider, role: context.role}, counts}
+  }
+
+  async listArtists(userId: string): Promise<unknown> {
+    const context = await providerContext(this.database, userId, false)
+    const {results} = await this.database.prepare(
+      `SELECT a.*, COUNT(DISTINCT ra.release_id)::integer AS release_count
+       FROM artists a
+       LEFT JOIN release_artists ra ON ra.artist_id = a.id AND ra.provider_profile_id = a.provider_profile_id
+       WHERE a.provider_profile_id = ?1
+       GROUP BY a.id
+       ORDER BY LOWER(a.name), a.created_at`,
+    ).bind(context.providerId).all()
+    return results
+  }
+
+  async listReleases(userId: string): Promise<unknown> {
+    const context = await providerContext(this.database, userId, false)
+    const {results} = await this.database.prepare(
+      `SELECT r.*, a.id AS primary_artist_id, a.name AS primary_artist_name,
+        COUNT(DISTINCT t.id)::integer AS track_count
+       FROM releases r
+       LEFT JOIN release_artists ra ON ra.release_id = r.id AND ra.provider_profile_id = r.provider_profile_id AND ra.is_primary = TRUE
+       LEFT JOIN artists a ON a.id = ra.artist_id AND a.provider_profile_id = r.provider_profile_id
+       LEFT JOIN tracks t ON t.release_id = r.id AND t.provider_profile_id = r.provider_profile_id
+       WHERE r.provider_profile_id = ?1
+       GROUP BY r.id, a.id, a.name
+       ORDER BY r.updated_at DESC, r.created_at DESC`,
+    ).bind(context.providerId).all()
+    return results
+  }
 
   async completeProvider(userId: string, input: ProviderInput): Promise<unknown> {
     return this.database.transaction(async (db: Database) => {

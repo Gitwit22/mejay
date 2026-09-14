@@ -54,4 +54,29 @@ describe('release state machine', () => {
     })
     expect(statements.some((sql) => sql.includes('INSERT INTO artists'))).toBe(false)
   })
+
+  it('scopes artist reads to the provider membership', async () => {
+    const boundValues: unknown[][] = []
+    const database = {
+      prepare: (sql: string) => {
+        const statement = {
+          bind: vi.fn(),
+          first: vi.fn(async () => sql.includes('FROM provider_members')
+            ? {provider_profile_id: 'provider-7', role: 'viewer'}
+            : null),
+          all: vi.fn(async () => ({results: [{id: 'artist-1', name: 'Sample Artist'}]})),
+          run: vi.fn(),
+        }
+        statement.bind.mockImplementation((...values: unknown[]) => {
+          boundValues.push(values)
+          return statement
+        })
+        return statement
+      },
+    }
+
+    const service = new MarketplaceService(database as never)
+    await expect(service.listArtists('user-1')).resolves.toEqual([{id: 'artist-1', name: 'Sample Artist'}])
+    expect(boundValues).toContainEqual(['provider-7'])
+  })
 })

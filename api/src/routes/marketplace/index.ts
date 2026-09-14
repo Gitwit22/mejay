@@ -42,6 +42,32 @@ function databaseError(error: unknown): Response | null {
   return null
 }
 
+function errorResponse(error: unknown): Response {
+  if (error instanceof MarketplaceError) {
+    return json({ok: false, error: error.code, message: error.message, details: error.details}, {status: error.status})
+  }
+  const response = databaseError(error)
+  if (response) return response
+  const errorId = crypto.randomUUID()
+  console.error('[marketplace] request failed', {errorId, error})
+  return json({ok: false, error: 'server_error', errorId}, {status: 500})
+}
+
+function readHandler(operation: (service: MarketplaceService, userId: string, params: Record<string, string | undefined>) => Promise<unknown>) {
+  return async (context: Context): Promise<Response> => {
+    if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+    const userId = await getSessionUserId(context.request, context.env)
+    if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+
+    try {
+      const result = await operation(new MarketplaceService(context.env.DB), userId, context.params ?? {})
+      return json({ok: true, data: result})
+    } catch (error) {
+      return errorResponse(error)
+    }
+  }
+}
+
 function handler<Schema extends z.ZodTypeAny>(schema: Schema, operation: Operation<z.output<Schema>>) {
   return async (context: Context): Promise<Response> => {
     if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
@@ -56,14 +82,7 @@ function handler<Schema extends z.ZodTypeAny>(schema: Schema, operation: Operati
       if (error instanceof ZodError) {
         return json({ok: false, error: 'invalid_request', issues: error.issues}, {status: 400})
       }
-      if (error instanceof MarketplaceError) {
-        return json({ok: false, error: error.code, message: error.message, details: error.details}, {status: error.status})
-      }
-      const response = databaseError(error)
-      if (response) return response
-      const errorId = crypto.randomUUID()
-      console.error('[marketplace] request failed', {errorId, error})
-      return json({ok: false, error: 'server_error', errorId}, {status: 500})
+      return errorResponse(error)
     }
   }
 }
@@ -75,7 +94,10 @@ function requiredParam(params: Record<string, string | undefined>, name: string)
 }
 
 export const createProvider = handler(providerSchema, (service, userId, input) => service.completeProvider(userId, input))
+export const getDashboard = readHandler((service, userId) => service.getDashboard(userId))
+export const listArtists = readHandler((service, userId) => service.listArtists(userId))
 export const createArtist = handler(artistSchema, (service, userId, input) => service.createArtist(userId, input))
+export const listReleases = readHandler((service, userId) => service.listReleases(userId))
 export const createRelease = handler(releaseSchema, (service, userId, input) => service.createRelease(userId, input))
 export const createTrack = handler(trackSchema, (service, userId, input, params) =>
   service.createTrack(userId, requiredParam(params, 'releaseId'), input),
