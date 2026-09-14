@@ -11,6 +11,7 @@ import {
   sha256Hex,
   verifyVerifiedToken,
 } from '../_auth'
+import {bootstrapProviderAccount, parseAccountIntent} from '../../marketplace/onboarding'
 
 type Env = {
   DB: any
@@ -49,6 +50,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
     const email = normalizeEmail(String((body as any).email || ''))
     const token = String((body as any).verifiedToken || '').trim()
     const password = String((body as any).password || '')
+    const accountIntent = parseAccountIntent((body as any).accountIntent)
     const rememberMeRaw = (body as any).rememberMe
     // Back-compat: older clients don't send rememberMe; preserve existing 30-day behavior.
     const rememberMe = typeof rememberMeRaw === 'boolean' ? rememberMeRaw : true
@@ -90,16 +92,18 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
         await database.prepare('DELETE FROM sessions WHERE user_id = ?1').bind(currentUser.id).run()
       } else {
         const userId = currentUser?.id ?? crypto.randomUUID()
+        const now = nowIso()
         await database
           .prepare(
             [
-              'INSERT INTO users (id, email, password_hash, updated_at) VALUES (?1, ?2, ?3, ?4)',
+              'INSERT INTO users (id, email, password_hash, account_intent, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)',
               'ON CONFLICT(email) DO UPDATE SET',
               'password_hash=excluded.password_hash,',
+              "account_intent=CASE WHEN users.account_intent = 'provider' THEN users.account_intent ELSE excluded.account_intent END,",
               'updated_at=excluded.updated_at',
             ].join(' '),
           )
-          .bind(userId, email, passwordHash, nowIso())
+          .bind(userId, email, passwordHash, accountIntent, now)
           .run()
 
         currentUser = (await database
@@ -107,6 +111,10 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
           .bind(email)
           .first()) as {id: string; email: string} | null
         if (!currentUser) throw new Error('user_upsert_failed')
+
+        if (accountIntent === 'provider') {
+          await bootstrapProviderAccount({db: database, userId: currentUser.id, createdAt: now})
+        }
       }
 
       await database.prepare('DELETE FROM sessions WHERE expires_at < ?1').bind(nowIso()).run()

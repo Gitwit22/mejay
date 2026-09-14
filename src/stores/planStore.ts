@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import {apiFetch} from '@/lib/api';
+import {parseAccountIntent, parseProviderStatus, type AccountIntent, type ProviderSummary} from '@/lib/marketplace';
 
 export type Plan = 'free' | 'pro' | 'full_program';
 export type PlanSource = 'runtime' | 'dev';
@@ -31,13 +32,14 @@ interface PlanState {
   entitlementsVersion: number;
   /** Server auth status (cookie session). */
   authStatus: 'unknown' | 'authenticated' | 'anonymous';
-  user: {id: string; email: string} | null;
+  user: {id: string; email: string; accountIntent: AccountIntent} | null;
+  providerProfile: ProviderSummary | null;
   /** Guest mode: allows using /app without server auth. */
   isGuestMode: boolean;
   guestId: string | null;
   initializeGuestMode: () => void;
   /** Optimistically mark auth state after a successful auth API call. */
-  markAuthenticated: (user?: {id?: string; email?: string} | null) => void;
+  markAuthenticated: (user?: {id?: string; email?: string; accountIntent?: AccountIntent} | null) => void;
   /** Allows entering /app without a server session (dev/demo only). */
   authBypassEnabled: boolean;
   /** Whether UI is allowed to toggle auth bypass at runtime. */
@@ -161,8 +163,8 @@ function readInitialAuthBypassEnabled(): boolean {
   return raw === 'true'
 }
 
-function getBypassUser(): {id: string; email: string} {
-  return {id: 'auth-bypass', email: 'bypass@mejay.local'}
+function getBypassUser(): {id: string; email: string; accountIntent: AccountIntent} {
+  return {id: 'auth-bypass', email: 'bypass@mejay.local', accountIntent: 'consumer'}
 }
 
 const INITIAL_AUTH_BYPASS_ENABLED = readInitialAuthBypassEnabled()
@@ -285,6 +287,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   entitlementsVersion: 0,
   authStatus: INITIAL_AUTH_BYPASS_ENABLED ? 'authenticated' : 'unknown',
   user: INITIAL_AUTH_BYPASS_ENABLED ? getBypassUser() : null,
+  providerProfile: null,
   isGuestMode: false,
   guestId: readInitialGuestId(),
   authBypassEnabled: INITIAL_AUTH_BYPASS_ENABLED,
@@ -309,7 +312,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     }
 
     safeRemoveLocalStorage(AUTH_BYPASS_KEY)
-    set({authStatus: 'unknown', user: null})
+    set({authStatus: 'unknown', user: null, providerProfile: null})
     // Kick a best-effort refresh so the UI reflects real server status.
     void get()
       .refreshFromServer({reason: 'disableAuthBypass'})
@@ -420,7 +423,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     })
 
     if (res.status === 401) {
-      set({authStatus: 'anonymous', user: null})
+      set({authStatus: 'anonymous', user: null, providerProfile: null})
       // Guest mode: allow using app without auth
       get().initializeGuestMode()
       return false
@@ -449,11 +452,22 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     const cancelAtPeriodEnd = ent?.cancelAtPeriodEnd === true
     const currentPeriodEnd = typeof ent?.currentPeriodEnd === 'string' ? ent.currentPeriodEnd : undefined
 
-    const user = data.user as {id?: unknown; email?: unknown} | undefined
+    const user = data.user as {id?: unknown; email?: unknown; accountIntent?: unknown} | undefined
+    const provider = data.provider as {id?: unknown; status?: unknown; role?: unknown} | undefined
+    const providerStatus = parseProviderStatus(provider?.status)
+    const providerProfile =
+      typeof provider?.id === 'string' && providerStatus && typeof provider?.role === 'string'
+        ? {id: provider.id, status: providerStatus, role: provider.role}
+        : null
     if (typeof user?.id === 'string' && typeof user?.email === 'string') {
-      set({authStatus: 'authenticated', user: {id: user.id, email: user.email}, isGuestMode: false})
+      set({
+        authStatus: 'authenticated',
+        user: {id: user.id, email: user.email, accountIntent: parseAccountIntent(user.accountIntent)},
+        isGuestMode: false,
+        providerProfile,
+      })
     } else {
-      set({authStatus: 'authenticated', user: null, isGuestMode: false})
+      set({authStatus: 'authenticated', user: null, isGuestMode: false, providerProfile})
     }
 
     // Entitlements are only meaningful when billing is enabled and there is no dev override.
@@ -478,7 +492,11 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   markAuthenticated: (user) => {
     const nextUser =
       user && typeof user.email === 'string'
-        ? { id: typeof user.id === 'string' ? user.id : (get().user?.id ?? 'unknown'), email: user.email }
+        ? {
+            id: typeof user.id === 'string' ? user.id : (get().user?.id ?? 'unknown'),
+            email: user.email,
+            accountIntent: parseAccountIntent(user.accountIntent ?? get().user?.accountIntent),
+          }
         : get().user;
     if (get().authStatus !== 'authenticated' || get().isGuestMode || nextUser !== get().user) {
       set({authStatus: 'authenticated', user: nextUser ?? null, isGuestMode: false})
@@ -554,7 +572,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     if (!existing) {
       safeWriteLocalStorage(GUEST_ID_KEY, guestId)
     }
-    set({ isGuestMode: true, guestId, authStatus: 'anonymous', plan: 'free', planSource: 'runtime' })
+    set({ isGuestMode: true, guestId, authStatus: 'anonymous', plan: 'free', planSource: 'runtime', providerProfile: null })
   },
   
   openUpgradeModal: () => set({ upgradeModalOpen: true }),
