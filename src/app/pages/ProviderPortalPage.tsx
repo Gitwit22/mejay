@@ -24,11 +24,11 @@ export default function ProviderPortalPage() {
         <div className="bg-gradient gradient-1" aria-hidden="true" />
         <main className="main-content">
           <section className="hero">
-            <h1>Provider Portal</h1>
+            <h1>Artist Portal</h1>
             <p className="hero-subtitle">
               {isGuestMode
-                ? 'You are browsing in guest mode. Create a provider account to continue into artist onboarding.'
-                : 'Sign in or create a provider account to manage publishing, onboarding, and payout setup.'}
+                ? 'You are browsing in guest mode. Create an account and subscribe to Pro to become an Artist.'
+                : 'Sign in or create an account to manage Artist publishing, onboarding, and payouts.'}
             </p>
           </section>
           <div className="pricing-grid">
@@ -37,11 +37,11 @@ export default function ProviderPortalPage() {
                 <button
                   type="button"
                   className="plan-cta"
-                  onClick={() => navigate('/login?intent=signup&accountIntent=provider&returnTo=/app/provider/onboarding')}
+                  onClick={() => navigate('/login?intent=signup&accountIntent=provider&returnTo=/app/artist/onboarding')}
                 >
-                  Start provider signup
+                  Become an Artist
                 </button>
-                <button type="button" className="plan-cta secondary" onClick={() => navigate('/login?returnTo=/app/provider')}>
+                <button type="button" className="plan-cta secondary" onClick={() => navigate('/login?returnTo=/app/artist')}>
                   Sign in
                 </button>
               </div>
@@ -58,13 +58,13 @@ export default function ProviderPortalPage() {
       <div className="bg-gradient gradient-2" aria-hidden="true" />
       <main className="main-content">
         <section className="hero">
-          <h1>Provider Portal</h1>
-          <p className="hero-subtitle">The provider area is scaffolded around onboarding, catalog, rights, payouts, and reporting.</p>
+          <h1>Artist Portal</h1>
+          <p className="hero-subtitle">Manage your Artist profile, catalog, rights, pricing, payouts, and reporting.</p>
         </section>
 
         <div className="pricing-grid">
           <div className="pricing-card current">
-            <span className="plan-badge current">Provider status</span>
+            <span className="plan-badge current">Artist status</span>
             <div className="plan-name">{getProviderStatusLabel(providerProfile?.status ?? null)}</div>
             <div className="plan-description">
               {providerProfile
@@ -85,8 +85,8 @@ export default function ProviderPortalPage() {
               </div>
             </div>
             <div style={{marginTop: '1.25rem', display: 'grid', gap: '0.75rem'}}>
-              <Link to="/app/provider/onboarding" className="plan-cta secondary" style={{display: 'inline-flex', justifyContent: 'center', textDecoration: 'none'}}>
-                Open provider onboarding
+              <Link to="/app/artist/onboarding" className="plan-cta secondary" style={{display: 'inline-flex', justifyContent: 'center', textDecoration: 'none'}}>
+                Open Artist onboarding
               </Link>
             </div>
           </div>

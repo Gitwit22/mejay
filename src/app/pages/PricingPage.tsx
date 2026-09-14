@@ -1,5 +1,5 @@
 import {useEffect, useState} from 'react'
-import {Link, useLocation, useNavigate} from 'react-router-dom'
+import {Link, useLocation, useNavigate, useSearchParams} from 'react-router-dom'
 
 import {toast} from '@/hooks/use-toast'
 import {startCheckout} from '@/lib/checkout'
@@ -14,6 +14,7 @@ type PricingPageProps = {
 export default function PricingPage({ mode = 'app' }: PricingPageProps) {
   const location = useLocation()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [isCheckingOut, setIsCheckingOut] = useState<'pro' | 'full_program' | null>(null)
   const [cadence, setCadence] = useState<'monthly' | 'yearly'>('monthly')
   const fullProgramCheckoutEnabled = String(import.meta.env.VITE_ENABLE_FULL_PROGRAM_CHECKOUT || '').toLowerCase() === 'true'
@@ -26,6 +27,7 @@ export default function PricingPage({ mode = 'app' }: PricingPageProps) {
   const currentPlanId = authStatus === 'authenticated' ? plan : null
   const hasFullProgram = currentPlanId === 'full_program'
   const isFullProgramComingSoon = currentPlanId !== 'full_program' && !fullProgramCheckoutEnabled
+  const artistUpgrade = searchParams.get('artist_upgrade') === '1'
 
   const handleBack = () => {
     if (mode === 'public') {
@@ -41,7 +43,7 @@ export default function PricingPage({ mode = 'app' }: PricingPageProps) {
     window.scrollTo(0, 0)
   }, [])
 
-  const handleCheckout = async (plan: 'pro' | 'full_program', intent?: 'trial' | 'upgrade') => {
+  const handleCheckout = async (plan: 'pro' | 'full_program', intent?: 'trial' | 'upgrade' | 'artist_upgrade') => {
     if (plan === 'full_program' && !fullProgramCheckoutEnabled) {
       toast({title: 'Coming soon', description: 'Full Program is not available yet.'})
       return
@@ -107,8 +109,10 @@ export default function PricingPage({ mode = 'app' }: PricingPageProps) {
 
       <main className="main-content">
         <section className="hero">
-          <h1>Choose Your Plan</h1>
-          <p className="hero-subtitle">Start free, upgrade when you're ready. Pro is monthly. Full Program is coming soon.</p>
+          <h1>{artistUpgrade ? 'Unlock Your Artist Account' : 'Choose Your Plan'}</h1>
+          <p className="hero-subtitle">{artistUpgrade
+            ? 'An active Pro subscription includes access to the Artist Portal and publishing tools.'
+            : "Start free, upgrade when you're ready. Pro is monthly. Full Program is coming soon."}</p>
         </section>
 
         <div style={{display: 'flex', justifyContent: 'center', marginBottom: '2rem'}}>
@@ -216,19 +220,17 @@ export default function PricingPage({ mode = 'app' }: PricingPageProps) {
               <Link to="/app/settings/billing" className="plan-cta">
                 Manage or cancel subscription
               </Link>
-            ) : hasFullProgram ? (
-              <button type="button" className="plan-cta" disabled>
-                Included with Full Program
-              </button>
+            ) : hasFullProgram && !artistUpgrade ? (
+              <button type="button" className="plan-cta" disabled>Included with Full Program</button>
             ) : (
               <>
                 <button
                   type="button"
                   className="plan-cta"
-                  onClick={() => handleCheckout('pro', 'trial')}
+                  onClick={() => handleCheckout('pro', artistUpgrade ? 'artist_upgrade' : 'trial')}
                   disabled={isCheckingOut !== null}
                 >
-                  {isCheckingOut === 'pro' ? 'Starting checkout…' : 'Start 3-Day Pro Trial'}
+                  {isCheckingOut === 'pro' ? 'Starting checkout…' : artistUpgrade ? 'Start Pro and Become an Artist' : 'Start 3-Day Pro Trial'}
                 </button>
                 <p className="plan-description" style={{fontSize: '0.875rem', marginTop: '0.5rem', textAlign: 'center'}}>
                   Then ${cadence === 'yearly' ? '50/year' : '5/month'}. Cancel anytime.

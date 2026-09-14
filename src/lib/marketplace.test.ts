@@ -16,9 +16,9 @@ describe('marketplace helpers', () => {
   })
 
   it('chooses the right provider entry path', () => {
-    expect(getProviderEntryPath(null)).toBe('/app/provider/onboarding')
-    expect(getProviderEntryPath({id: 'p1', status: 'approved', role: 'owner'})).toBe('/app/provider')
-    expect(getProviderEntryPath({id: 'p1', status: 'pending_review', role: 'owner'})).toBe('/app/provider/onboarding')
+    expect(getProviderEntryPath(null)).toBe('/app/artist/onboarding')
+    expect(getProviderEntryPath({id: 'p1', status: 'approved', role: 'owner'})).toBe('/app/artist')
+    expect(getProviderEntryPath({id: 'p1', status: 'pending_review', role: 'owner'})).toBe('/app/artist/onboarding')
   })
 
   it('formats provider status labels', () => {

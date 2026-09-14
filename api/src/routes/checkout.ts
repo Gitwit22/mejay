@@ -6,7 +6,7 @@ type CheckoutRequestBody = {
   /** Opaque client-generated token to help bind session verification to the initiating browser. */
   checkoutToken?: string;
   /** Intent to track which button/flow initiated checkout (e.g., 'trial' or 'upgrade'). */
-  intent?: 'trial' | 'upgrade';
+  intent?: 'trial' | 'upgrade' | 'artist_upgrade';
 };
 
 type Env = {
@@ -24,6 +24,8 @@ type Env = {
 type EntitlementsRow = {
   access_type: string;
   has_full_access: number;
+  stripe_subscription_id: string | null;
+  subscription_status: string | null;
 } | null
 
 async function sha256Hex(input: string) {
@@ -69,7 +71,7 @@ async function getUserEmailById(db: any, userId: string): Promise<string | null>
 
 async function getEntitlements(db: any, userId: string): Promise<EntitlementsRow> {
   return (await db
-    .prepare('SELECT access_type, has_full_access FROM entitlements WHERE user_id = ?1 LIMIT 1')
+    .prepare('SELECT access_type, has_full_access, stripe_subscription_id, subscription_status FROM entitlements WHERE user_id = ?1 LIMIT 1')
     .bind(userId)
     .first()) as EntitlementsRow
 }
@@ -156,7 +158,9 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
   }
 
   const checkoutToken = typeof body?.checkoutToken === 'string' ? body.checkoutToken.trim() : '';
-  const intent = typeof body?.intent === 'string' ? body.intent : 'unknown';
+  const intent = body?.intent === 'trial' || body?.intent === 'upgrade' || body?.intent === 'artist_upgrade'
+    ? body.intent
+    : 'unknown';
   const cadence = body?.cadence ?? 'monthly';
   if (cadence !== 'monthly' && cadence !== 'yearly') {
     return json({error: 'Invalid cadence. Use "monthly" or "yearly".'}, 400)
@@ -208,9 +212,10 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
       if (plan === 'full_program' && current === 'full_program') {
         return json({error: 'Already purchased Full Program.'}, 409)
       }
-      // Full Program includes Pro features.
-      if (plan === 'pro' && (current === 'pro' || current === 'full_program')) {
-        return json({error: current === 'full_program' ? 'Full Program is already active.' : 'Pro is already active.'}, 409)
+      const activeProSubscription = Boolean(ent?.stripe_subscription_id)
+        && (ent?.subscription_status === 'active' || ent?.subscription_status === 'trialing')
+      if (plan === 'pro' && activeProSubscription) {
+        return json({error: 'Pro is already active.'}, 409)
       }
     }
   } catch {
@@ -226,8 +231,9 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
     params.set("line_items[0][quantity]", "1");
     // Include the session id so the app can verify purchase and unlock features.
     // Stripe will replace {CHECKOUT_SESSION_ID} with the real ID.
-    params.set("success_url", `${origin}/pricing?checkout=success&session_id={CHECKOUT_SESSION_ID}`);
-    params.set("cancel_url", `${origin}/pricing?checkout=cancel`);
+    const artistQuery = intent === 'artist_upgrade' ? '&artist_upgrade=1' : ''
+    params.set("success_url", `${origin}/pricing?checkout=success&session_id={CHECKOUT_SESSION_ID}${artistQuery}`);
+    params.set("cancel_url", `${origin}/pricing?checkout=cancel${artistQuery}`);
     params.set("metadata[plan]", plan);
     params.set('client_reference_id', userId);
     params.set('metadata[userId]', userId);

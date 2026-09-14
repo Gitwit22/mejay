@@ -29,6 +29,7 @@ type AccountMePayload = {
   entitlements?: {
     accessType?: unknown
     hasFullAccess?: unknown
+    artistPortalAccess?: unknown
     stripeCustomerId?: unknown
     subscriptionStatus?: unknown
     billingCadence?: unknown
@@ -64,6 +65,8 @@ interface PlanState {
   authStatus: 'unknown' | 'authenticated' | 'anonymous';
   user: {id: string; email: string; accountIntent: AccountIntent} | null;
   providerProfile: ProviderSummary | null;
+  /** Server-authoritative active Pro capability for Artist portal access. */
+  artistPortalAccess: boolean;
   /** Guest mode: allows using /app without server auth. */
   isGuestMode: boolean;
   guestId: string | null;
@@ -319,6 +322,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   authStatus: INITIAL_AUTH_BYPASS_ENABLED ? 'authenticated' : 'unknown',
   user: INITIAL_AUTH_BYPASS_ENABLED ? getBypassUser() : null,
   providerProfile: null,
+  artistPortalAccess: false,
   isGuestMode: false,
   guestId: readInitialGuestId(),
   authBypassEnabled: INITIAL_AUTH_BYPASS_ENABLED,
@@ -343,7 +347,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     }
 
     safeRemoveLocalStorage(AUTH_BYPASS_KEY)
-    set({authStatus: 'unknown', user: null, providerProfile: null})
+    set({authStatus: 'unknown', user: null, providerProfile: null, artistPortalAccess: false})
     // Kick a best-effort refresh so the UI reflects real server status.
     void get()
       .refreshFromServer({reason: 'disableAuthBypass'})
@@ -454,7 +458,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     })
 
     if (res.status === 401) {
-      set({authStatus: 'anonymous', user: null, providerProfile: null})
+      set({authStatus: 'anonymous', user: null, providerProfile: null, artistPortalAccess: false})
       // Guest mode: allow using app without auth
       get().initializeGuestMode()
       return false
@@ -467,6 +471,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
 
     const ent = data.entitlements
     const hasFullAccess = ent?.hasFullAccess === true
+    const artistPortalAccess = ent?.artistPortalAccess === true
     const accessTypeRaw = ent?.accessType
     const accessType = accessTypeRaw === 'pro' || accessTypeRaw === 'full_program' ? accessTypeRaw : 'free'
     const subscriptionStatus = typeof ent?.subscriptionStatus === 'string' ? ent.subscriptionStatus : undefined
@@ -488,9 +493,10 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         user: {id: user.id, email: user.email, accountIntent: parseAccountIntent(user.accountIntent)},
         isGuestMode: false,
         providerProfile,
+        artistPortalAccess,
       })
     } else {
-      set({authStatus: 'authenticated', user: null, isGuestMode: false, providerProfile})
+      set({authStatus: 'authenticated', user: null, isGuestMode: false, providerProfile, artistPortalAccess})
     }
 
     // Entitlements are only meaningful when billing is enabled and there is no dev override.
@@ -595,7 +601,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     if (!existing) {
       safeWriteLocalStorage(GUEST_ID_KEY, guestId)
     }
-    set({ isGuestMode: true, guestId, authStatus: 'anonymous', plan: 'free', planSource: 'runtime', providerProfile: null })
+    set({ isGuestMode: true, guestId, authStatus: 'anonymous', plan: 'free', planSource: 'runtime', providerProfile: null, artistPortalAccess: false })
   },
 
   clearAccountSession: () => {
@@ -610,6 +616,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       authStatus: 'anonymous',
       user: null,
       providerProfile: null,
+      artistPortalAccess: false,
       isGuestMode: false,
       guestId: null,
       authBypassEnabled: false,

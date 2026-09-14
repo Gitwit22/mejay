@@ -117,8 +117,8 @@ async function upsertEntitlementsInD1(args: {
         'ON CONFLICT(user_id) DO UPDATE SET',
         'access_type=excluded.access_type,',
         'has_full_access=excluded.has_full_access,',
-        'stripe_customer_id=excluded.stripe_customer_id,',
-        'stripe_subscription_id=excluded.stripe_subscription_id,',
+        'stripe_customer_id=COALESCE(excluded.stripe_customer_id, entitlements.stripe_customer_id),',
+        "stripe_subscription_id=CASE WHEN excluded.access_type = 'full' THEN entitlements.stripe_subscription_id ELSE excluded.stripe_subscription_id END,",
         'updated_at=excluded.updated_at',
       ].join(' '),
     )

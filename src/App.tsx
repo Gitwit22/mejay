@@ -14,6 +14,7 @@ import { handleBecameOnline, periodicPolicyTick, startupCheck } from "@/licensin
 import { useLicenseStore } from "@/licensing/licenseStore";
 import { initMediaSession } from "@/lib/mediaSession";
 import {apiFetch} from "@/lib/api";
+import {convertToArtistAccount} from "@/lib/artistAccount";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import WelcomePage from "./app/pages/WelcomePage";
@@ -28,6 +29,7 @@ import DevAdminPage from "./app/pages/DevAdminPage";
 import MusicStorePage from "./app/pages/MusicStorePage";
 import ProviderOnboardingPage from "./app/pages/ProviderOnboardingPage";
 import ProviderPortalPage from "./app/pages/ProviderPortalPage";
+import ArtistPortalGate from "./app/components/ArtistPortalGate";
 import PurchasedMusicPage from "./app/pages/PurchasedMusicPage";
 import PlaylistEditorPage from "./pages/PlaylistEditorPage";
 
@@ -253,6 +255,7 @@ const AppLicenseBootstrap = () => {
 
 const AppBillingBootstrap = () => {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const hasAppliedUpgradeRef = useRef(false);
 
   useEffect(() => {
@@ -278,12 +281,14 @@ const AppBillingBootstrap = () => {
         const url = new URL(window.location.href);
         const checkout = url.searchParams.get('checkout');
         const sessionIdFromUrl = url.searchParams.get('session_id');
+        const artistUpgrade = url.searchParams.get('artist_upgrade') === '1';
 
         const cleanCheckoutUrl = () => {
           const cleaned = new URL(window.location.href)
           cleaned.searchParams.delete('checkout')
           cleaned.searchParams.delete('plan')
           cleaned.searchParams.delete('session_id')
+          cleaned.searchParams.delete('artist_upgrade')
           window.history.replaceState(null, "", `${cleaned.pathname}${cleaned.search}${cleaned.hash}`)
         }
 
@@ -293,7 +298,6 @@ const AppBillingBootstrap = () => {
           stripeCustomerId?: string
         }) => {
           if (hasAppliedUpgradeRef.current) return;
-          hasAppliedUpgradeRef.current = true;
 
           // Truth source: refresh from /api/account/me after server persists entitlements.
           try {
@@ -311,6 +315,13 @@ const AppBillingBootstrap = () => {
             usePlanStore.getState().refreshFromStorage({emit: false, reason: 'postCheckout:fallback:error'})
           }
 
+          if (artistUpgrade) {
+            await convertToArtistAccount()
+            await usePlanStore.getState().refreshFromServer({reason: 'postCheckoutArtistConversion'})
+          }
+
+          hasAppliedUpgradeRef.current = true;
+
           // Best-effort: refresh any cached server data that may depend on entitlements.
           // (This is effectively a no-op today if there are no queries.)
           try {
@@ -326,6 +337,7 @@ const AppBillingBootstrap = () => {
           } catch {
             // ignore
           }
+          if (artistUpgrade) navigate('/app/artist/onboarding', {replace: true})
         };
 
         const verifyAndApplyOnce = async (sessionId: string, opts?: {allowDowngrade?: boolean}) => {
@@ -547,8 +559,12 @@ const AnimatedRoutes = () => {
           </Route>
           <Route path="store" element={<MusicStorePage />} />
           <Route path="purchased" element={<PurchasedMusicPage />} />
-          <Route path="provider" element={<ProviderPortalPage />} />
-          <Route path="provider/onboarding" element={<ProviderOnboardingPage />} />
+          <Route path="artist" element={<ArtistPortalGate />}>
+            <Route index element={<ProviderPortalPage />} />
+            <Route path="onboarding" element={<ProviderOnboardingPage />} />
+          </Route>
+          <Route path="provider" element={<Navigate to="/app/artist" replace />} />
+          <Route path="provider/onboarding" element={<Navigate to="/app/artist/onboarding" replace />} />
           <Route path="playlist/:playlistId/edit" element={<PlaylistEditorPage />} />
           {/* Dev-only admin page */}
           {import.meta.env.DEV && <Route path="dev-admin" element={<DevAdminPage />} />}

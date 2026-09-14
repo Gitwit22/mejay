@@ -17,6 +17,29 @@ The runner records ordered migration versions and SHA-256 checksums in `schema_m
 
 Every catalog record belongs to one `provider_profile`. A user belongs to one provider with role `owner`, `admin`, `editor`, or `viewer`; the first three roles may mutate catalog data.
 
+Customer-facing screens call this an Artist Account and use `/app/artist` and `/app/artist/onboarding`. The database and API retain the `provider` name because an `artists` table already represents catalog identities.
+
+## Artist account access
+
+Artist Account conversion and provider-owned marketplace writes require a Stripe subscription with both:
+
+- `stripe_subscription_id` present
+- `subscription_status` equal to `active` or `trialing`
+
+Free accounts, Full Program ownership by itself, and `past_due`, `unpaid`, or `canceled` subscriptions do not unlock the Artist Portal. Full Program owners may add Pro without losing permanent Full Program access. Subscription updates continue to refresh the Pro subscription fields while preserving their Full Program `access_type` and `has_full_access` values.
+
+An authenticated consumer converts through:
+
+```text
+POST /api/account/artist
+```
+
+The endpoint accepts no user ID. It derives the caller from `mejay_session`, checks Pro on the server, changes `users.account_intent` to `provider`, and idempotently creates the provider profile and owner membership. A nonqualifying account receives `403 pro_subscription_required`.
+
+Artist-intent signup and the `Become an Artist` action start Pro checkout first. After Stripe verification succeeds, the browser calls the conversion endpoint and opens `/app/artist/onboarding`. Direct Artist route visits use the server-derived `artistPortalAccess` value from `GET /api/account/me`.
+
+If Pro later lapses, the account intent, provider profile, catalog, and audit history remain intact. Artist routes and provider-owned mutations are locked until Pro becomes active again. Marketplace reviewer/admin transitions remain role-based and do not require the staff member to purchase Pro.
+
 Marketplace review is independent. Provision a reviewer or administrator only through a trusted database operation:
 
 ```sql
@@ -33,6 +56,7 @@ All endpoints require the `mejay_session` cookie and JSON request bodies.
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
+| POST | `/api/account/artist` | Convert the current active-Pro consumer into an Artist Account |
 | POST | `/api/marketplace/providers` | Bootstrap and complete the current user's provider profile |
 | POST | `/api/marketplace/artists` | Create an artist |
 | POST | `/api/marketplace/releases` | Create a draft release and primary artist credit |

@@ -21,8 +21,8 @@ export default function ProviderOnboardingPage() {
       <div className="bg-gradient gradient-2" aria-hidden="true" />
       <main className="main-content">
         <section className="hero">
-          <h1>Provider Onboarding</h1>
-          <p className="hero-subtitle">This route is the dedicated entry point for artist, label, and rights-holder signup completion.</p>
+          <h1>Artist Onboarding</h1>
+          <p className="hero-subtitle">Complete your Artist identity, rights, catalog, pricing, and payout setup.</p>
         </section>
 
         <div className="pricing-grid">
@@ -39,8 +39,8 @@ export default function ProviderOnboardingPage() {
               <div className="license-note-text">Provider signup creates an application path. Uploading and selling stay locked until onboarding is complete and admin approval is granted.</div>
             </div>
             <div style={{marginTop: '1.25rem'}}>
-              <Link to="/app/provider" className="plan-cta secondary" style={{display: 'inline-flex', justifyContent: 'center', textDecoration: 'none'}}>
-                Back to Provider Portal
+              <Link to="/app/artist" className="plan-cta secondary" style={{display: 'inline-flex', justifyContent: 'center', textDecoration: 'none'}}>
+                Back to Artist Portal
               </Link>
             </div>
           </div>

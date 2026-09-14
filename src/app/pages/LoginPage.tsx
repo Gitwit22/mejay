@@ -208,7 +208,7 @@ export default function LoginPage() {
         setOnboarded(true)
       }
 
-      navigate(purpose === 'signup_verify' && accountIntent === 'provider' ? '/app/provider/onboarding' : returnTo, {replace: true})
+      navigate(purpose === 'signup_verify' && accountIntent === 'provider' ? '/app/settings/pricing?artist_upgrade=1' : returnTo, {replace: true})
     } catch (e) {
       toast({
         title: 'Could not set password',
@@ -256,7 +256,7 @@ export default function LoginPage() {
               {purpose === 'password_reset'
                 ? 'Choose a new password.'
                 : accountIntent === 'provider'
-                  ? 'Create a password to continue into provider onboarding.'
+                  ? 'Create a password to continue to the Artist Pro offer.'
                   : 'Create a password for your account.'}
             </p>
           )}

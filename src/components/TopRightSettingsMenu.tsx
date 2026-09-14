@@ -38,6 +38,7 @@ import {openBillingPortal} from '@/lib/checkout'
 import {getSettingsEntryNavigateOptions} from '@/app/navigation/settingsReturnTo'
 import {DownloadPacksModal} from '@/components/DownloadPacksModal'
 import {AccountRequestError, clearMejayBrowserStorage, deleteAccount, logoutAccount} from '@/lib/account'
+import {convertToArtistAccount} from '@/lib/artistAccount'
 
 type TopRightSettingsMenuProps = {
   className?: string
@@ -56,11 +57,12 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   const [deleteEmail, setDeleteEmail] = useState('')
   const [forfeitFullProgram, setForfeitFullProgram] = useState(false)
   const [deletePending, setDeletePending] = useState(false)
+  const [artistSwitchPending, setArtistSwitchPending] = useState(false)
 
   const keepImportsOnDevice = useDJStore((s) => s.settings.keepImportsOnDevice)
   const updateUserSettings = useDJStore((s) => s.updateUserSettings)
 
-  const {plan, authStatus, authBypassEnabled, stripeCustomerId, user, currentPeriodEnd} = usePlanStore()
+  const {plan, authStatus, authBypassEnabled, stripeCustomerId, user, currentPeriodEnd, artistPortalAccess, providerProfile} = usePlanStore()
 
   const {
     token,
@@ -170,6 +172,36 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
         : 'The account could not be deleted. Please try again.'
       toast({title: 'Account not deleted', description, variant: 'destructive'})
       setDeletePending(false)
+    }
+  }
+
+  const handleArtistEntry = async () => {
+    if (artistSwitchPending) return
+    if (!user || authStatus !== 'authenticated') {
+      closeAndNavigate('/login?returnTo=/app/artist')
+      return
+    }
+    if (!artistPortalAccess) {
+      closeAndNavigateSettings('/app/settings/pricing?artist_upgrade=1', {state: {from}})
+      return
+    }
+    if (user.accountIntent === 'provider' && providerProfile) {
+      closeAndNavigate('/app/artist')
+      return
+    }
+
+    setArtistSwitchPending(true)
+    try {
+      await convertToArtistAccount()
+      await usePlanStore.getState().refreshFromServer({reason: 'artistSwitch'})
+      closeAndNavigate('/app/artist/onboarding')
+    } catch (error) {
+      toast({
+        title: 'Artist account not activated',
+        description: error instanceof Error ? error.message : 'Please try again.',
+        variant: 'destructive',
+      })
+      setArtistSwitchPending(false)
     }
   }
 
@@ -434,8 +466,12 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                     <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/app/purchased')}>
                       Purchased Music
                     </Button>
-                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/app/provider')}>
-                      Provider Portal
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => void handleArtistEntry()} disabled={artistSwitchPending}>
+                      {artistSwitchPending
+                        ? 'Activating Artist Account...'
+                        : user?.accountIntent === 'provider'
+                          ? artistPortalAccess ? 'Artist Portal' : 'Renew Pro for Artist Portal'
+                          : artistPortalAccess ? 'Switch to Artist Account' : 'Become an Artist'}
                     </Button>
                   </div>
                 </CollapsibleContent>

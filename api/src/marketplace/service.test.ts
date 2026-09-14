@@ -1,5 +1,5 @@
-import {describe, expect, it} from 'vitest'
-import {isReleaseMutable, isReleaseTransitionAllowed} from './service'
+import {describe, expect, it, vi} from 'vitest'
+import {isReleaseMutable, isReleaseTransitionAllowed, MarketplaceService} from './service'
 
 describe('release state machine', () => {
   it('allows only adjacent provider workflow transitions', () => {
@@ -27,5 +27,31 @@ describe('release state machine', () => {
     expect(isReleaseMutable('SUBMITTED')).toBe(false)
     expect(isReleaseMutable('UNDER_REVIEW')).toBe(false)
     expect(isReleaseMutable('LIVE')).toBe(false)
+  })
+
+  it('blocks provider writes when the Pro subscription has lapsed', async () => {
+    const statements: string[] = []
+    const database: any = {
+      transaction: vi.fn(async (callback: (db: any) => Promise<unknown>) => callback({
+        prepare: (sql: string) => {
+          statements.push(sql)
+          const statement: any = {
+            bind: vi.fn(() => statement),
+            first: vi.fn(async () => sql.includes('FROM entitlements')
+              ? {stripe_subscription_id: 'sub_123', subscription_status: 'past_due'}
+              : null),
+            run: vi.fn(),
+          }
+          return statement
+        },
+      })),
+    }
+    const service = new MarketplaceService(database)
+
+    await expect(service.createArtist('user-1', {name: 'Blocked Artist', metadata: {}})).rejects.toMatchObject({
+      status: 403,
+      code: 'pro_subscription_required',
+    })
+    expect(statements.some((sql) => sql.includes('INSERT INTO artists'))).toBe(false)
   })
 })

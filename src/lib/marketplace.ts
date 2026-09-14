@@ -33,8 +33,8 @@ export function parseProviderStatus(raw: unknown): ProviderStatus | null {
 }
 
 export function getProviderEntryPath(provider: ProviderSummary | null): string {
-  if (!provider) return '/app/provider/onboarding'
-  return provider.status === 'approved' ? '/app/provider' : '/app/provider/onboarding'
+  if (!provider) return '/app/artist/onboarding'
+  return provider.status === 'approved' ? '/app/artist' : '/app/artist/onboarding'
 }
 
 export function getProviderStatusLabel(status: ProviderStatus | null): string {

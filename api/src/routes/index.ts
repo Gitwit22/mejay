@@ -1,4 +1,5 @@
 import type {RequestHandler} from 'express'
+import {onRequest as accountArtist} from './account/artist'
 import {onRequest as accountMe} from './account/me'
 import {onRequest as accountDelete} from './account/delete'
 import {onRequest as authLogin} from './auth/login'
@@ -33,6 +34,7 @@ import {onRequest as stripeWebhook} from './stripe-webhook'
 export type RouteHandler = (context: any) => Promise<Response> | Response
 
 export const routes: Array<{method: string; path: string; handler: RouteHandler}> = [
+  {method: 'post', path: '/api/account/artist', handler: accountArtist},
   {method: 'get', path: '/api/account/me', handler: accountMe},
   {method: 'delete', path: '/api/account', handler: accountDelete},
   {method: 'post', path: '/api/auth/login', handler: authLogin},

@@ -1,3 +1,4 @@
+import {grantsArtistPortalAccess} from '../../account/artist-access'
 import {getSessionUserId, normalizeAccessType} from '../_auth'
 
 type Env = {
@@ -20,6 +21,7 @@ type AccountMeResponse =
       entitlements: {
         accessType: AccessType
         hasFullAccess: boolean
+        artistPortalAccess: boolean
         stripeCustomerId?: string
         subscriptionStatus?: string
         billingCadence?: 'monthly' | 'yearly'
@@ -63,13 +65,14 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
 
   const entRow = (await env.DB
     .prepare(
-      'SELECT access_type, has_full_access, stripe_customer_id, subscription_status, billing_cadence, cancel_at_period_end, current_period_end FROM entitlements WHERE user_id = ?1',
+      'SELECT access_type, has_full_access, stripe_customer_id, stripe_subscription_id, subscription_status, billing_cadence, cancel_at_period_end, current_period_end FROM entitlements WHERE user_id = ?1',
     )
     .bind(userId)
     .first()) as {
       access_type: string
       has_full_access: number
       stripe_customer_id: string | null
+      stripe_subscription_id: string | null
       subscription_status: string | null
       billing_cadence: string | null
       cancel_at_period_end: boolean
@@ -103,6 +106,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
       entitlements: {
         accessType: hasFullAccess ? (accessType as AccessType) : 'free',
         hasFullAccess: hasFullAccess,
+        artistPortalAccess: grantsArtistPortalAccess(entRow),
         ...(entRow?.stripe_customer_id ? {stripeCustomerId: entRow.stripe_customer_id} : {}),
         ...(entRow?.subscription_status ? {subscriptionStatus: entRow.subscription_status} : {}),
         ...(entRow?.billing_cadence === 'monthly' || entRow?.billing_cadence === 'yearly'

@@ -34,6 +34,11 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
         ($2, 'reviewer@example.test', 'consumer')`,
       [providerUserId, reviewerUserId],
     )
+    await pool.query(
+      `INSERT INTO entitlements (user_id, access_type, has_full_access, stripe_subscription_id, subscription_status)
+       VALUES ($1, 'pro', 1, 'sub_integration_provider', 'active')`,
+      [providerUserId],
+    )
     await pool.query(`INSERT INTO marketplace_staff (user_id, role) VALUES ($1, 'reviewer')`, [reviewerUserId])
   })
 

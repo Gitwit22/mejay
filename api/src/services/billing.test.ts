@@ -25,7 +25,7 @@ describe('subscription billing policy', () => {
     expect(stripeTimestampToIso(undefined)).toBeNull()
   })
 
-  it('persists downgrade state with stale-event and Full Program protection', async () => {
+  it('persists subscription state with stale-event and Full Program protection', async () => {
     const bind = vi.fn().mockReturnThis()
     const run = vi.fn().mockResolvedValue({success: true})
     const prepare = vi.fn().mockReturnValue({bind, run})
@@ -49,7 +49,8 @@ describe('subscription billing policy', () => {
       '2026-10-01T00:00:00.000Z', '2026-09-13T12:00:00.000Z',
     )
     const sql = prepare.mock.calls[0][0] as string
-    expect(sql).toContain("entitlements.access_type <> 'full'")
+    expect(sql).toContain("entitlements.access_type IN ('full', 'full_program')")
+    expect(sql).not.toContain("entitlements.access_type <> 'full'")
     expect(sql).toContain('entitlements.stripe_event_created_at <= excluded.stripe_event_created_at')
   })
 })

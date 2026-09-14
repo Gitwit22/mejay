@@ -1,4 +1,5 @@
 import {bootstrapProviderAccount} from './onboarding'
+import {userHasArtistPortalAccess} from '../account/artist-access'
 import type {
   ArtistInput,
   AssetInput,
@@ -74,6 +75,9 @@ function nowIso(): string {
 }
 
 async function providerContext(db: Database, userId: string, mutate = true): Promise<ProviderContext> {
+  if (mutate && !(await userHasArtistPortalAccess(db, userId))) {
+    throw new MarketplaceError(403, 'pro_subscription_required', 'An active Pro subscription is required for Artist access')
+  }
   const row = await db
     .prepare('SELECT provider_profile_id, role FROM provider_members WHERE user_id = ?1 ORDER BY created_at LIMIT 1')
     .bind(userId)

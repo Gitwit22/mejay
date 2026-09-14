@@ -40,8 +40,8 @@ export async function persistSubscriptionState(args: {
         '(user_id, access_type, has_full_access, stripe_customer_id, stripe_subscription_id, subscription_status, billing_cadence, cancel_at_period_end, current_period_end, stripe_event_created_at, updated_at)',
         'VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, CURRENT_TIMESTAMP)',
         'ON CONFLICT(user_id) DO UPDATE SET',
-        'access_type=excluded.access_type,',
-        'has_full_access=excluded.has_full_access,',
+        "access_type=CASE WHEN entitlements.access_type IN ('full', 'full_program') THEN entitlements.access_type ELSE excluded.access_type END,",
+        "has_full_access=CASE WHEN entitlements.access_type IN ('full', 'full_program') THEN entitlements.has_full_access ELSE excluded.has_full_access END,",
         'stripe_customer_id=COALESCE(excluded.stripe_customer_id, entitlements.stripe_customer_id),',
         'stripe_subscription_id=excluded.stripe_subscription_id,',
         'subscription_status=excluded.subscription_status,',
@@ -50,8 +50,7 @@ export async function persistSubscriptionState(args: {
         'current_period_end=excluded.current_period_end,',
         'stripe_event_created_at=excluded.stripe_event_created_at,',
         'updated_at=excluded.updated_at',
-        "WHERE entitlements.access_type <> 'full'",
-        'AND (entitlements.stripe_event_created_at IS NULL OR entitlements.stripe_event_created_at <= excluded.stripe_event_created_at)',
+        'WHERE entitlements.stripe_event_created_at IS NULL OR entitlements.stripe_event_created_at <= excluded.stripe_event_created_at',
       ].join(' '),
     )
     .bind(

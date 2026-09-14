@@ -11,7 +11,7 @@ import {
   sha256Hex,
   verifyVerifiedToken,
 } from '../_auth'
-import {bootstrapProviderAccount, parseAccountIntent} from '../../marketplace/onboarding'
+import {parseAccountIntent} from '../../marketplace/onboarding'
 
 type PreparedQuery = {
   bind: (...values: unknown[]) => {
@@ -122,7 +122,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
               'updated_at=excluded.updated_at',
             ].join(' '),
           )
-          .bind(userId, email, passwordHash, accountIntent, now)
+          .bind(userId, email, passwordHash, 'consumer', now)
           .run()
 
         currentUser = (await database
@@ -131,9 +131,6 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
           .first()) as {id: string; email: string} | null
         if (!currentUser) throw new Error('user_upsert_failed')
 
-        if (accountIntent === 'provider') {
-          await bootstrapProviderAccount({db: database, userId: currentUser.id, createdAt: now})
-        }
       }
 
       await database.prepare('DELETE FROM sessions WHERE expires_at < ?1').bind(nowIso()).run()
@@ -153,7 +150,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
       maxAgeSeconds: Math.floor(ttlMs / 1000),
     })
 
-    return new Response(JSON.stringify({ok: true}), {
+    return new Response(JSON.stringify({ok: true, artistUpgradeRequired: purpose === 'signup_verify' && accountIntent === 'provider'}), {
       status: 200,
       headers: {
         'content-type': 'application/json; charset=utf-8',
