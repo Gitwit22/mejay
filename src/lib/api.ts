@@ -1,7 +1,6 @@
 const DEFAULT_PRODUCTION_API_URL = 'https://mejay-api.onrender.com'
 
 export function resolveApiBaseUrl(
-  hostname?: string,
   options?: {configuredApiUrl?: string; isProd?: boolean; useSameOriginApi?: boolean},
 ): string {
   const configured = String(options?.configuredApiUrl ?? import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '')
@@ -11,7 +10,7 @@ export function resolveApiBaseUrl(
   return DEFAULT_PRODUCTION_API_URL
 }
 
-const API_URL = resolveApiBaseUrl(typeof window !== 'undefined' ? window.location.hostname : undefined)
+const API_URL = resolveApiBaseUrl()
 
 export function apiUrl(path: string): string {
   if (/^https?:\/\//i.test(path)) return path

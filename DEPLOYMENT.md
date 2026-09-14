@@ -16,7 +16,7 @@ Configure the Pages project with:
 - Environment variable: `VITE_API_URL=https://api-staging.mejayapp.com`
 - Optional same-origin proxy flag: `VITE_USE_SAME_ORIGIN_API=1` only when the Pages project is explicitly serving `/api/*`
 
-`public/_redirects` provides SPA routing for app paths like `/app/provider`. `public/_routes.json` is narrowed to `/api/*` so Pages Functions can be introduced for API proxying without breaking client-side routes.
+`public/_routes.json` and `public/_redirects` together control Pages routing. Keep non-static app paths such as `/app/provider` flowing through the SPA fallback, and only enable `VITE_USE_SAME_ORIGIN_API=1` when the deployed Pages origin really serves `/api/*` through a proxy or Pages Function.
 
 ## Render
 
