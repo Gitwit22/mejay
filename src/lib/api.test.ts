@@ -9,4 +9,8 @@ describe('resolveApiBase', () => {
   it('uses the configured API on a custom frontend domain', () => {
     expect(resolveApiBase('https://api.mejayapp.com/', true, 'app.mejayapp.com')).toBe('https://api.mejayapp.com')
   })
+
+  it('uses the configured API on non-matching preview domains', () => {
+    expect(resolveApiBase('https://api.mejayapp.com/', true, 'other-project.pages.dev')).toBe('https://api.mejayapp.com')
+  })
 })

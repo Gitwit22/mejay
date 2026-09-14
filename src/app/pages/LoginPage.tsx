@@ -5,10 +5,25 @@ import {MEJAY_LOGO_URL} from '@/lib/branding'
 import {usePlanStore} from '@/stores/planStore'
 import {setOnboarded, setStarterPromptPending} from '@/lib/starterPacksPrefs'
 import {apiFetch} from '@/lib/api'
+import {parseAccountIntent} from '@/lib/marketplace'
 
 type Mode = 'password' | 'code' | 'setPassword'
 type CodeStep = 'email' | 'code'
 type Purpose = 'signup_verify' | 'password_reset'
+type AccountIntent = 'consumer' | 'provider'
+
+type AuthResponse = {
+  ok?: boolean
+  error?: string
+}
+
+type StartCodeResponse = AuthResponse & {
+  devCode?: string
+}
+
+type VerifyCodeResponse = AuthResponse & {
+  verifiedToken?: string
+}
 
 export default function LoginPage() {
   const navigate = useNavigate()
@@ -32,6 +47,7 @@ export default function LoginPage() {
   const [mode, setMode] = useState<Mode>('password')
   const [codeStep, setCodeStep] = useState<CodeStep>('email')
   const [purpose, setPurpose] = useState<Purpose>('signup_verify')
+  const [accountIntent, setAccountIntent] = useState<AccountIntent>('consumer')
   const [email, setEmail] = useState('')
   const [code, setCode] = useState('')
   const [password, setPassword] = useState('')
@@ -43,13 +59,12 @@ export default function LoginPage() {
   useEffect(() => {
     const intent = (searchParams.get('intent') ?? '').toLowerCase()
     if (intent !== 'signup') return
-    goToCreateAccount()
-    // Only run when intent changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    goToCreateAccount(parseAccountIntent(searchParams.get('accountIntent')))
   }, [searchParams])
 
-  const goToCreateAccount = () => {
+  const goToCreateAccount = (nextIntent: AccountIntent = 'consumer') => {
     setPurpose('signup_verify')
+    setAccountIntent(nextIntent)
     setCodeStep('email')
     setCode('')
     setMode('code')
@@ -64,7 +79,7 @@ export default function LoginPage() {
         headers: {'content-type': 'application/json'},
         body: JSON.stringify({email, password, rememberMe}),
       })
-      const data = (await res.json().catch(() => null)) as any
+      const data = (await res.json().catch(() => null)) as AuthResponse | null
       if (res.ok && data?.ok) {
         toast({title: 'Signed in', description: 'Welcome back.'})
         // Avoid /app redirect loop by marking authenticated immediately.
@@ -101,9 +116,9 @@ export default function LoginPage() {
       const res = await apiFetch('/api/auth/start', {
         method: 'POST',
         headers: {'content-type': 'application/json'},
-        body: JSON.stringify({email, purpose}),
+        body: JSON.stringify({email, purpose, accountIntent}),
       })
-      const data = (await res.json().catch(() => null)) as any
+      const data = (await res.json().catch(() => null)) as StartCodeResponse | null
       if (!res.ok || !data?.ok) {
         throw new Error(typeof data?.error === 'string' ? data.error : `Start failed (${res.status})`)
       }
@@ -134,7 +149,7 @@ export default function LoginPage() {
         headers: {'content-type': 'application/json'},
         body: JSON.stringify({email, code, purpose}),
       })
-      const data = (await res.json().catch(() => null)) as any
+      const data = (await res.json().catch(() => null)) as VerifyCodeResponse | null
       if (!res.ok || !data?.ok) {
         throw new Error(typeof data?.error === 'string' ? data.error : `Verify failed (${res.status})`)
       }
@@ -175,15 +190,15 @@ export default function LoginPage() {
         method: 'POST',
         credentials: 'include',
         headers: {'content-type': 'application/json'},
-        body: JSON.stringify({email, verifiedToken, password, rememberMe}),
+        body: JSON.stringify({email, verifiedToken, password, rememberMe, accountIntent}),
       })
-      const data = (await res.json().catch(() => null)) as any
+      const data = (await res.json().catch(() => null)) as AuthResponse | null
       if (!res.ok || !data?.ok) {
         throw new Error(typeof data?.error === 'string' ? data.error : `Set password failed (${res.status})`)
       }
 
       toast({title: 'Signed in', description: 'Welcome back.'})
-      usePlanStore.getState().markAuthenticated({email})
+      usePlanStore.getState().markAuthenticated({email, accountIntent})
       void usePlanStore.getState().refreshFromServer({reason: 'postSetPassword'})
 
       // Post-auth one-shot starter pack prompt (only for first-time password creation flow).
@@ -193,7 +208,7 @@ export default function LoginPage() {
         setOnboarded(true)
       }
 
-      navigate(returnTo, {replace: true})
+      navigate(purpose === 'signup_verify' && accountIntent === 'provider' ? '/app/provider/onboarding' : returnTo, {replace: true})
     } catch (e) {
       toast({
         title: 'Could not set password',
@@ -229,12 +244,20 @@ export default function LoginPage() {
           {mode === 'password' && <p className="text-sm text-muted-foreground">Sign in with your password.</p>}
           {mode === 'code' && (
             <p className="text-sm text-muted-foreground">
-              {purpose === 'password_reset' ? 'Reset your password with a code.' : 'Verify your email to set a password.'}
+              {purpose === 'password_reset'
+                ? 'Reset your password with a code.'
+                : accountIntent === 'provider'
+                  ? 'Verify your email to start your artist/provider application.'
+                  : 'Verify your email to create your music account.'}
             </p>
           )}
           {mode === 'setPassword' && (
             <p className="text-sm text-muted-foreground">
-              {purpose === 'password_reset' ? 'Choose a new password.' : 'Create a password for your account.'}
+              {purpose === 'password_reset'
+                ? 'Choose a new password.'
+                : accountIntent === 'provider'
+                  ? 'Create a password to continue into provider onboarding.'
+                  : 'Create a password for your account.'}
             </p>
           )}
         </div>
@@ -311,14 +334,24 @@ export default function LoginPage() {
               >
                 Forgot password?
               </button>
-              <button
-                type="button"
-                onClick={goToCreateAccount}
-                disabled={busy}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                Create account
-              </button>
+              <div className="flex flex-col items-end gap-1">
+                <button
+                  type="button"
+                  onClick={() => goToCreateAccount('consumer')}
+                  disabled={busy}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  Create consumer account
+                </button>
+                <button
+                  type="button"
+                  onClick={() => goToCreateAccount('provider')}
+                  disabled={busy}
+                  className="text-[11px] text-primary hover:text-primary/80"
+                >
+                  Artist/provider signup
+                </button>
+              </div>
             </div>
           </form>
         )}
@@ -333,6 +366,26 @@ export default function LoginPage() {
             }}
           >
             <label className="block text-sm font-medium" htmlFor="email">Email</label>
+            {purpose === 'signup_verify' && (
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAccountIntent('consumer')}
+                  className={`rounded-lg border px-3 py-3 text-left ${accountIntent === 'consumer' ? 'border-primary bg-primary/10' : 'border-white/10 bg-white/5'}`}
+                >
+                  <div className="text-sm font-medium">Music consumer</div>
+                  <div className="mt-1 text-xs text-muted-foreground">Browse, buy, and download music.</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAccountIntent('provider')}
+                  className={`rounded-lg border px-3 py-3 text-left ${accountIntent === 'provider' ? 'border-primary bg-primary/10' : 'border-white/10 bg-white/5'}`}
+                >
+                  <div className="text-sm font-medium">Artist/provider</div>
+                  <div className="mt-1 text-xs text-muted-foreground">Apply to publish and sell your music.</div>
+                </button>
+              </div>
+            )}
             <input
               id="email"
               name="email"
@@ -366,7 +419,14 @@ export default function LoginPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setPurpose(purpose === 'signup_verify' ? 'password_reset' : 'signup_verify')}
+                onClick={() => {
+                  if (purpose === 'signup_verify') {
+                    setPurpose('password_reset')
+                  } else {
+                    setPurpose('signup_verify')
+                    setAccountIntent('consumer')
+                  }
+                }}
                 disabled={busy}
                 className="text-muted-foreground hover:text-foreground"
               >

@@ -6,10 +6,13 @@ CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
   display_name TEXT,
+  account_intent TEXT NOT NULL DEFAULT 'consumer',
   password_hash TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMPTZ
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS account_intent TEXT NOT NULL DEFAULT 'consumer';
 
 CREATE TABLE IF NOT EXISTS entitlements (
   user_id TEXT PRIMARY KEY REFERENCES users(id),
@@ -70,6 +73,25 @@ CREATE TABLE IF NOT EXISTS auth_ip_rates (
   PRIMARY KEY (ip, purpose, kind)
 );
 CREATE INDEX IF NOT EXISTS idx_auth_ip_rates_ip ON auth_ip_rates(ip);
+
+CREATE TABLE IF NOT EXISTS provider_profiles (
+  id TEXT PRIMARY KEY,
+  owner_user_id TEXT NOT NULL UNIQUE REFERENCES users(id),
+  display_name TEXT,
+  status TEXT NOT NULL DEFAULT 'pending_profile_completion',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_provider_profiles_owner_user_id ON provider_profiles(owner_user_id);
+
+CREATE TABLE IF NOT EXISTS provider_members (
+  provider_profile_id TEXT NOT NULL REFERENCES provider_profiles(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  role TEXT NOT NULL DEFAULT 'owner',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (provider_profile_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_provider_members_user_id ON provider_members(user_id);
 `
 
 async function main() {

@@ -11,9 +11,23 @@ import {
   sha256Hex,
   verifyVerifiedToken,
 } from '../_auth'
+import {bootstrapProviderAccount, parseAccountIntent} from '../../marketplace/onboarding'
+
+type PreparedQuery = {
+  bind: (...values: unknown[]) => {
+    first: <T = Record<string, unknown>>() => Promise<T | null>
+    run: () => Promise<unknown>
+  }
+}
+
+type TransactionDatabase = {
+  prepare: (sql: string) => PreparedQuery
+}
 
 type Env = {
-  DB: any
+  DB: TransactionDatabase & {
+    transaction: <T>(callback: (database: TransactionDatabase) => Promise<T>) => Promise<T>
+  }
   SESSION_PEPPER?: string
   AUTH_TOKEN_SECRET?: string
   COOKIE_SAME_SITE?: 'lax' | 'none' | 'strict'
@@ -45,11 +59,18 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
   if (!env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
 
   try {
-    const body = await readJson(request)
-    const email = normalizeEmail(String((body as any).email || ''))
-    const token = String((body as any).verifiedToken || '').trim()
-    const password = String((body as any).password || '')
-    const rememberMeRaw = (body as any).rememberMe
+    const body = (await readJson(request)) as {
+      email?: unknown
+      verifiedToken?: unknown
+      password?: unknown
+      accountIntent?: unknown
+      rememberMe?: unknown
+    }
+    const email = normalizeEmail(String(body.email || ''))
+    const token = String(body.verifiedToken || '').trim()
+    const password = String(body.password || '')
+    const accountIntent = parseAccountIntent(body.accountIntent)
+    const rememberMeRaw = body.rememberMe
     // Back-compat: older clients don't send rememberMe; preserve existing 30-day behavior.
     const rememberMe = typeof rememberMeRaw === 'boolean' ? rememberMeRaw : true
 
@@ -74,7 +95,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
     const tokenHash = await sha256Hex(`session:${sessionToken}:${sessionPepper}`)
     const expiresAt = addMsIso(ttlMs)
 
-    const user = await env.DB.transaction(async (database: any) => {
+    const user = await env.DB.transaction(async (database) => {
       let currentUser = (await database
         .prepare('SELECT id, email FROM users WHERE email = ?1')
         .bind(email)
@@ -90,16 +111,18 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
         await database.prepare('DELETE FROM sessions WHERE user_id = ?1').bind(currentUser.id).run()
       } else {
         const userId = currentUser?.id ?? crypto.randomUUID()
+        const now = nowIso()
         await database
           .prepare(
             [
-              'INSERT INTO users (id, email, password_hash, updated_at) VALUES (?1, ?2, ?3, ?4)',
+              'INSERT INTO users (id, email, password_hash, account_intent, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)',
               'ON CONFLICT(email) DO UPDATE SET',
               'password_hash=excluded.password_hash,',
+              "account_intent=CASE WHEN users.account_intent = 'provider' THEN users.account_intent ELSE excluded.account_intent END,",
               'updated_at=excluded.updated_at',
             ].join(' '),
           )
-          .bind(userId, email, passwordHash, nowIso())
+          .bind(userId, email, passwordHash, accountIntent, now)
           .run()
 
         currentUser = (await database
@@ -107,6 +130,10 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
           .bind(email)
           .first()) as {id: string; email: string} | null
         if (!currentUser) throw new Error('user_upsert_failed')
+
+        if (accountIntent === 'provider') {
+          await bootstrapProviderAccount({db: database, userId: currentUser.id, createdAt: now})
+        }
       }
 
       await database.prepare('DELETE FROM sessions WHERE expires_at < ?1').bind(nowIso()).run()

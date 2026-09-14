@@ -123,7 +123,7 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
     }
 
     // Update auth status to anonymous (this clears the session state)
-    usePlanStore.setState({authStatus: 'anonymous', user: null})
+    usePlanStore.setState({authStatus: 'anonymous', user: null, providerProfile: null})
 
     // Navigate to home page (with dev param to bypass redirect)
     navigate('/?dev=1', {replace: true})
@@ -305,6 +305,33 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                         {planLabelInMenu}
                       </Button>
                     </div>
+                  </div>
+                </CollapsibleContent>
+              </div>
+            </Collapsible>
+
+            <Collapsible>
+              <div className="space-y-3">
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="group flex w-full items-center justify-between text-left text-xs font-semibold tracking-wide uppercase text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <span>Marketplace</span>
+                    <ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]:rotate-180" />
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm p-4 space-y-2">
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/app/store')}>
+                      Music Store
+                    </Button>
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/app/purchased')}>
+                      Purchased Music
+                    </Button>
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/app/provider')}>
+                      Provider Portal
+                    </Button>
                   </div>
                 </CollapsibleContent>
               </div>

@@ -25,6 +25,10 @@ import TermsPage from "./app/pages/TermsPage";
 import ContactPage from "./app/pages/ContactPage";
 import PrivacyPage from "./app/pages/PrivacyPage";
 import DevAdminPage from "./app/pages/DevAdminPage";
+import MusicStorePage from "./app/pages/MusicStorePage";
+import ProviderOnboardingPage from "./app/pages/ProviderOnboardingPage";
+import ProviderPortalPage from "./app/pages/ProviderPortalPage";
+import PurchasedMusicPage from "./app/pages/PurchasedMusicPage";
 import PlaylistEditorPage from "./pages/PlaylistEditorPage";
 
 const queryClient = new QueryClient();
@@ -55,8 +59,7 @@ const shouldRedirectToWelcomeOnMount = () => {
     | undefined;
   const entry = entries?.[0];
 
-  // eslint-disable-next-line deprecation/deprecation
-  const legacyType = (window.performance as any)?.navigation?.type;
+  const legacyType = (window.performance as Performance & {navigation?: {type?: number}})?.navigation?.type;
   const isReload = entry?.type === "reload" || legacyType === 1;
   if (!isReload) return false;
 
@@ -542,6 +545,10 @@ const AnimatedRoutes = () => {
             <Route path="privacy" element={<PrivacyPage mode="app" />} />
             <Route path="contact" element={<ContactPage mode="app" />} />
           </Route>
+          <Route path="store" element={<MusicStorePage />} />
+          <Route path="purchased" element={<PurchasedMusicPage />} />
+          <Route path="provider" element={<ProviderPortalPage />} />
+          <Route path="provider/onboarding" element={<ProviderOnboardingPage />} />
           <Route path="playlist/:playlistId/edit" element={<PlaylistEditorPage />} />
           {/* Dev-only admin page */}
           {import.meta.env.DEV && <Route path="dev-admin" element={<DevAdminPage />} />}
