@@ -15,6 +15,7 @@ const modules = [
 export default function ProviderPortalPage() {
   const navigate = useNavigate()
   const authStatus = usePlanStore((s) => s.authStatus)
+  const isGuestMode = usePlanStore((s) => s.isGuestMode)
   const providerProfile = usePlanStore((s) => s.providerProfile)
 
   if (authStatus !== 'authenticated') {
@@ -24,13 +25,26 @@ export default function ProviderPortalPage() {
         <main className="main-content">
           <section className="hero">
             <h1>Provider Portal</h1>
-            <p className="hero-subtitle">Sign in to manage provider onboarding, publishing, and payout setup.</p>
+            <p className="hero-subtitle">
+              {isGuestMode
+                ? 'You are browsing in guest mode. Create a provider account to continue into artist onboarding.'
+                : 'Sign in or create a provider account to manage publishing, onboarding, and payout setup.'}
+            </p>
           </section>
           <div className="pricing-grid">
             <div className="pricing-card current">
-              <button type="button" className="plan-cta" onClick={() => navigate('/login?returnTo=/app/provider')}>
-                Sign in
-              </button>
+              <div style={{display: 'grid', gap: '0.75rem'}}>
+                <button
+                  type="button"
+                  className="plan-cta"
+                  onClick={() => navigate('/login?intent=signup&accountIntent=provider&returnTo=/app/provider/onboarding')}
+                >
+                  Start provider signup
+                </button>
+                <button type="button" className="plan-cta secondary" onClick={() => navigate('/login?returnTo=/app/provider')}>
+                  Sign in
+                </button>
+              </div>
             </div>
           </div>
         </main>
