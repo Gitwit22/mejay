@@ -16,6 +16,7 @@ type EntitlementsChangedMessage = {
 
 type AccountMePayload = {
   ok?: boolean
+  marketplaceRole?: unknown
   user?: {
     id?: unknown
     email?: unknown
@@ -65,6 +66,7 @@ interface PlanState {
   authStatus: 'unknown' | 'authenticated' | 'anonymous';
   user: {id: string; email: string; accountIntent: AccountIntent} | null;
   providerProfile: ProviderSummary | null;
+  marketplaceRole: 'reviewer' | 'admin' | null;
   /** Server-authoritative active Pro capability for Artist portal access. */
   artistPortalAccess: boolean;
   /** Guest mode: allows using /app without server auth. */
@@ -322,6 +324,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   authStatus: INITIAL_AUTH_BYPASS_ENABLED ? 'authenticated' : 'unknown',
   user: INITIAL_AUTH_BYPASS_ENABLED ? getBypassUser() : null,
   providerProfile: null,
+  marketplaceRole: null,
   artistPortalAccess: false,
   isGuestMode: false,
   guestId: readInitialGuestId(),
@@ -347,7 +350,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     }
 
     safeRemoveLocalStorage(AUTH_BYPASS_KEY)
-    set({authStatus: 'unknown', user: null, providerProfile: null, artistPortalAccess: false})
+    set({authStatus: 'unknown', user: null, providerProfile: null, marketplaceRole: null, artistPortalAccess: false})
     // Kick a best-effort refresh so the UI reflects real server status.
     void get()
       .refreshFromServer({reason: 'disableAuthBypass'})
@@ -458,7 +461,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     })
 
     if (res.status === 401) {
-      set({authStatus: 'anonymous', user: null, providerProfile: null, artistPortalAccess: false})
+      set({authStatus: 'anonymous', user: null, providerProfile: null, marketplaceRole: null, artistPortalAccess: false})
       // Guest mode: allow using app without auth
       get().initializeGuestMode()
       return false
@@ -487,16 +490,20 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       typeof provider?.id === 'string' && providerStatus && typeof provider?.role === 'string'
         ? {id: provider.id, status: providerStatus, role: provider.role}
         : null
+    const marketplaceRole = data.marketplaceRole === 'admin' || data.marketplaceRole === 'reviewer'
+      ? data.marketplaceRole
+      : null
     if (typeof user?.id === 'string' && typeof user?.email === 'string') {
       set({
         authStatus: 'authenticated',
         user: {id: user.id, email: user.email, accountIntent: parseAccountIntent(user.accountIntent)},
         isGuestMode: false,
         providerProfile,
+        marketplaceRole,
         artistPortalAccess,
       })
     } else {
-      set({authStatus: 'authenticated', user: null, isGuestMode: false, providerProfile, artistPortalAccess})
+      set({authStatus: 'authenticated', user: null, isGuestMode: false, providerProfile, marketplaceRole, artistPortalAccess})
     }
 
     // Entitlements are only meaningful when billing is enabled and there is no dev override.
@@ -601,7 +608,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     if (!existing) {
       safeWriteLocalStorage(GUEST_ID_KEY, guestId)
     }
-    set({ isGuestMode: true, guestId, authStatus: 'anonymous', plan: 'free', planSource: 'runtime', providerProfile: null, artistPortalAccess: false })
+    set({ isGuestMode: true, guestId, authStatus: 'anonymous', plan: 'free', planSource: 'runtime', providerProfile: null, marketplaceRole: null, artistPortalAccess: false })
   },
 
   clearAccountSession: () => {

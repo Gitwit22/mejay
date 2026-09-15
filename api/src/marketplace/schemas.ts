@@ -34,7 +34,7 @@ export const releaseSchema = z.object({
 
 export const releaseDraftSchema = z.object({
   expectedVersion: z.number().int().positive(),
-  draftStep: z.enum(['release-information', 'artwork', 'tracks', 'track-metadata', 'isrc']),
+  draftStep: z.enum(['release-information', 'artwork', 'tracks', 'track-metadata', 'isrc', 'rights', 'pricing', 'splits', 'review']),
   title: nonEmpty,
   versionTitle: nonEmpty.nullable().optional(),
   releaseType: z.enum(['single', 'ep', 'album']),
@@ -201,6 +201,10 @@ export const transitionSchema = z.object({
   expectedVersion: z.number().int().positive(),
 })
 
+export const submitReleaseSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+})
+
 export type ProviderInput = z.infer<typeof providerSchema>
 export type ArtistInput = z.infer<typeof artistSchema>
 export type ReleaseInput = z.infer<typeof releaseSchema>
@@ -215,3 +219,4 @@ export type ProductInput = z.infer<typeof productSchema>
 export type PriceInput = z.infer<typeof priceSchema>
 export type RevenueSplitsInput = z.infer<typeof revenueSplitsSchema>
 export type TransitionInput = z.infer<typeof transitionSchema>
+export type SubmitReleaseInput = z.infer<typeof submitReleaseSchema>

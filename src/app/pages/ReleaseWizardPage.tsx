@@ -10,10 +10,14 @@ import {Switch} from '@/components/ui/switch'
 import {toast} from '@/hooks/use-toast'
 import {
   assignProviderIsrc,
+  createProviderPricing,
+  createProviderRights,
   createProviderTrack,
   generateProviderIsrc,
   getProviderRelease,
   listProviderArtists,
+  replaceProviderSplits,
+  submitProviderRelease,
   type ProviderReleaseDetail,
   type ProviderTrack,
   type ReleaseDraftStep,
@@ -28,6 +32,10 @@ const steps: Array<{id: ReleaseDraftStep; label: string}> = [
   {id: 'tracks', label: 'Upload Tracks'},
   {id: 'track-metadata', label: 'Track Metadata'},
   {id: 'isrc', label: 'ISRC'},
+  {id: 'rights', label: 'Rights'},
+  {id: 'pricing', label: 'Pricing'},
+  {id: 'splits', label: 'Splits'},
+  {id: 'review', label: 'Review & Submit'},
 ]
 
 export default function ReleaseWizardPage() {
@@ -80,6 +88,10 @@ export default function ReleaseWizardPage() {
         {activeStep === 'tracks' && <TracksStep releaseId={releaseId} detail={detail.data} />}
         {activeStep === 'track-metadata' && <MetadataStep detail={detail.data} />}
         {activeStep === 'isrc' && <IsrcStep detail={detail.data} />}
+        {activeStep === 'rights' && <RightsStep detail={detail.data} />}
+        {activeStep === 'pricing' && <PricingStep detail={detail.data} />}
+        {activeStep === 'splits' && <SplitsStep detail={detail.data} />}
+        {activeStep === 'review' && <ReviewStep detail={detail.data} />}
         {advance.isError && <p className="mt-5 text-sm text-red-400">{advance.error.message}</p>}
         {next && <div className="mt-8 flex justify-end border-t border-white/10 pt-5"><Button onClick={() => advance.mutate(next)} disabled={advance.isPending} className="gap-2 bg-emerald-400 text-zinc-950 hover:bg-emerald-300">Save and continue <ChevronRight className="h-4 w-4" /></Button></div>}
       </main>
@@ -157,3 +169,41 @@ function IsrcRow({track, releaseId}: {track: ProviderTrack; releaseId: string}) 
 }
 
 function formatIsrc(value: string) {const canonical = value.replace(/[-\s]/g, '').toUpperCase(); return canonical.length === 12 ? `${canonical.slice(0, 2)}-${canonical.slice(2, 5)}-${canonical.slice(5, 7)}-${canonical.slice(7)}` : value}
+
+function RightsStep({detail}: {detail: ProviderReleaseDetail}) {
+  const queryClient = useQueryClient()
+  const [holder, setHolder] = useState(detail.release.copyright_holder || detail.release.primary_artist_name || '')
+  const missing = [
+    ...(!detail.rights.some((right) => right.release_id === detail.release.id && right.declaration_type === 'distribution') ? [{releaseId: detail.release.id, declarationType: 'distribution' as const}] : []),
+    ...detail.tracks.flatMap((track) => (['master', 'composition'] as const).filter((type) => !detail.rights.some((right) => right.track_id === track.id && right.declaration_type === type)).map((declarationType) => ({trackId: track.id, declarationType}))),
+  ]
+  const save = useMutation({mutationFn: async () => {for (const declaration of missing) await createProviderRights({...declaration, rightsHolder: holder.trim(), ownershipBps: 10000, territories: ['WORLD']})}, onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', detail.release.id]}); toast({title: 'Rights declarations saved'})}})
+  return <><StepHeading title="Rights" detail="Affirm worldwide distribution, master, and composition ownership before submission." /><div className="space-y-5"><Field label="Rights holder"><Input value={holder} onChange={(event) => setHolder(event.target.value)} required /></Field><div className="border-y border-white/10 py-4 text-sm text-zinc-400">{missing.length === 0 ? <span className="text-emerald-400">All required rights are declared at 100%.</span> : `${missing.length} declarations will be recorded at 100% worldwide ownership.`}</div><Button disabled={!holder.trim() || missing.length === 0 || save.isPending} onClick={() => save.mutate()}>{save.isPending ? 'Saving...' : missing.length === 0 ? 'Rights complete' : 'Affirm and save rights'}</Button>{save.isError && <p className="text-sm text-red-400">{save.error.message}</p>}</div></>
+}
+
+function PricingStep({detail}: {detail: ProviderReleaseDetail}) {
+  const queryClient = useQueryClient()
+  const [price, setPrice] = useState(detail.product?.amount_minor != null ? (detail.product.amount_minor / 100).toFixed(2) : '')
+  const save = useMutation({mutationFn: () => createProviderPricing(detail.release.id, detail.release.title, Math.round(Number(price) * 100)), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', detail.release.id]}); toast({title: 'Release price saved'})}})
+  return <><StepHeading title="Pricing" detail="Set the current USD catalog price for this release." /><div className="max-w-sm space-y-5"><Field label="USD price"><Input type="number" min="0" step="0.01" value={price} onChange={(event) => setPrice(event.target.value)} disabled={Boolean(detail.product)} /></Field>{detail.product ? <p className="text-sm text-emerald-400">Current price: ${(Number(detail.product.amount_minor) / 100).toFixed(2)} USD</p> : <Button disabled={price === '' || Number(price) < 0 || save.isPending} onClick={() => save.mutate()}>Save price</Button>}{save.isError && <p className="text-sm text-red-400">{save.error.message}</p>}</div></>
+}
+
+function SplitsStep({detail}: {detail: ProviderReleaseDetail}) {
+  return <><StepHeading title="Splits" detail="Every track needs an active split totaling exactly 100%." /><div className="space-y-4">{detail.tracks.map((track) => <TrackSplitForm key={track.id} track={track} detail={detail} />)}</div></>
+}
+
+function TrackSplitForm({track, detail}: {track: ProviderTrack; detail: ProviderReleaseDetail}) {
+  const queryClient = useQueryClient()
+  const existing = detail.splits.filter((split) => split.track_id === track.id)
+  const [payee, setPayee] = useState(existing[0]?.payee_name || detail.release.primary_artist_name || '')
+  const save = useMutation({mutationFn: () => replaceProviderSplits(track.id, [{payeeName: payee.trim(), role: 'rights_holder', shareBps: 10000}]), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', detail.release.id]}); toast({title: `${track.title} split saved`})}})
+  return <div className="rounded-md border border-white/10 bg-[#141417] p-5"><p className="mb-4 font-medium">{track.track_number}. {track.title}</p><div className="flex flex-wrap gap-3"><Input className="min-w-52 flex-1" value={payee} onChange={(event) => setPayee(event.target.value)} placeholder="Payee name" /><Input className="w-28" value="100%" disabled /><Button disabled={!payee.trim() || save.isPending} onClick={() => save.mutate()}>{existing.length ? 'Replace split' : 'Save split'}</Button></div>{existing.length > 0 && <p className="mt-2 text-xs text-emerald-400">Active split totals {existing.reduce((sum, entry) => sum + Number(entry.share_bps), 0) / 100}%.</p>}</div>
+}
+
+function ReviewStep({detail}: {detail: ProviderReleaseDetail}) {
+  const navigate = useNavigate()
+  const submit = useMutation({mutationFn: () => submitProviderRelease(detail.release.id, detail.release.version), onSuccess: () => {toast({title: 'Release submitted for review'}); navigate('/app/artist')}})
+  const editable = ['DRAFT', 'METADATA_COMPLETE', 'RIGHTS_COMPLETE', 'ISRC_COMPLETE', 'PRICING_COMPLETE', 'CHANGES_REQUESTED'].includes(detail.release.status)
+  const latestFeedback = detail.reviewEvents.find((event) => event.note)?.note
+  return <><StepHeading title="Review & Submit" detail="Confirm the release package before sending it to MEJay Publishing." />{latestFeedback && <div className="mb-5 border border-amber-400/30 bg-amber-400/5 p-4 text-sm text-amber-200"><p className="font-medium">Review feedback</p><p className="mt-1">{latestFeedback}</p></div>}<div className="divide-y divide-white/10 border-y border-white/10">{detail.prerequisites.length === 0 ? <div className="flex items-center gap-3 py-4 text-emerald-400"><Check className="h-4 w-4" />All submission requirements are complete</div> : detail.prerequisites.map((item) => <div key={item} className="py-3 text-sm text-zinc-400">Required: {item}</div>)}</div><Button className="mt-6 bg-emerald-400 text-zinc-950 hover:bg-emerald-300" disabled={!editable || detail.prerequisites.length > 0 || submit.isPending} onClick={() => submit.mutate()}>{submit.isPending ? 'Submitting...' : editable ? 'Submit to MEJay Review' : `Release is ${detail.release.status.replace(/_/g, ' ')}`}</Button>{submit.isError && <p className="mt-3 text-sm text-red-400">{submit.error.message}</p>}</>
+}

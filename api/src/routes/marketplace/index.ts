@@ -13,6 +13,7 @@ import {
   releaseDraftSchema,
   revenueSplitsSchema,
   rightsDeclarationSchema,
+  submitReleaseSchema,
   trackSchema,
   trackDraftSchema,
   transitionSchema,
@@ -141,3 +142,6 @@ export const replaceRevenueSplits = handler(revenueSplitsSchema, (service, userI
 export const transitionRelease = handler(transitionSchema, async (service, userId, input, params) =>
   service.transitionRelease(userId, requiredParam(params, 'releaseId'), input),
 )
+export const submitRelease = handler(submitReleaseSchema, async (service, userId, input, params) =>
+  service.submitRelease(userId, requiredParam(params, 'releaseId'), input),
+200)

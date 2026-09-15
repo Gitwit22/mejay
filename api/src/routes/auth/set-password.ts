@@ -12,6 +12,7 @@ import {
   verifyVerifiedToken,
 } from '../_auth'
 import {parseAccountIntent} from '../../marketplace/onboarding'
+import {claimMarketplaceAccess} from '../../marketplace/staff-access'
 
 type PreparedQuery = {
   bind: (...values: unknown[]) => {
@@ -132,6 +133,8 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
         if (!currentUser) throw new Error('user_upsert_failed')
 
       }
+
+      await claimMarketplaceAccess(database, currentUser.id, currentUser.email)
 
       await database.prepare('DELETE FROM sessions WHERE expires_at < ?1').bind(nowIso()).run()
       await database

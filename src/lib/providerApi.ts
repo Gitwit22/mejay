@@ -74,9 +74,14 @@ export type ProviderReleaseDetail = {
   }
   tracks: ProviderTrack[]
   assets: Array<{id: string; release_id: string | null; track_id: string | null; kind: 'artwork' | 'audio'; processing_status: string; metadata: Record<string, unknown>}>
+  rights: Array<{id: string; release_id: string | null; track_id: string | null; declaration_type: 'distribution' | 'master' | 'composition'; rights_holder: string; ownership_bps: number; territories: string[]}>
+  product: {id: string; name: string; amount_minor: number | null; currency: string | null} | null
+  splits: Array<{id: string; track_id: string; entry_id: string; payee_name: string; payee_email: string | null; role: string | null; share_bps: number}>
+  reviewEvents: Array<{decision: string; note: string | null; from_status: string; to_status: string; created_at: string}>
+  prerequisites: string[]
 }
 
-export type ReleaseDraftStep = 'release-information' | 'artwork' | 'tracks' | 'track-metadata' | 'isrc'
+export type ReleaseDraftStep = 'release-information' | 'artwork' | 'tracks' | 'track-metadata' | 'isrc' | 'rights' | 'pricing' | 'splits' | 'review'
 
 type ApiEnvelope<T> = {ok: true; data: T} | {ok: false; error: string; message?: string}
 
@@ -205,4 +210,21 @@ export function updateProviderTrack(trackId: string, input: {
   return request(`/api/marketplace/tracks/${encodeURIComponent(trackId)}`, {
     method: 'PATCH', headers: {'content-type': 'application/json'}, body: JSON.stringify(input),
   })
+}
+
+export function createProviderRights(input: {releaseId?: string; trackId?: string; declarationType: 'distribution' | 'master' | 'composition'; rightsHolder: string; ownershipBps: number; territories: string[]}): Promise<unknown> {
+  return request('/api/marketplace/rights-declarations', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
+}
+
+export async function createProviderPricing(releaseId: string, title: string, amountMinor: number): Promise<void> {
+  const product = await request<{id: string}>('/api/marketplace/products', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({releaseId, name: title})})
+  await request(`/api/marketplace/products/${encodeURIComponent(product.id)}/prices`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({amountMinor, currency: 'USD'})})
+}
+
+export function replaceProviderSplits(trackId: string, entries: Array<{payeeName: string; payeeEmail?: string; role?: string; shareBps: number}>): Promise<unknown> {
+  return request(`/api/marketplace/tracks/${encodeURIComponent(trackId)}/revenue-splits`, {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({entries})})
+}
+
+export function submitProviderRelease(releaseId: string, expectedVersion: number): Promise<ProviderRelease> {
+  return request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}/submit`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({expectedVersion})})
 }

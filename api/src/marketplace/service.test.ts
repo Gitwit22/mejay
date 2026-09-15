@@ -18,12 +18,13 @@ describe('release state machine', () => {
     expect(isReleaseTransitionAllowed('APPROVED', 'SCHEDULED')).toBe(true)
     expect(isReleaseTransitionAllowed('APPROVED', 'LIVE')).toBe(true)
     expect(isReleaseTransitionAllowed('SCHEDULED', 'LIVE')).toBe(true)
-    expect(isReleaseTransitionAllowed('LIVE', 'APPROVED')).toBe(false)
+    expect(isReleaseTransitionAllowed('LIVE', 'APPROVED')).toBe(true)
   })
 
   it('locks release-owned records at submission', () => {
     expect(isReleaseMutable('DRAFT')).toBe(true)
     expect(isReleaseMutable('PRICING_COMPLETE')).toBe(true)
+    expect(isReleaseMutable('CHANGES_REQUESTED')).toBe(true)
     expect(isReleaseMutable('SUBMITTED')).toBe(false)
     expect(isReleaseMutable('UNDER_REVIEW')).toBe(false)
     expect(isReleaseMutable('LIVE')).toBe(false)

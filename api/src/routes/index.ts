@@ -33,11 +33,13 @@ import {
   listArtists,
   listReleases,
   replaceRevenueSplits,
+  submitRelease,
   transitionRelease,
   updateReleaseDraft,
   updateTrack,
   finalizeUpload,
 } from './marketplace'
+import {commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview} from './marketplace-admin'
 import {onRequest as stripeWebhook} from './stripe-webhook'
 
 export type RouteHandler = (context: any) => Promise<Response> | Response
@@ -79,7 +81,10 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'post', path: '/api/marketplace/products', handler: createProduct},
   {method: 'post', path: '/api/marketplace/products/:productId/prices', handler: createPrice},
   {method: 'put', path: '/api/marketplace/tracks/:trackId/revenue-splits', handler: replaceRevenueSplits},
+  {method: 'post', path: '/api/marketplace/releases/:releaseId/submit', handler: submitRelease},
   {method: 'post', path: '/api/marketplace/releases/:releaseId/transitions', handler: transitionRelease},
+  {method: 'post', path: '/api/marketplace-admin/releases/:releaseId/commands', handler: marketplaceAdminCommandRelease},
+  {method: 'get', path: '/api/marketplace-admin/overview', handler: marketplaceAdminOverview},
   {method: 'post', path: '/api/stripe-webhook', handler: stripeWebhook},
 ]
 

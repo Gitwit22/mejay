@@ -62,7 +62,7 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   const keepImportsOnDevice = useDJStore((s) => s.settings.keepImportsOnDevice)
   const updateUserSettings = useDJStore((s) => s.updateUserSettings)
 
-  const {plan, authStatus, authBypassEnabled, stripeCustomerId, user, currentPeriodEnd, artistPortalAccess, providerProfile} = usePlanStore()
+  const {plan, authStatus, authBypassEnabled, stripeCustomerId, user, currentPeriodEnd, artistPortalAccess, providerProfile, marketplaceRole} = usePlanStore()
 
   const {
     token,
@@ -473,6 +473,9 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                           ? artistPortalAccess ? 'Artist Portal' : 'Renew Pro for Artist Portal'
                           : artistPortalAccess ? 'Switch to Artist Account' : 'Become an Artist'}
                     </Button>
+                    {marketplaceRole && <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/app/marketplace-admin')}>
+                      Marketplace Admin
+                    </Button>}
                   </div>
                 </CollapsibleContent>
               </div>

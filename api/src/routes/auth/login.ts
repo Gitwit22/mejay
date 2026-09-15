@@ -1,4 +1,5 @@
 import {verifyPassword} from '../_password'
+import {claimMarketplaceAccess} from '../../marketplace/staff-access'
 
 import {SESSION_TTL_MS, SHORT_SESSION_TTL_MS, addMsIso, makeSessionCookie, normalizeEmail, readJson, sha256Hex} from '../_auth'
 
@@ -47,6 +48,8 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
     const ok = await verifyPassword(password, user.password_hash)
 
     if (!ok) return json({ok: false, error: 'invalid_credentials'}, {status: 401})
+
+    await claimMarketplaceAccess(env.DB, user.id, email)
 
     const ttlMs = rememberMe ? SESSION_TTL_MS : SHORT_SESSION_TTL_MS
 

@@ -50,6 +50,13 @@ export class AccountDeletionService {
         throw new AccountDeletionError(400, 'confirmation_required', 'Enter the current account email to confirm deletion')
       }
 
+      const staff = await db.prepare(
+        'SELECT protected_owner FROM marketplace_staff WHERE user_id = ?1 FOR UPDATE',
+      ).bind(user.id).first<{protected_owner: boolean}>()
+      if (staff?.protected_owner) {
+        throw new AccountDeletionError(409, 'protected_owner', 'Transfer platform ownership before deleting this account')
+      }
+
       const entitlement = await db.prepare(
         'SELECT access_type, has_full_access, subscription_status FROM entitlements WHERE user_id = ?1 FOR UPDATE',
       ).bind(user.id).first<Entitlement>()
@@ -86,6 +93,14 @@ export class AccountDeletionService {
       }
 
       await db.prepare('DELETE FROM marketplace_staff WHERE user_id = ?1').bind(user.id).run()
+      await db.prepare(
+        `UPDATE marketplace_staff_invites SET
+          claimed_by_user_id = NULL,
+          claimed_at = NULL,
+          updated_at = CURRENT_TIMESTAMP
+         WHERE claimed_by_user_id = ?1`,
+      ).bind(user.id).run()
+      await db.prepare('DELETE FROM platform_access_grants WHERE user_id = ?1').bind(user.id).run()
       await db.prepare('DELETE FROM sessions WHERE user_id = ?1').bind(user.id).run()
       await db.prepare('DELETE FROM entitlements WHERE user_id = ?1').bind(user.id).run()
       await db.prepare('DELETE FROM email_codes WHERE email = ?1').bind(user.email).run()

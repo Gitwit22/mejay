@@ -1,4 +1,5 @@
 import {grantsArtistPortalAccess} from '../../account/artist-access'
+import {claimMarketplaceAccess, marketplaceRoleForUser, type MarketplaceRole} from '../../marketplace/staff-access'
 import {getSessionUserId, normalizeAccessType} from '../_auth'
 
 type Env = {
@@ -6,8 +7,10 @@ type Env = {
     prepare: (sql: string) => {
       bind: (...values: unknown[]) => {
         first: <T = Record<string, unknown>>() => Promise<T | null>
+        run: () => Promise<unknown>
       }
     }
+    transaction?: <T>(callback: (database: Env['DB']) => Promise<T>) => Promise<T>
   }
   SESSION_PEPPER?: string
 }
@@ -28,6 +31,7 @@ type AccountMeResponse =
         cancelAtPeriodEnd: boolean
         currentPeriodEnd?: string
       }
+      marketplaceRole?: MarketplaceRole
       provider?: {
         id: string
         status: string
@@ -63,9 +67,18 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
 
   if (!userRow) return json({ok: false, error: 'unauthorized'}, {status: 401})
 
+  const claimedAccess = await claimMarketplaceAccess(env.DB, userRow.id, userRow.email)
+
   const entRow = (await env.DB
     .prepare(
-      'SELECT access_type, has_full_access, stripe_customer_id, stripe_subscription_id, subscription_status, billing_cadence, cancel_at_period_end, current_period_end FROM entitlements WHERE user_id = ?1',
+      `SELECT e.access_type, e.has_full_access, e.stripe_customer_id, e.stripe_subscription_id,
+        e.subscription_status, e.billing_cadence, e.cancel_at_period_end, e.current_period_end,
+        COALESCE(g.full_site_access, FALSE) AS full_site_access,
+        COALESCE(g.artist_portal_access, FALSE) AS artist_portal_access
+       FROM users u
+       LEFT JOIN entitlements e ON e.user_id = u.id
+       LEFT JOIN platform_access_grants g ON g.user_id = u.id
+       WHERE u.id = ?1`,
     )
     .bind(userId)
     .first()) as {
@@ -77,10 +90,13 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
       billing_cadence: string | null
       cancel_at_period_end: boolean
       current_period_end: string | null
+      full_site_access: boolean
+      artist_portal_access: boolean
     } | null
 
   const accessType = entRow ? normalizeAccessType(entRow.access_type) : 'free'
-  const hasFullAccess = entRow ? Boolean(entRow.has_full_access) : false
+  const hasFullAccess = Boolean(entRow?.has_full_access) || entRow?.full_site_access === true
+  const marketplaceRole = claimedAccess?.role ?? await marketplaceRoleForUser(env.DB, userId)
   const providerRow = (await env.DB
     .prepare(
       [
@@ -101,10 +117,10 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
         id: userRow.id,
         email: userRow.email,
         createdAt: userRow.created_at,
-        accountIntent: userRow.account_intent === 'provider' ? 'provider' : 'consumer',
+        accountIntent: claimedAccess?.protectedOwner || userRow.account_intent === 'provider' ? 'provider' : 'consumer',
       },
       entitlements: {
-        accessType: hasFullAccess ? (accessType as AccessType) : 'free',
+        accessType: hasFullAccess ? (entRow?.full_site_access ? 'full_program' : accessType as AccessType) : 'free',
         hasFullAccess: hasFullAccess,
         artistPortalAccess: grantsArtistPortalAccess(entRow),
         ...(entRow?.stripe_customer_id ? {stripeCustomerId: entRow.stripe_customer_id} : {}),
@@ -115,6 +131,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
         cancelAtPeriodEnd: entRow?.cancel_at_period_end === true,
         ...(entRow?.current_period_end ? {currentPeriodEnd: entRow.current_period_end} : {}),
       },
+      ...(marketplaceRole ? {marketplaceRole} : {}),
       ...(providerRow
         ? {
             provider: {

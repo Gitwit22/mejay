@@ -15,6 +15,14 @@ describe('Artist portal access policy', () => {
     expect(grantsArtistPortalAccess({stripe_subscription_id: null, subscription_status: 'active'})).toBe(false)
   })
 
+  it('allows an explicit Artist Portal grant without fake Stripe data', () => {
+    expect(grantsArtistPortalAccess({
+      stripe_subscription_id: null,
+      subscription_status: null,
+      artist_portal_access: true,
+    })).toBe(true)
+  })
+
   it('loads the current user entitlement from the database', async () => {
     const first = vi.fn().mockResolvedValue({stripe_subscription_id: 'sub_123', subscription_status: 'active'})
     const bind = vi.fn().mockReturnValue({first})

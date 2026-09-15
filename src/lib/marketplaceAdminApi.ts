@@ -1,0 +1,45 @@
+import {apiFetch} from './api'
+
+export type AdminRecord = Record<string, string | number | boolean | null>
+
+export type MarketplaceAdminOverview = {
+  role: 'reviewer' | 'admin'
+  counts: AdminRecord
+  pending: AdminRecord[]
+  catalog: AdminRecord[]
+  providers: AdminRecord[]
+  artists: AdminRecord[]
+  isrcs: AdminRecord[]
+  rights: AdminRecord[]
+  pricing: AdminRecord[]
+  splits: AdminRecord[]
+  takedowns: AdminRecord[]
+}
+
+type Envelope<T> = {ok: true; data: T} | {ok: false; error: string; message?: string}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await apiFetch(path, init)
+  const payload = await response.json().catch(() => null) as Envelope<T> | null
+  if (!payload) throw new Error(`Request failed (${response.status})`)
+  if ('error' in payload) throw new Error(payload.message || payload.error)
+  if (!response.ok) throw new Error(`Request failed (${response.status})`)
+  return payload.data
+}
+
+export function getMarketplaceAdminOverview(): Promise<MarketplaceAdminOverview> {
+  return request('/api/marketplace-admin/overview')
+}
+
+export type ReleaseAdminAction = 'start_review' | 'approve' | 'request_changes' | 'reject' | 'publish_now' | 'schedule' | 'publish_due' | 'unpublish' | 'takedown'
+
+export function commandMarketplaceRelease(releaseId: string, input: {
+  action: ReleaseAdminAction
+  expectedVersion: number
+  note?: string
+  scheduledReleaseAt?: string
+}): Promise<AdminRecord> {
+  return request(`/api/marketplace-admin/releases/${encodeURIComponent(releaseId)}/commands`, {
+    method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input),
+  })
+}

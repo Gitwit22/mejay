@@ -13,6 +13,7 @@ import type {
   ReleaseInput,
   RevenueSplitsInput,
   RightsDeclarationInput,
+  SubmitReleaseInput,
   TrackInput,
   TrackDraftInput,
   TransitionInput,
@@ -44,9 +45,12 @@ type ReleaseStatus =
   | 'PRICING_COMPLETE'
   | 'SUBMITTED'
   | 'UNDER_REVIEW'
+  | 'CHANGES_REQUESTED'
   | 'APPROVED'
   | 'SCHEDULED'
   | 'LIVE'
+  | 'REJECTED'
+  | 'TAKEN_DOWN'
 
 export class MarketplaceError extends Error {
   constructor(
@@ -66,10 +70,13 @@ const transitions: Record<ReleaseStatus, readonly ReleaseStatus[]> = {
   ISRC_COMPLETE: ['PRICING_COMPLETE'],
   PRICING_COMPLETE: ['SUBMITTED'],
   SUBMITTED: ['UNDER_REVIEW'],
-  UNDER_REVIEW: ['APPROVED'],
+  UNDER_REVIEW: ['CHANGES_REQUESTED', 'APPROVED', 'REJECTED'],
+  CHANGES_REQUESTED: ['SUBMITTED'],
   APPROVED: ['SCHEDULED', 'LIVE'],
-  SCHEDULED: ['LIVE'],
-  LIVE: [],
+  SCHEDULED: ['LIVE', 'TAKEN_DOWN'],
+  LIVE: ['APPROVED', 'TAKEN_DOWN'],
+  REJECTED: [],
+  TAKEN_DOWN: ['UNDER_REVIEW'],
 }
 
 export function isReleaseTransitionAllowed(current: ReleaseStatus, target: ReleaseStatus): boolean {
@@ -103,7 +110,7 @@ async function assertOwned(db: Database, table: 'artists' | 'releases' | 'tracks
   if (!row) throw new MarketplaceError(404, 'not_found', 'Marketplace resource was not found')
 }
 
-const lockedReleaseStatuses: readonly ReleaseStatus[] = ['SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'SCHEDULED', 'LIVE']
+const lockedReleaseStatuses: readonly ReleaseStatus[] = ['SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'SCHEDULED', 'LIVE', 'REJECTED', 'TAKEN_DOWN']
 
 export function isReleaseMutable(status: ReleaseStatus): boolean {
   return !lockedReleaseStatuses.includes(status)
@@ -252,7 +259,32 @@ export class MarketplaceService {
        WHERE release_id = ?1 OR track_id IN (SELECT id FROM tracks WHERE release_id = ?1 AND provider_profile_id = ?2)
        ORDER BY created_at`,
     ).bind(releaseId, context.providerId).all()
-    return {release, tracks, assets}
+    const {results: rights} = await this.database.prepare(
+      `SELECT * FROM rights_declarations
+       WHERE provider_profile_id = ?2 AND status = 'active'
+         AND (release_id = ?1 OR track_id IN (SELECT id FROM tracks WHERE release_id = ?1))
+       ORDER BY created_at`,
+    ).bind(releaseId, context.providerId).all()
+    const product = await this.database.prepare(
+      `SELECT p.*, pr.id AS price_id, pr.amount_minor, pr.currency
+       FROM products p LEFT JOIN prices pr ON pr.product_id = p.id AND pr.active = TRUE
+         AND pr.effective_from <= CURRENT_TIMESTAMP
+         AND (pr.effective_until IS NULL OR pr.effective_until > CURRENT_TIMESTAMP)
+       WHERE p.release_id = ?1 AND p.provider_profile_id = ?2 AND p.active = TRUE
+       ORDER BY pr.effective_from DESC LIMIT 1`,
+    ).bind(releaseId, context.providerId).first()
+    const {results: splits} = await this.database.prepare(
+      `SELECT s.id, s.track_id, s.version, e.id AS entry_id, e.payee_name, e.payee_email, e.role, e.share_bps
+       FROM revenue_split_sets s JOIN revenue_split_entries e ON e.split_set_id = s.id
+       WHERE s.active = TRUE AND s.track_id IN (SELECT id FROM tracks WHERE release_id = ?1)
+       ORDER BY s.track_id, e.created_at`,
+    ).bind(releaseId).all()
+    const {results: reviewEvents} = await this.database.prepare(
+      `SELECT decision, note, from_status, to_status, created_at
+       FROM release_review_events WHERE release_id = ?1 ORDER BY created_at DESC`,
+    ).bind(releaseId).all()
+    const prerequisites = await this.unmetPrerequisites(this.database, release, 'SUBMITTED')
+    return {release, tracks, assets, rights, product, splits, reviewEvents, prerequisites}
   }
 
   async updateReleaseDraft(userId: string, releaseId: string, input: ReleaseDraftInput): Promise<unknown> {
@@ -302,13 +334,16 @@ export class MarketplaceService {
       const now = nowIso()
       await bootstrapProviderAccount({db, userId, createdAt: now})
       const context = await providerContext(db, userId)
+      const protectedOwner = await db.prepare(
+        'SELECT protected_owner FROM marketplace_staff WHERE user_id = ?1',
+      ).bind(userId).first<{protected_owner: boolean}>()
       const row = await inserted<any>(db.prepare(
         `UPDATE provider_profiles SET display_name = ?1, legal_name = ?2, slug = ?3,
           contact_email = ?4, country_code = ?5, bio = ?6,
-          status = CASE WHEN status = 'pending_profile_completion' THEN 'pending_review' ELSE status END,
-          updated_at = ?7
-         WHERE id = ?8 RETURNING *`,
-      ).bind(input.displayName, input.legalName ?? null, input.slug, input.contactEmail, input.countryCode, input.bio ?? null, now, context.providerId))
+           status = CASE WHEN status = 'pending_profile_completion' THEN ?7 ELSE status END,
+          updated_at = ?8
+         WHERE id = ?9 RETURNING *`,
+        ).bind(input.displayName, input.legalName ?? null, input.slug, input.contactEmail, input.countryCode, input.bio ?? null, protectedOwner?.protected_owner ? 'approved' : 'pending_review', now, context.providerId))
       await db.prepare("UPDATE users SET account_intent = 'provider', updated_at = ?1 WHERE id = ?2").bind(now, userId).run()
       await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'provider', entityId: context.providerId, action: 'provider.completed', after: row})
       return row
@@ -639,6 +674,48 @@ export class MarketplaceService {
         action: 'release.status_changed',
         before: {status: currentStatus, version: release.version},
         after: {status: targetStatus, version: row.version},
+      })
+      return row
+    })
+  }
+
+  async submitRelease(userId: string, releaseId: string, input: SubmitReleaseInput): Promise<unknown> {
+    return this.database.transaction(async (db: Database) => {
+      const context = await providerContext(db, userId)
+      const release = await db.prepare(
+        `SELECT r.*, p.status AS provider_status
+         FROM releases r JOIN provider_profiles p ON p.id = r.provider_profile_id
+         WHERE r.id = ?1 AND r.provider_profile_id = ?2 FOR UPDATE`,
+      ).bind(releaseId, context.providerId).first<any>()
+      if (!release) throw new MarketplaceError(404, 'not_found', 'Release was not found')
+      if (!isReleaseMutable(release.status)) {
+        throw new MarketplaceError(409, 'release_locked', 'Only editable releases can be submitted')
+      }
+      if (release.version !== input.expectedVersion) {
+        throw new MarketplaceError(409, 'stale_release_version', 'The release was modified by another request')
+      }
+      if (release.provider_status !== 'approved') {
+        throw new MarketplaceError(409, 'provider_not_approved', 'The provider must be approved before submitting releases')
+      }
+
+      const unmet = await this.unmetPrerequisites(db, release, 'SUBMITTED')
+      if (unmet.length > 0) {
+        throw new MarketplaceError(422, 'release_prerequisites_unmet', 'Release prerequisites are not complete', unmet)
+      }
+
+      const now = nowIso()
+      const row = await inserted<any>(db.prepare(
+        `UPDATE releases SET status = 'SUBMITTED', version = version + 1, submitted_at = ?1, updated_at = ?1
+         WHERE id = ?2 AND version = ?3 RETURNING *`,
+      ).bind(now, releaseId, input.expectedVersion))
+      await audit(db, {
+        providerId: context.providerId,
+        actorUserId: userId,
+        entityType: 'release',
+        entityId: releaseId,
+        action: 'release.submitted',
+        before: {status: release.status, version: release.version},
+        after: {status: row.status, version: row.version},
       })
       return row
     })

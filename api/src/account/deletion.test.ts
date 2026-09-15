@@ -38,6 +38,32 @@ describe('account deletion eligibility', () => {
 })
 
 describe('AccountDeletionService', () => {
+  it('blocks deletion of the protected marketplace owner', async () => {
+    const run = vi.fn().mockResolvedValue({success: true})
+    const database: any = {
+      prepare: vi.fn((sql: string) => {
+        const statement: any = {
+          bind: vi.fn(() => statement),
+          run,
+          first: vi.fn(async () => {
+            if (sql.includes('FROM users WHERE id')) return {id: 'owner-1', email: 'owner@example.com'}
+            if (sql.includes('FROM marketplace_staff')) return {protected_owner: true}
+            return null
+          }),
+        }
+        return statement
+      }),
+    }
+    database.transaction = vi.fn(async (callback: (transaction: any) => Promise<unknown>) => callback(database))
+
+    await expect(new AccountDeletionService(database).deleteCurrentUser({
+      userId: 'owner-1',
+      email: 'owner@example.com',
+      forfeitFullProgram: true,
+    })).rejects.toMatchObject({status: 409, code: 'protected_owner'})
+    expect(run).not.toHaveBeenCalled()
+  })
+
   it('requires an owner to transfer a shared provider before deletion', async () => {
     const run = vi.fn().mockResolvedValue({success: true})
     const database: any = {

@@ -31,6 +31,8 @@ import ProviderOnboardingPage from "./app/pages/ProviderOnboardingPage";
 import ProviderPortalPage from "./app/pages/ProviderPortalPage";
 import ReleaseWizardPage from "./app/pages/ReleaseWizardPage";
 import ArtistPortalGate from "./app/components/ArtistPortalGate";
+import MarketplaceAdminGate from "./app/components/MarketplaceAdminGate";
+import MarketplaceAdminPage from "./app/pages/MarketplaceAdminPage";
 import PurchasedMusicPage from "./app/pages/PurchasedMusicPage";
 import PlaylistEditorPage from "./pages/PlaylistEditorPage";
 
@@ -567,6 +569,9 @@ const AnimatedRoutes = () => {
           </Route>
           <Route path="provider" element={<Navigate to="/app/artist" replace />} />
           <Route path="provider/onboarding" element={<Navigate to="/app/artist/onboarding" replace />} />
+          <Route path="marketplace-admin" element={<MarketplaceAdminGate />}>
+            <Route index element={<MarketplaceAdminPage />} />
+          </Route>
           <Route path="playlist/:playlistId/edit" element={<PlaylistEditorPage />} />
           {/* Dev-only admin page */}
           {import.meta.env.DEV && <Route path="dev-admin" element={<DevAdminPage />} />}
