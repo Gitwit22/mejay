@@ -35,7 +35,48 @@ export type ProviderRelease = {
   primary_artist_name: string
   track_count: number
   updated_at: string
+  draft_step?: ReleaseDraftStep
 }
+
+export type ProviderTrack = {
+  id: string
+  title: string
+  version_title: string | null
+  disc_number: number
+  track_number: number
+  duration_ms: number | null
+  explicit: boolean
+  language_code: string | null
+  primary_artist_name: string | null
+  isrc: string | null
+  primary_artist_id?: string
+  genre?: string | null
+  instrumental?: boolean
+  recording_year?: number | null
+  recording_location?: string | null
+}
+
+export type ProviderReleaseDetail = {
+  release: ProviderRelease & {
+    draft_step: ReleaseDraftStep
+    version_title: string | null
+    label_name: string | null
+    catalog_number: string | null
+    genre: string | null
+    subgenre: string | null
+    upc: string | null
+    original_release_date: string | null
+    scheduled_release_at: string | null
+    copyright_year: number | null
+    copyright_holder: string | null
+    phonographic_copyright_year: number | null
+    phonographic_copyright_holder: string | null
+  }
+  tracks: ProviderTrack[]
+  assets: Array<{id: string; release_id: string | null; track_id: string | null; kind: 'artwork' | 'audio'; processing_status: string; metadata: Record<string, unknown>}>
+}
+
+export type ReleaseDraftStep = 'release-information' | 'artwork' | 'tracks' | 'track-metadata' | 'isrc'
 
 type ApiEnvelope<T> = {ok: true; data: T} | {ok: false; error: string; message?: string}
 
@@ -76,5 +117,92 @@ export function createProviderRelease(input: {
     method: 'POST',
     headers: {'content-type': 'application/json'},
     body: JSON.stringify(input),
+  })
+}
+
+export function getProviderRelease(releaseId: string): Promise<ProviderReleaseDetail> {
+  return request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}`)
+}
+
+export function updateProviderRelease(releaseId: string, input: {
+  expectedVersion: number
+  draftStep: ReleaseDraftStep
+  title: string
+  versionTitle?: string | null
+  releaseType: ProviderRelease['release_type']
+  primaryArtistId: string
+  labelName?: string | null
+  catalogNumber?: string | null
+  genre?: string | null
+  subgenre?: string | null
+  upc?: string | null
+  originalReleaseDate?: string | null
+  scheduledReleaseAt?: string | null
+  copyrightYear?: number | null
+  copyrightHolder?: string | null
+  phonographicCopyrightYear?: number | null
+  phonographicCopyrightHolder?: string | null
+}): Promise<ProviderReleaseDetail['release']> {
+  return request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}`, {
+    method: 'PATCH', headers: {'content-type': 'application/json'}, body: JSON.stringify(input),
+  })
+}
+
+export function createProviderTrack(releaseId: string, input: {
+  title: string
+  primaryArtistId: string
+  trackNumber: number
+  discNumber?: number
+  explicit?: boolean
+  languageCode?: string
+}): Promise<ProviderTrack> {
+  return request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}/tracks`, {
+    method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({...input, metadata: {}}),
+  })
+}
+
+type UploadInput =
+  | {kind: 'artwork'; releaseId: string; fileName: string; mimeType: 'image/jpeg' | 'image/png' | 'image/webp'; byteSize: number; width: number; height: number}
+  | {kind: 'audio'; trackId: string; fileName: string; mimeType: 'audio/wav' | 'audio/x-wav' | 'audio/flac' | 'audio/x-flac'; byteSize: number}
+
+export async function uploadProviderAsset(input: UploadInput, file: File): Promise<void> {
+  const initiated = await request<{asset: {id: string}; upload: {url: string; headers: Record<string, string>}}>('/api/marketplace/uploads', {
+    method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input),
+  })
+  const response = await fetch(initiated.upload.url, {method: 'PUT', headers: initiated.upload.headers, body: file})
+  if (!response.ok) throw new Error(`Upload failed (${response.status})`)
+  await request('/api/marketplace/uploads/finalize', {
+    method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({assetId: initiated.asset.id}),
+  })
+}
+
+export function assignProviderIsrc(trackId: string, isrc: string): Promise<{isrc: string}> {
+  return request(`/api/marketplace/tracks/${encodeURIComponent(trackId)}/isrc-assignments`, {
+    method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({isrc, source: 'provider'}),
+  })
+}
+
+export function generateProviderIsrc(trackId: string): Promise<{isrc: string}> {
+  return request(`/api/marketplace/tracks/${encodeURIComponent(trackId)}/isrc-assignments/generated`, {
+    method: 'POST', headers: {'content-type': 'application/json'}, body: '{}',
+  })
+}
+
+export function updateProviderTrack(trackId: string, input: {
+  title: string
+  versionTitle?: string | null
+  primaryArtistId: string
+  discNumber: number
+  trackNumber: number
+  durationMs?: number | null
+  explicit: boolean
+  languageCode?: string | null
+  genre?: string | null
+  instrumental: boolean
+  recordingYear?: number | null
+  recordingLocation?: string | null
+}): Promise<ProviderTrack> {
+  return request(`/api/marketplace/tracks/${encodeURIComponent(trackId)}`, {
+    method: 'PATCH', headers: {'content-type': 'application/json'}, body: JSON.stringify(input),
   })
 }

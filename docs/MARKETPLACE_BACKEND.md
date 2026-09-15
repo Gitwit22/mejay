@@ -1,6 +1,6 @@
 # Marketplace Backend
 
-Sprint 0 lives in the Node API and Neon PostgreSQL database. The marketplace UI is intentionally not connected yet.
+The marketplace backend and Artist Portal release wizard live in the Node API, Neon PostgreSQL database, and React application.
 
 ## Migrations
 
@@ -60,10 +60,16 @@ All endpoints require the `mejay_session` cookie and JSON request bodies.
 | POST | `/api/marketplace/providers` | Bootstrap and complete the current user's provider profile |
 | POST | `/api/marketplace/artists` | Create an artist |
 | POST | `/api/marketplace/releases` | Create a draft release and primary artist credit |
+| GET | `/api/marketplace/releases/:releaseId` | Read a provider-scoped release draft, tracks, and assets |
+| PATCH | `/api/marketplace/releases/:releaseId` | Save release information and wizard progress with optimistic versioning |
 | POST | `/api/marketplace/releases/:releaseId/tracks` | Create a track and primary artist credit |
+| PATCH | `/api/marketplace/tracks/:trackId` | Save track metadata |
+| POST | `/api/marketplace/uploads` | Create a pending asset and five-minute private R2 PUT URL |
+| POST | `/api/marketplace/uploads/finalize` | Verify the private R2 object and mark the asset ready |
 | POST | `/api/marketplace/assets` | Register existing artwork or audio storage metadata |
 | POST | `/api/marketplace/rights-declarations` | Affirm release distribution or track master/composition rights |
 | POST | `/api/marketplace/tracks/:trackId/isrc-assignments` | Assign a normalized ISRC |
+| POST | `/api/marketplace/tracks/:trackId/isrc-assignments/generated` | Atomically assign the next MEJay QTA3L ISRC |
 | POST | `/api/marketplace/products` | Create a release or track product |
 | POST | `/api/marketplace/products/:productId/prices` | Add an effective-dated price in minor currency units |
 | PUT | `/api/marketplace/tracks/:trackId/revenue-splits` | Atomically replace the track's complete split set |
@@ -71,7 +77,11 @@ All endpoints require the `mejay_session` cookie and JSON request bodies.
 
 Successful creation responses use `{ "ok": true, "data": ... }`. Errors use stable codes with HTTP `400`, `401`, `403`, `404`, `409`, or `422`.
 
-Revenue shares use integer basis points and must total exactly `10000`. Products target exactly one release or track. Artwork targets releases; audio targets tracks. Asset endpoints register storage references and do not upload bytes.
+Revenue shares use integer basis points and must total exactly `10000`. Products target exactly one release or track. Artwork targets releases; audio targets tracks.
+
+Browser uploads go directly to private R2 through a short-lived presigned PUT URL. The API generates every `marketplace/` object key and verifies MIME type and byte size with R2 before marking an asset ready. Artwork accepts square JPEG, PNG, or WebP files of at least 3000 x 3000 and at most 20 MB. Audio accepts WAV or FLAC files up to 500 MB.
+
+Generated ISRCs require the exact environment configuration `ISRC_PREFIX=QTA3L`, `ISRC_COUNTRY_CODE=QT`, and `ISRC_REGISTRANT_CODE=A3L`. Allocation is atomic and year-scoped from `00001` through `99999`. Canonical values are stored without separators, while the portal displays `QT-A3L-YY-NNNNN`. Registry rows are permanent; account deletion removes their user/provider provenance but retains the assigned code and original track identifier.
 
 ## Release workflow
 

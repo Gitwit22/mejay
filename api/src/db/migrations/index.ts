@@ -3,9 +3,15 @@ import type {PoolClient} from 'pg'
 import {existingSchemaMigration} from './0001-existing-schema'
 import {marketplaceFoundationMigration} from './0002-marketplace-foundation'
 import {accountDeletionMigration} from './0003-account-deletion'
+import {providerReleaseDraftsMigration} from './0004-provider-release-drafts'
 import type {Migration} from './types'
 
-export const migrations: readonly Migration[] = [existingSchemaMigration, marketplaceFoundationMigration, accountDeletionMigration]
+export const migrations: readonly Migration[] = [
+  existingSchemaMigration,
+  marketplaceFoundationMigration,
+  accountDeletionMigration,
+  providerReleaseDraftsMigration,
+]
 
 const MIGRATION_LOCK_ID = 764_329_101
 

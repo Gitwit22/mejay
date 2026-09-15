@@ -1,17 +1,23 @@
 import {z, ZodError} from 'zod'
 import {MarketplaceError, MarketplaceService} from '../../marketplace/service'
+import {readIsrcGenerationConfig} from '../../marketplace/isrc'
 import {
   artistSchema,
   assetSchema,
   isrcAssignmentSchema,
+  generatedIsrcSchema,
   priceSchema,
   productSchema,
   providerSchema,
   releaseSchema,
+  releaseDraftSchema,
   revenueSplitsSchema,
   rightsDeclarationSchema,
   trackSchema,
+  trackDraftSchema,
   transitionSchema,
+  uploadFinalizeSchema,
+  uploadInitSchema,
 } from '../../marketplace/schemas'
 import {getSessionUserId, readJson} from '../_auth'
 
@@ -21,7 +27,7 @@ type Context = {
   params: Record<string, string | undefined>
 }
 
-type Operation<T> = (service: MarketplaceService, userId: string, input: T, params: Record<string, string | undefined>) => Promise<unknown>
+type Operation<T> = (service: MarketplaceService, userId: string, input: T, params: Record<string, string | undefined>, env: any) => Promise<unknown>
 
 function json(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), {
@@ -68,7 +74,7 @@ function readHandler(operation: (service: MarketplaceService, userId: string, pa
   }
 }
 
-function handler<Schema extends z.ZodTypeAny>(schema: Schema, operation: Operation<z.output<Schema>>) {
+function handler<Schema extends z.ZodTypeAny>(schema: Schema, operation: Operation<z.output<Schema>>, status = 201) {
   return async (context: Context): Promise<Response> => {
     if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
     const userId = await getSessionUserId(context.request, context.env)
@@ -76,8 +82,8 @@ function handler<Schema extends z.ZodTypeAny>(schema: Schema, operation: Operati
 
     try {
       const input = schema.parse(await readJson(context.request))
-      const result = await operation(new MarketplaceService(context.env.DB), userId, input, context.params ?? {})
-      return json({ok: true, data: result}, {status: 201})
+      const result = await operation(new MarketplaceService(context.env.DB), userId, input, context.params ?? {}, context.env)
+      return json({ok: true, data: result}, {status})
     } catch (error) {
       if (error instanceof ZodError) {
         return json({ok: false, error: 'invalid_request', issues: error.issues}, {status: 400})
@@ -99,13 +105,31 @@ export const listArtists = readHandler((service, userId) => service.listArtists(
 export const createArtist = handler(artistSchema, (service, userId, input) => service.createArtist(userId, input))
 export const listReleases = readHandler((service, userId) => service.listReleases(userId))
 export const createRelease = handler(releaseSchema, (service, userId, input) => service.createRelease(userId, input))
+export const getRelease = readHandler((service, userId, params) =>
+  service.getRelease(userId, requiredParam(params, 'releaseId')),
+)
+export const updateReleaseDraft = handler(releaseDraftSchema, (service, userId, input, params) =>
+  service.updateReleaseDraft(userId, requiredParam(params, 'releaseId'), input),
+200)
 export const createTrack = handler(trackSchema, (service, userId, input, params) =>
   service.createTrack(userId, requiredParam(params, 'releaseId'), input),
 )
+export const updateTrack = handler(trackDraftSchema, (service, userId, input, params) =>
+  service.updateTrack(userId, requiredParam(params, 'trackId'), input),
+200)
 export const createAsset = handler(assetSchema, (service, userId, input) => service.createAsset(userId, input))
+export const initiateUpload = handler(uploadInitSchema, (service, userId, input, _params, env) =>
+  service.initiateUpload(userId, input, env.DOWNLOADS),
+)
+export const finalizeUpload = handler(uploadFinalizeSchema, (service, userId, input, _params, env) =>
+  service.finalizeUpload(userId, input.assetId, env.DOWNLOADS),
+200)
 export const createRightsDeclaration = handler(rightsDeclarationSchema, (service, userId, input) => service.createRightsDeclaration(userId, input))
 export const assignIsrc = handler(isrcAssignmentSchema, (service, userId, input, params) =>
   service.assignIsrc(userId, requiredParam(params, 'trackId'), input),
+)
+export const assignGeneratedIsrc = handler(generatedIsrcSchema, (service, userId, _input, params, env) =>
+  service.assignGeneratedIsrc(userId, requiredParam(params, 'trackId'), readIsrcGenerationConfig(env)),
 )
 export const createProduct = handler(productSchema, (service, userId, input) => service.createProduct(userId, input))
 export const createPrice = handler(priceSchema, (service, userId, input, params) =>

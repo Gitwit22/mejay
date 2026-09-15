@@ -1,5 +1,7 @@
 import {bootstrapProviderAccount} from './onboarding'
 import {userHasArtistPortalAccess} from '../account/artist-access'
+import {buildGeneratedIsrc, type IsrcGenerationConfig} from './isrc'
+import type {PrivateBucket} from '../services/r2'
 import type {
   ArtistInput,
   AssetInput,
@@ -7,11 +9,14 @@ import type {
   PriceInput,
   ProductInput,
   ProviderInput,
+  ReleaseDraftInput,
   ReleaseInput,
   RevenueSplitsInput,
   RightsDeclarationInput,
   TrackInput,
+  TrackDraftInput,
   TransitionInput,
+  UploadInitInput,
 } from './schemas'
 
 type Statement = {
@@ -222,6 +227,76 @@ export class MarketplaceService {
     return results
   }
 
+  async getRelease(userId: string, releaseId: string): Promise<unknown> {
+    const context = await providerContext(this.database, userId, false)
+    const release = await this.database.prepare(
+      `SELECT r.*, a.id AS primary_artist_id, a.name AS primary_artist_name
+       FROM releases r
+       LEFT JOIN release_artists ra ON ra.release_id = r.id AND ra.provider_profile_id = r.provider_profile_id AND ra.is_primary = TRUE
+       LEFT JOIN artists a ON a.id = ra.artist_id AND a.provider_profile_id = r.provider_profile_id
+       WHERE r.id = ?1 AND r.provider_profile_id = ?2`,
+    ).bind(releaseId, context.providerId).first()
+    if (!release) throw new MarketplaceError(404, 'not_found', 'Release was not found')
+
+    const {results: tracks} = await this.database.prepare(
+      `SELECT t.*, a.name AS primary_artist_name, i.isrc
+       FROM tracks t
+       LEFT JOIN track_artists ta ON ta.track_id = t.id AND ta.provider_profile_id = t.provider_profile_id AND ta.is_primary = TRUE
+       LEFT JOIN artists a ON a.id = ta.artist_id AND a.provider_profile_id = t.provider_profile_id
+       LEFT JOIN isrc_assignments i ON i.track_id = t.id AND i.revoked_at IS NULL
+       WHERE t.release_id = ?1 AND t.provider_profile_id = ?2
+       ORDER BY t.disc_number, t.track_number, t.created_at`,
+    ).bind(releaseId, context.providerId).all()
+    const {results: assets} = await this.database.prepare(
+      `SELECT * FROM marketplace_assets
+       WHERE release_id = ?1 OR track_id IN (SELECT id FROM tracks WHERE release_id = ?1 AND provider_profile_id = ?2)
+       ORDER BY created_at`,
+    ).bind(releaseId, context.providerId).all()
+    return {release, tracks, assets}
+  }
+
+  async updateReleaseDraft(userId: string, releaseId: string, input: ReleaseDraftInput): Promise<unknown> {
+    return this.database.transaction(async (db: Database) => {
+      const context = await providerContext(db, userId)
+      const before = await db.prepare(
+        'SELECT * FROM releases WHERE id = ?1 AND provider_profile_id = ?2 FOR UPDATE',
+      ).bind(releaseId, context.providerId).first<Record<string, unknown> & {status: ReleaseStatus; version: number}>()
+      if (!before) throw new MarketplaceError(404, 'not_found', 'Release was not found')
+      assertMutableStatus(before.status)
+      if (before.version !== input.expectedVersion) {
+        throw new MarketplaceError(409, 'stale_release_version', 'The release was modified by another request')
+      }
+      await assertOwned(db, 'artists', input.primaryArtistId, context.providerId)
+      const now = nowIso()
+      const row = await inserted<Record<string, unknown>>(db.prepare(
+        `UPDATE releases SET
+          title = ?1, version_title = ?2, release_type = ?3, label_name = ?4, catalog_number = ?5,
+          original_release_date = ?6, scheduled_release_at = ?7, genre = ?8, subgenre = ?9, upc = ?10,
+          copyright_year = ?11, copyright_holder = ?12, phonographic_copyright_year = ?13,
+          phonographic_copyright_holder = ?14, draft_step = ?15, version = version + 1, updated_at = ?16
+         WHERE id = ?17 AND provider_profile_id = ?18 AND version = ?19 RETURNING *`,
+      ).bind(
+        input.title, input.versionTitle ?? null, input.releaseType, input.labelName ?? null,
+        input.catalogNumber ?? null, input.originalReleaseDate ?? null, input.scheduledReleaseAt ?? null,
+        input.genre ?? null, input.subgenre ?? null, input.upc ?? null, input.copyrightYear ?? null,
+        input.copyrightHolder ?? null, input.phonographicCopyrightYear ?? null,
+        input.phonographicCopyrightHolder ?? null, input.draftStep, now, releaseId, context.providerId,
+        input.expectedVersion,
+      ))
+      await db.prepare(
+        `UPDATE release_artists SET is_primary = FALSE
+         WHERE release_id = ?1 AND provider_profile_id = ?2 AND is_primary = TRUE`,
+      ).bind(releaseId, context.providerId).run()
+      await db.prepare(
+        `INSERT INTO release_artists (provider_profile_id, release_id, artist_id, role, is_primary)
+         VALUES (?1, ?2, ?3, 'primary', TRUE)
+         ON CONFLICT (release_id, artist_id, role) DO UPDATE SET is_primary = TRUE`,
+      ).bind(context.providerId, releaseId, input.primaryArtistId).run()
+      await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'release', entityId: releaseId, action: 'release.draft_updated', before, after: row})
+      return {...row, primary_artist_id: input.primaryArtistId}
+    })
+  }
+
   async completeProvider(userId: string, input: ProviderInput): Promise<unknown> {
     return this.database.transaction(async (db: Database) => {
       const now = nowIso()
@@ -292,6 +367,38 @@ export class MarketplaceService {
     })
   }
 
+  async updateTrack(userId: string, trackId: string, input: TrackDraftInput): Promise<unknown> {
+    return this.database.transaction(async (db: Database) => {
+      const context = await providerContext(db, userId)
+      await assertTrackMutable(db, trackId, context.providerId)
+      await assertOwned(db, 'artists', input.primaryArtistId, context.providerId)
+      const before = await db.prepare(
+        'SELECT * FROM tracks WHERE id = ?1 AND provider_profile_id = ?2',
+      ).bind(trackId, context.providerId).first()
+      const row = await inserted<any>(db.prepare(
+        `UPDATE tracks SET title = ?1, version_title = ?2, disc_number = ?3, track_number = ?4,
+          duration_ms = ?5, explicit = ?6, language_code = ?7, genre = ?8, instrumental = ?9,
+          recording_year = ?10, recording_location = ?11, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?12 AND provider_profile_id = ?13 RETURNING *`,
+      ).bind(
+        input.title, input.versionTitle ?? null, input.discNumber, input.trackNumber,
+        input.durationMs ?? null, input.explicit, input.languageCode ?? null, input.genre ?? null,
+        input.instrumental, input.recordingYear ?? null, input.recordingLocation ?? null,
+        trackId, context.providerId,
+      ))
+      await db.prepare(
+        'UPDATE track_artists SET is_primary = FALSE WHERE track_id = ?1 AND provider_profile_id = ?2 AND is_primary = TRUE',
+      ).bind(trackId, context.providerId).run()
+      await db.prepare(
+        `INSERT INTO track_artists (provider_profile_id, track_id, artist_id, role, is_primary)
+         VALUES (?1, ?2, ?3, 'primary', TRUE)
+         ON CONFLICT (track_id, artist_id, role) DO UPDATE SET is_primary = TRUE`,
+      ).bind(context.providerId, trackId, input.primaryArtistId).run()
+      await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'track', entityId: trackId, action: 'track.updated', before, after: row})
+      return row
+    })
+  }
+
   async createAsset(userId: string, input: AssetInput): Promise<unknown> {
     return this.database.transaction(async (db: Database) => {
       const context = await providerContext(db, userId)
@@ -304,6 +411,62 @@ export class MarketplaceService {
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) RETURNING *`,
       ).bind(id, context.providerId, input.releaseId ?? null, input.trackId ?? null, input.kind, input.storageKey, input.publicUrl ?? null, input.mimeType, input.byteSize, input.sha256 ?? null, input.processingStatus, JSON.stringify(input.metadata)))
       await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'asset', entityId: id, action: 'asset.created', after: row})
+      return row
+    })
+  }
+
+  async initiateUpload(userId: string, input: UploadInitInput, bucket: PrivateBucket | undefined): Promise<unknown> {
+    if (!bucket) throw new MarketplaceError(503, 'storage_unavailable', 'Private upload storage is not configured')
+    return this.database.transaction(async (db: Database) => {
+      const context = await providerContext(db, userId)
+      if (input.kind === 'artwork') await assertReleaseMutable(db, input.releaseId, context.providerId)
+      else await assertTrackMutable(db, input.trackId, context.providerId)
+
+      const id = crypto.randomUUID()
+      const extension = input.mimeType.includes('png') ? 'png'
+        : input.mimeType.includes('webp') ? 'webp'
+          : input.mimeType.includes('flac') ? 'flac'
+            : input.mimeType.includes('wav') ? 'wav' : 'jpg'
+      const targetId = input.kind === 'artwork' ? input.releaseId : input.trackId
+      const storageKey = `marketplace/${context.providerId}/${input.kind}/${targetId}/${id}.${extension}`
+      const metadata = input.kind === 'artwork'
+        ? {fileName: input.fileName, width: input.width, height: input.height}
+        : {fileName: input.fileName}
+      const uploadUrl = await bucket.createUploadUrl(storageKey, input.mimeType, input.byteSize)
+      const row = await inserted<any>(db.prepare(
+        `INSERT INTO marketplace_assets
+          (id, provider_profile_id, release_id, track_id, kind, storage_key, mime_type, byte_size, processing_status, metadata)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9) RETURNING *`,
+      ).bind(
+        id, context.providerId, input.kind === 'artwork' ? input.releaseId : null,
+        input.kind === 'audio' ? input.trackId : null, input.kind, storageKey, input.mimeType,
+        input.byteSize, JSON.stringify(metadata),
+      ))
+      await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'asset', entityId: id, action: 'asset.upload_initiated', after: row})
+      return {asset: row, upload: {url: uploadUrl, method: 'PUT', headers: {'content-type': input.mimeType}}}
+    })
+  }
+
+  async finalizeUpload(userId: string, assetId: string, bucket: PrivateBucket | undefined): Promise<unknown> {
+    if (!bucket) throw new MarketplaceError(503, 'storage_unavailable', 'Private upload storage is not configured')
+    return this.database.transaction(async (db: Database) => {
+      const context = await providerContext(db, userId)
+      const asset = await db.prepare(
+        'SELECT * FROM marketplace_assets WHERE id = ?1 AND provider_profile_id = ?2 FOR UPDATE',
+      ).bind(assetId, context.providerId).first<any>()
+      if (!asset) throw new MarketplaceError(404, 'not_found', 'Upload was not found')
+      if (asset.release_id) await assertReleaseMutable(db, asset.release_id, context.providerId)
+      if (asset.track_id) await assertTrackMutable(db, asset.track_id, context.providerId)
+      const object = await bucket.head(asset.storage_key)
+      if (!object) throw new MarketplaceError(422, 'upload_missing', 'The uploaded object was not found')
+      if (object.byteSize !== Number(asset.byte_size) || object.contentType !== asset.mime_type) {
+        throw new MarketplaceError(422, 'upload_mismatch', 'The uploaded object does not match the declared file')
+      }
+      const row = await inserted<any>(db.prepare(
+        `UPDATE marketplace_assets SET processing_status = 'ready'
+         WHERE id = ?1 AND provider_profile_id = ?2 RETURNING *`,
+      ).bind(assetId, context.providerId))
+      await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'asset', entityId: assetId, action: 'asset.upload_finalized', before: asset, after: row})
       return row
     })
   }
@@ -329,11 +492,51 @@ export class MarketplaceService {
       const context = await providerContext(db, userId)
       await assertTrackMutable(db, trackId, context.providerId)
       const id = crypto.randomUUID()
+      const prefix = input.isrc.slice(0, 5)
+      const assignmentYear = Number(input.isrc.slice(5, 7))
+      const designation = Number(input.isrc.slice(7))
+      await db.prepare(
+        `INSERT INTO isrc_registry
+          (id, isrc, prefix, assignment_year, designation, source, provider_profile_id, original_track_id, assigned_by_user_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+      ).bind(id, input.isrc, prefix, assignmentYear, designation, input.source, context.providerId, trackId, userId).run()
       const row = await inserted<any>(db.prepare(
-        `INSERT INTO isrc_assignments (id, provider_profile_id, track_id, isrc, source, assigned_by_user_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6) RETURNING *`,
+        `INSERT INTO isrc_assignments (id, provider_profile_id, track_id, isrc, source, assigned_by_user_id, registry_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?1) RETURNING *`,
       ).bind(id, context.providerId, trackId, input.isrc, input.source, userId))
       await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'isrc_assignment', entityId: id, action: 'isrc.assigned', after: row})
+      return row
+    })
+  }
+
+  async assignGeneratedIsrc(userId: string, trackId: string, config: IsrcGenerationConfig | null): Promise<unknown> {
+    if (!config) throw new MarketplaceError(503, 'isrc_generation_unavailable', 'MEJay ISRC generation is not configured')
+    return this.database.transaction(async (db: Database) => {
+      const context = await providerContext(db, userId)
+      await assertTrackMutable(db, trackId, context.providerId)
+      const assignmentYear = new Date().getUTCFullYear() % 100
+      const counter = await db.prepare(
+        `INSERT INTO isrc_counters (prefix, assignment_year, last_designation)
+         VALUES (?1, ?2, 1)
+         ON CONFLICT (prefix, assignment_year) DO UPDATE
+         SET last_designation = isrc_counters.last_designation + 1, updated_at = CURRENT_TIMESTAMP
+         WHERE isrc_counters.last_designation < 99999
+         RETURNING last_designation`,
+      ).bind(config.prefix, assignmentYear).first<{last_designation: number}>()
+      if (!counter) throw new MarketplaceError(409, 'isrc_range_exhausted', `The ${assignmentYear} ISRC range is exhausted`)
+
+      const isrc = buildGeneratedIsrc(config.prefix, assignmentYear, counter.last_designation)
+      const id = crypto.randomUUID()
+      await db.prepare(
+        `INSERT INTO isrc_registry
+          (id, isrc, prefix, assignment_year, designation, source, provider_profile_id, original_track_id, assigned_by_user_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'agency', ?6, ?7, ?8)`,
+      ).bind(id, isrc, config.prefix, assignmentYear, counter.last_designation, context.providerId, trackId, userId).run()
+      const row = await inserted<any>(db.prepare(
+        `INSERT INTO isrc_assignments (id, provider_profile_id, track_id, isrc, source, assigned_by_user_id, registry_id)
+         VALUES (?1, ?2, ?3, ?4, 'agency', ?5, ?1) RETURNING *`,
+      ).bind(id, context.providerId, trackId, isrc, userId))
+      await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'isrc_assignment', entityId: id, action: 'isrc.generated', after: row})
       return row
     })
   }

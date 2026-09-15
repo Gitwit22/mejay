@@ -14,7 +14,12 @@ export type AppConfig = NodeJS.ProcessEnv & {
   STRIPE_PRICE_PRO: string
   STRIPE_PRICE_YEARLY: string
   STRIPE_PRICE_FULL_PROGRAM: string
+  ISRC_PREFIX: string
+  ISRC_COUNTRY_CODE: string
+  ISRC_REGISTRANT_CODE: string
 }
+
+import {readIsrcGenerationConfig} from '../marketplace/isrc'
 
 const developmentSecrets = {
   SESSION_PEPPER: 'dev-session-pepper',
@@ -54,6 +59,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const nodeEnv = env.NODE_ENV === 'production' || env.NODE_ENV === 'test' ? env.NODE_ENV : 'development'
   const production = nodeEnv === 'production'
   const sameSite = parseSameSite(env.COOKIE_SAME_SITE)
+  const isrc = readIsrcGenerationConfig(env)
 
   if (sameSite === 'none' && !production && env.COOKIE_SECURE !== 'true') {
     throw new Error('COOKIE_SAME_SITE=none requires secure cookies')
@@ -76,6 +82,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     STRIPE_PRICE_FULL_PROGRAM: production
       ? requireValue(env, 'STRIPE_PRICE_FULL_PROGRAM')
       : env.STRIPE_PRICE_FULL_PROGRAM?.trim() || '',
+    ISRC_PREFIX: isrc?.prefix ?? '',
+    ISRC_COUNTRY_CODE: isrc?.countryCode ?? '',
+    ISRC_REGISTRANT_CODE: isrc?.registrantCode ?? '',
   }
 
   config.FRONTEND_URL = config.FRONTEND_URL

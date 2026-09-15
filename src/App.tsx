@@ -29,6 +29,7 @@ import DevAdminPage from "./app/pages/DevAdminPage";
 import MusicStorePage from "./app/pages/MusicStorePage";
 import ProviderOnboardingPage from "./app/pages/ProviderOnboardingPage";
 import ProviderPortalPage from "./app/pages/ProviderPortalPage";
+import ReleaseWizardPage from "./app/pages/ReleaseWizardPage";
 import ArtistPortalGate from "./app/components/ArtistPortalGate";
 import PurchasedMusicPage from "./app/pages/PurchasedMusicPage";
 import PlaylistEditorPage from "./pages/PlaylistEditorPage";
@@ -562,6 +563,7 @@ const AnimatedRoutes = () => {
           <Route path="artist" element={<ArtistPortalGate />}>
             <Route index element={<ProviderPortalPage />} />
             <Route path="onboarding" element={<ProviderOnboardingPage />} />
+            <Route path="releases/:releaseId/edit/:step" element={<ReleaseWizardPage />} />
           </Route>
           <Route path="provider" element={<Navigate to="/app/artist" replace />} />
           <Route path="provider/onboarding" element={<Navigate to="/app/artist/onboarding" replace />} />

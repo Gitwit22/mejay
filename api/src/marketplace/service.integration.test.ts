@@ -194,6 +194,8 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       releases: number
       identified_audits: number
       snapshot_audits: number
+      registry_rows: number
+      identified_registry_rows: number
     }>(`SELECT
       (SELECT COUNT(*)::integer FROM users WHERE id = $1) AS users,
       (SELECT COUNT(*)::integer FROM provider_profiles WHERE id = $2) AS providers,
@@ -201,9 +203,11 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       (SELECT COUNT(*)::integer FROM marketplace_audit_events
         WHERE provider_profile_id = $2 OR actor_user_id = $1) AS identified_audits,
       (SELECT COUNT(*)::integer FROM marketplace_audit_events
-        WHERE entity_id IN ($2, $3, $4) AND (before_data IS NOT NULL OR after_data IS NOT NULL OR anonymized_at IS NULL)) AS snapshot_audits`,
+        WHERE entity_id IN ($2, $3, $4) AND (before_data IS NOT NULL OR after_data IS NOT NULL OR anonymized_at IS NULL)) AS snapshot_audits,
+      (SELECT COUNT(*)::integer FROM isrc_registry WHERE original_track_id = $4) AS registry_rows,
+      (SELECT COUNT(*)::integer FROM isrc_registry WHERE provider_profile_id = $2 OR assigned_by_user_id = $1) AS identified_registry_rows`,
       [providerUserId, provider.id, release.id, track.id],
     )
-    expect(deletion.rows[0]).toEqual({users: 0, providers: 0, releases: 0, identified_audits: 0, snapshot_audits: 0})
+    expect(deletion.rows[0]).toEqual({users: 0, providers: 0, releases: 0, identified_audits: 0, snapshot_audits: 0, registry_rows: 1, identified_registry_rows: 0})
   })
 })

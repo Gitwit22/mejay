@@ -79,4 +79,37 @@ describe('release state machine', () => {
     await expect(service.listArtists('user-1')).resolves.toEqual([{id: 'artist-1', name: 'Sample Artist'}])
     expect(boundValues).toContainEqual(['provider-7'])
   })
+
+  it('scopes release detail reads to the provider membership', async () => {
+    const boundValues: unknown[][] = []
+    const database = {
+      prepare: (sql: string) => {
+        const statement = {
+          bind: vi.fn(),
+          first: vi.fn(async () => sql.includes('FROM provider_members')
+            ? {provider_profile_id: 'provider-7', role: 'viewer'}
+            : sql.includes('FROM releases r') ? {id: 'release-2'} : null),
+          all: vi.fn(async () => ({results: []})),
+          run: vi.fn(),
+        }
+        statement.bind.mockImplementation((...values: unknown[]) => {
+          boundValues.push(values)
+          return statement
+        })
+        return statement
+      },
+    }
+
+    const service = new MarketplaceService(database as never)
+    await expect(service.getRelease('user-1', 'release-2')).resolves.toMatchObject({release: {id: 'release-2'}})
+    expect(boundValues).toContainEqual(['release-2', 'provider-7'])
+  })
+
+  it('fails generated assignment when the purchased prefix is not configured', async () => {
+    const service = new MarketplaceService({} as never)
+    await expect(service.assignGeneratedIsrc('user-1', 'track-1', null)).rejects.toMatchObject({
+      status: 503,
+      code: 'isrc_generation_unavailable',
+    })
+  })
 })

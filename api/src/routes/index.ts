@@ -18,6 +18,7 @@ import {onRequestGet as downloadFullProgram} from './download/full-program'
 import {onRequest as entitlements} from './entitlements'
 import {
   assignIsrc,
+  assignGeneratedIsrc,
   createArtist,
   createAsset,
   createPrice,
@@ -27,10 +28,15 @@ import {
   createRightsDeclaration,
   createTrack,
   getDashboard,
+  getRelease,
+  initiateUpload,
   listArtists,
   listReleases,
   replaceRevenueSplits,
   transitionRelease,
+  updateReleaseDraft,
+  updateTrack,
+  finalizeUpload,
 } from './marketplace'
 import {onRequest as stripeWebhook} from './stripe-webhook'
 
@@ -60,10 +66,16 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'post', path: '/api/marketplace/artists', handler: createArtist},
   {method: 'get', path: '/api/marketplace/releases', handler: listReleases},
   {method: 'post', path: '/api/marketplace/releases', handler: createRelease},
+  {method: 'get', path: '/api/marketplace/releases/:releaseId', handler: getRelease},
+  {method: 'patch', path: '/api/marketplace/releases/:releaseId', handler: updateReleaseDraft},
   {method: 'post', path: '/api/marketplace/releases/:releaseId/tracks', handler: createTrack},
+  {method: 'patch', path: '/api/marketplace/tracks/:trackId', handler: updateTrack},
   {method: 'post', path: '/api/marketplace/assets', handler: createAsset},
+  {method: 'post', path: '/api/marketplace/uploads', handler: initiateUpload},
+  {method: 'post', path: '/api/marketplace/uploads/finalize', handler: finalizeUpload},
   {method: 'post', path: '/api/marketplace/rights-declarations', handler: createRightsDeclaration},
   {method: 'post', path: '/api/marketplace/tracks/:trackId/isrc-assignments', handler: assignIsrc},
+  {method: 'post', path: '/api/marketplace/tracks/:trackId/isrc-assignments/generated', handler: assignGeneratedIsrc},
   {method: 'post', path: '/api/marketplace/products', handler: createProduct},
   {method: 'post', path: '/api/marketplace/products/:productId/prices', handler: createPrice},
   {method: 'put', path: '/api/marketplace/tracks/:trackId/revenue-splits', handler: replaceRevenueSplits},

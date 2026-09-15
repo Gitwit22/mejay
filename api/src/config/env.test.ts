@@ -40,4 +40,18 @@ describe('loadConfig', () => {
   it('rejects a missing yearly Pro price in production', () => {
     expect(() => loadConfig({...productionEnv, STRIPE_PRICE_YEARLY: ''})).toThrow('STRIPE_PRICE_YEARLY')
   })
+
+  it('loads the purchased QTA3L ISRC configuration', () => {
+    const config = loadConfig({
+      ...productionEnv,
+      ISRC_PREFIX: 'QTA3L',
+      ISRC_COUNTRY_CODE: 'QT',
+      ISRC_REGISTRANT_CODE: 'A3L',
+    })
+    expect(config.ISRC_PREFIX).toBe('QTA3L')
+  })
+
+  it('rejects partial ISRC configuration', () => {
+    expect(() => loadConfig({...productionEnv, ISRC_PREFIX: 'QTA3L'})).toThrow('ISRC generation requires')
+  })
 })

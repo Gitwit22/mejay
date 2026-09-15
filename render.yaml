@@ -46,3 +46,9 @@ services:
         sync: false
       - key: R2_BUCKET_NAME
         sync: false
+      - key: ISRC_PREFIX
+        value: QTA3L
+      - key: ISRC_COUNTRY_CODE
+        value: QT
+      - key: ISRC_REGISTRANT_CODE
+        value: A3L

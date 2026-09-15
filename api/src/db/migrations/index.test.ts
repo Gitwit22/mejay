@@ -1,6 +1,6 @@
 import type {PoolClient} from 'pg'
 import {describe, expect, it, vi} from 'vitest'
-import {runMigrations} from '.'
+import {migrations, runMigrations} from '.'
 import type {Migration} from './types'
 
 function clientWithApplied(rows: Array<{version: number; checksum: string}> = []) {
@@ -12,6 +12,15 @@ function clientWithApplied(rows: Array<{version: number; checksum: string}> = []
 }
 
 describe('runMigrations', () => {
+  it('registers provider release drafts after account deletion', () => {
+    expect(migrations.map(({version, name}) => ({version, name}))).toEqual([
+      {version: 1, name: 'existing_schema'},
+      {version: 2, name: 'marketplace_foundation'},
+      {version: 3, name: 'account_deletion'},
+      {version: 4, name: 'provider_release_drafts'},
+    ])
+  })
+
   it('applies migrations in version order inside transactions', async () => {
     const {client, query} = clientWithApplied()
     const pending: Migration[] = [

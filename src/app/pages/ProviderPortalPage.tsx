@@ -1,4 +1,5 @@
 import {useState} from 'react'
+import {useNavigate} from 'react-router-dom'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {
   BadgeDollarSign,
@@ -156,6 +157,7 @@ function Artists() {
 }
 
 function Releases() {
+  const navigate = useNavigate()
   const [search, setSearch] = useState('')
   const releases = useQuery({queryKey: ['provider', 'releases'], queryFn: listProviderReleases})
   const artists = useQuery({queryKey: ['provider', 'artists'], queryFn: listProviderArtists})
@@ -163,7 +165,7 @@ function Releases() {
   return <div className="space-y-6"><SectionHeader title="My Releases" detail="Draft, submit, and monitor your catalog." action={<CreateReleaseDialog artists={artists.data ?? []} />} />
     <SearchInput value={search} onChange={setSearch} placeholder="Search releases" />
     {releases.isLoading ? <Skeleton className="h-48 bg-white/5" /> : releases.isError ? <ErrorState message={releases.error.message} /> : filtered.length === 0 ? <EmptyState title="No releases found" detail="Create your first release draft when an artist profile is ready." /> :
-      <div className="divide-y divide-white/10 border-y border-white/10">{filtered.map((release) => <div key={release.id} className="grid grid-cols-[1fr_auto] items-center gap-4 py-4 sm:grid-cols-[1fr_9rem_6rem_auto]"><div className="min-w-0"><p className="truncate font-medium">{release.title}</p><p className="truncate text-xs text-zinc-500">{release.primary_artist_name}</p></div><p className="hidden text-sm capitalize text-zinc-400 sm:block">{release.release_type}</p><p className="hidden text-sm text-zinc-400 sm:block">{release.track_count} tracks</p><span className="rounded-full border border-white/10 px-2.5 py-1 text-xs">{release.status.replace(/_/g, ' ')}</span></div>)}</div>}
+      <div className="divide-y divide-white/10 border-y border-white/10">{filtered.map((release) => <button type="button" onClick={() => navigate(`/app/artist/releases/${release.id}/edit/${release.draft_step || 'release-information'}`)} key={release.id} className="grid w-full grid-cols-[1fr_auto] items-center gap-4 py-4 text-left hover:bg-white/[0.02] sm:grid-cols-[1fr_9rem_6rem_auto_auto]"><div className="min-w-0"><p className="truncate font-medium">{release.title}</p><p className="truncate text-xs text-zinc-500">{release.primary_artist_name}</p></div><p className="hidden text-sm capitalize text-zinc-400 sm:block">{release.release_type}</p><p className="hidden text-sm text-zinc-400 sm:block">{release.track_count} tracks</p><span className="rounded-full border border-white/10 px-2.5 py-1 text-xs">{release.status.replace(/_/g, ' ')}</span><ChevronRight className="h-4 w-4 text-zinc-500" /></button>)}</div>}
   </div>
 }
 
@@ -176,12 +178,13 @@ function CreateArtistDialog() {
 }
 
 function CreateReleaseDialog({artists}: {artists: ProviderArtist[]}) {
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [artistId, setArtistId] = useState('')
   const [releaseType, setReleaseType] = useState<'single' | 'ep' | 'album'>('single')
-  const mutation = useMutation({mutationFn: createProviderRelease, onSuccess: async () => { await Promise.all([queryClient.invalidateQueries({queryKey: ['provider', 'releases']}), queryClient.invalidateQueries({queryKey: ['provider', 'dashboard']})]); setTitle(''); setOpen(false); toast({title: 'Release draft created'}) }})
+  const mutation = useMutation({mutationFn: createProviderRelease, onSuccess: async (release) => { await Promise.all([queryClient.invalidateQueries({queryKey: ['provider', 'releases']}), queryClient.invalidateQueries({queryKey: ['provider', 'dashboard']})]); setTitle(''); setOpen(false); toast({title: 'Release draft created'}); navigate(`/app/artist/releases/${release.id}/edit/release-information`) }})
   return <Dialog open={open} onOpenChange={setOpen}><DialogTrigger asChild><Button disabled={artists.length === 0} className="gap-2 bg-emerald-400 text-zinc-950 hover:bg-emerald-300"><Plus className="h-4 w-4" />Create release</Button></DialogTrigger><DialogContent className="border-white/10 bg-[#151518]"><DialogHeader><DialogTitle>Create release</DialogTitle><DialogDescription>Start a draft. Detailed metadata and uploads come next.</DialogDescription></DialogHeader><form className="space-y-4" onSubmit={(event) => {event.preventDefault(); mutation.mutate({title: title.trim(), releaseType, primaryArtistId: artistId})}}><div className="space-y-2"><Label htmlFor="release-title">Title</Label><Input id="release-title" value={title} onChange={(event) => setTitle(event.target.value)} required /></div><div className="space-y-2"><Label>Primary artist</Label><Select value={artistId} onValueChange={setArtistId}><SelectTrigger><SelectValue placeholder="Select artist" /></SelectTrigger><SelectContent>{artists.map((artist) => <SelectItem key={artist.id} value={artist.id}>{artist.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label>Release type</Label><Select value={releaseType} onValueChange={(value: 'single' | 'ep' | 'album') => setReleaseType(value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="single">Single</SelectItem><SelectItem value="ep">EP</SelectItem><SelectItem value="album">Album</SelectItem></SelectContent></Select></div>{mutation.isError && <p className="text-sm text-red-400">{mutation.error.message}</p>}<Button className="w-full" disabled={!title.trim() || !artistId || mutation.isPending}>{mutation.isPending ? 'Creating...' : 'Create release draft'}</Button></form></DialogContent></Dialog>
 }
 

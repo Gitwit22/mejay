@@ -32,6 +32,26 @@ export const releaseSchema = z.object({
   scheduledReleaseAt: z.string().datetime({offset: true}).optional(),
 })
 
+export const releaseDraftSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  draftStep: z.enum(['release-information', 'artwork', 'tracks', 'track-metadata', 'isrc']),
+  title: nonEmpty,
+  versionTitle: nonEmpty.nullable().optional(),
+  releaseType: z.enum(['single', 'ep', 'album']),
+  primaryArtistId: id,
+  labelName: nonEmpty.nullable().optional(),
+  catalogNumber: nonEmpty.nullable().optional(),
+  genre: nonEmpty.nullable().optional(),
+  subgenre: nonEmpty.nullable().optional(),
+  upc: z.string().trim().regex(/^[0-9]{12,14}$/).nullable().optional(),
+  originalReleaseDate: z.string().date().nullable().optional(),
+  scheduledReleaseAt: z.string().datetime({offset: true}).nullable().optional(),
+  copyrightYear: z.number().int().min(1900).max(2200).nullable().optional(),
+  copyrightHolder: nonEmpty.nullable().optional(),
+  phonographicCopyrightYear: z.number().int().min(1900).max(2200).nullable().optional(),
+  phonographicCopyrightHolder: nonEmpty.nullable().optional(),
+})
+
 export const trackSchema = z.object({
   title: nonEmpty,
   versionTitle: nonEmpty.optional(),
@@ -42,6 +62,21 @@ export const trackSchema = z.object({
   explicit: z.boolean().default(false),
   languageCode: z.string().trim().toLowerCase().regex(/^[a-z]{2,3}$/).optional(),
   metadata: z.record(z.unknown()).default({}),
+})
+
+export const trackDraftSchema = z.object({
+  title: nonEmpty,
+  versionTitle: nonEmpty.nullable().optional(),
+  primaryArtistId: id,
+  discNumber: z.number().int().positive(),
+  trackNumber: z.number().int().positive(),
+  durationMs: z.number().int().positive().nullable().optional(),
+  explicit: z.boolean(),
+  languageCode: z.string().trim().toLowerCase().regex(/^[a-z]{2,3}$/).nullable().optional(),
+  genre: nonEmpty.nullable().optional(),
+  instrumental: z.boolean(),
+  recordingYear: z.number().int().min(1900).max(2200).nullable().optional(),
+  recordingLocation: nonEmpty.nullable().optional(),
 })
 
 export const assetSchema = z.object({
@@ -96,6 +131,38 @@ export const isrcAssignmentSchema = z.object({
   source: z.enum(['provider', 'imported', 'agency']).default('provider'),
 })
 
+export const generatedIsrcSchema = z.object({}).strict()
+
+const uploadBase = z.object({
+  fileName: z.string().trim().min(1).max(255),
+  byteSize: z.number().int().positive(),
+})
+
+export const uploadInitSchema = z.discriminatedUnion('kind', [
+  uploadBase.extend({
+    kind: z.literal('artwork'),
+    releaseId: id,
+    mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+    width: z.number().int().min(3000),
+    height: z.number().int().min(3000),
+  }),
+  uploadBase.extend({
+    kind: z.literal('audio'),
+    trackId: id,
+    mimeType: z.enum(['audio/wav', 'audio/x-wav', 'audio/flac', 'audio/x-flac']),
+  }),
+]).superRefine((value, context) => {
+  if (value.kind === 'artwork' && value.width !== value.height) {
+    context.addIssue({code: z.ZodIssueCode.custom, message: 'Artwork must be square'})
+  }
+  const maximum = value.kind === 'artwork' ? 20 * 1024 * 1024 : 500 * 1024 * 1024
+  if (value.byteSize > maximum) {
+    context.addIssue({code: z.ZodIssueCode.custom, message: `${value.kind === 'artwork' ? 'Artwork' : 'Audio'} exceeds the maximum size`})
+  }
+})
+
+export const uploadFinalizeSchema = z.object({assetId: id})
+
 export const productSchema = z.object({
   releaseId: id.optional(),
   trackId: id.optional(),
@@ -137,10 +204,13 @@ export const transitionSchema = z.object({
 export type ProviderInput = z.infer<typeof providerSchema>
 export type ArtistInput = z.infer<typeof artistSchema>
 export type ReleaseInput = z.infer<typeof releaseSchema>
+export type ReleaseDraftInput = z.infer<typeof releaseDraftSchema>
 export type TrackInput = z.infer<typeof trackSchema>
+export type TrackDraftInput = z.infer<typeof trackDraftSchema>
 export type AssetInput = z.infer<typeof assetSchema>
 export type RightsDeclarationInput = z.infer<typeof rightsDeclarationSchema>
 export type IsrcAssignmentInput = z.infer<typeof isrcAssignmentSchema>
+export type UploadInitInput = z.infer<typeof uploadInitSchema>
 export type ProductInput = z.infer<typeof productSchema>
 export type PriceInput = z.infer<typeof priceSchema>
 export type RevenueSplitsInput = z.infer<typeof revenueSplitsSchema>
