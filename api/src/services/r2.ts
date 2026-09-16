@@ -3,6 +3,7 @@ import {getSignedUrl} from '@aws-sdk/s3-request-presigner'
 
 export type PrivateBucket = {
   get: (defaultKey: string) => Promise<{body: ReadableStream} | null>
+  getExact: (key: string, range?: string) => Promise<{body: ReadableStream; contentLength?: number; contentRange?: string} | null>
   createUploadUrl: (key: string, contentType: string, byteSize: number) => Promise<string>
   head: (key: string) => Promise<{contentType: string | undefined; byteSize: number | undefined} | null>
   delete: (key: string) => Promise<void>
@@ -28,6 +29,20 @@ export function createDownloadsBucket(env: NodeJS.ProcessEnv): PrivateBucket | u
         const response = await client.send(new GetObjectCommand({Bucket: bucket, Key: env.R2_DOWNLOAD_KEY || defaultKey}))
         if (!response.Body) return null
         return {body: response.Body.transformToWebStream()}
+      } catch (error: any) {
+        if (error?.name === 'NoSuchKey' || error?.$metadata?.httpStatusCode === 404) return null
+        throw error
+      }
+    },
+    async getExact(key: string, range?: string) {
+      try {
+        const response = await client.send(new GetObjectCommand({Bucket: bucket, Key: key, Range: range}))
+        if (!response.Body) return null
+        return {
+          body: response.Body.transformToWebStream(),
+          contentLength: response.ContentLength,
+          contentRange: response.ContentRange,
+        }
       } catch (error: any) {
         if (error?.name === 'NoSuchKey' || error?.$metadata?.httpStatusCode === 404) return null
         throw error

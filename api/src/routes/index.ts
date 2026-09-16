@@ -41,6 +41,7 @@ import {
 } from './marketplace'
 import {commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview} from './marketplace-admin'
 import {onRequest as stripeWebhook} from './stripe-webhook'
+import {getCatalogAsset, getCatalogRelease, listCatalog} from './store'
 
 export type RouteHandler = (context: any) => Promise<Response> | Response
 
@@ -62,6 +63,9 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'delete', path: '/api/dev-admin/users/:userId', handler: devAdminDeleteUser},
   {method: 'get', path: '/api/download/full-program', handler: downloadFullProgram},
   {method: 'get', path: '/api/entitlements', handler: entitlements},
+  {method: 'get', path: '/api/store/releases', handler: listCatalog},
+  {method: 'get', path: '/api/store/releases/:releaseId', handler: getCatalogRelease},
+  {method: 'get', path: '/api/store/assets/:assetId', handler: getCatalogAsset},
   {method: 'post', path: '/api/marketplace/providers', handler: createProvider},
   {method: 'get', path: '/api/marketplace/dashboard', handler: getDashboard},
   {method: 'get', path: '/api/marketplace/artists', handler: listArtists},

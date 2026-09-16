@@ -107,6 +107,20 @@ Release-owned tracks, assets, rights, ISRCs, products, prices, and splits are lo
 
 Every successful mutation and transition writes an append-only `marketplace_audit_events` row in the same transaction.
 
+## Public catalog
+
+The consumer Marketplace reads directly from the publishing catalog:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/store/releases` | Public discovery list |
+| `GET /api/store/releases/:releaseId` | Release and track details |
+| `GET /api/store/assets/:assetId` | LIVE-gated artwork or bounded audio preview |
+
+List, detail, and media queries independently require `releases.status = 'LIVE'`. Publishing an approved release therefore makes it appear automatically, while unpublishing or taking it down removes both catalog metadata and future media access. Store assets remain private in R2 and are streamed with `Cache-Control: private, no-store`; audio responses are limited to the first 5 MB of the uploaded master.
+
+Catalog purchase controls are present but do not charge customers yet. They must remain disconnected from the plan checkout until music orders, ownership entitlements, and purchased downloads have a dedicated commerce ledger.
+
 ## Minimal payloads
 
 ```json
