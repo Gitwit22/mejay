@@ -1,9 +1,11 @@
 import {MarketplaceError} from '../../marketplace/service'
 import {StoreService} from '../../marketplace/store-service'
 import type {PrivateBucket} from '../../services/r2'
+import {getSessionUserId, readJson} from '../_auth'
 
 type Context = {
-  env: {DB?: ConstructorParameters<typeof StoreService>[0]; DOWNLOADS?: PrivateBucket}
+  request: Request
+  env: {DB?: ConstructorParameters<typeof StoreService>[0]; DOWNLOADS?: PrivateBucket; SESSION_PEPPER?: string}
   params?: Record<string, string | undefined>
 }
 
@@ -63,6 +65,20 @@ export async function getCatalogAsset(context: Context): Promise<Response> {
         ...(audioPreview ? {'accept-ranges': 'bytes'} : {}),
       },
     })
+  } catch (error) {
+    return marketplaceError(error)
+  }
+}
+
+export async function recordCatalogPreview(context: Context): Promise<Response> {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, 500)
+  const body = await readJson(context.request) as {assetId?: unknown}
+  const assetId = typeof body.assetId === 'string' ? body.assetId.trim() : ''
+  if (!assetId) return json({ok: false, error: 'invalid_request'}, 400)
+  try {
+    const userId = await getSessionUserId(context.request, context.env as never)
+    await new StoreService(context.env.DB).recordPreview(assetId, userId)
+    return json({ok: true, data: {recorded: true}}, 201)
   } catch (error) {
     return marketplaceError(error)
   }

@@ -20,7 +20,17 @@ describe('runMigrations', () => {
       {version: 4, name: 'provider_release_drafts'},
       {version: 5, name: 'marketplace_admin_publishing'},
       {version: 6, name: 'marketplace_commerce'},
+      {version: 7, name: 'marketplace_discovery'},
+      {version: 8, name: 'marketplace_sale_policy'},
+      {version: 9, name: 'marketplace_reporting'},
     ])
+  })
+
+  it('adds nullable ISO territory data for provider reporting', () => {
+    const migration = migrations.find(({version}) => version === 9)
+    expect(migration?.sql).toContain('ADD COLUMN buyer_country_code TEXT')
+    expect(migration?.sql).toContain("buyer_country_code ~ '^[A-Z]{2}$'")
+    expect(migration?.sql).toContain('provider_profile_id, paid_at DESC, buyer_country_code')
   })
 
   it('applies migrations in version order inside transactions', async () => {

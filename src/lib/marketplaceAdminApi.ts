@@ -14,6 +14,12 @@ export type MarketplaceAdminOverview = {
   pricing: AdminRecord[]
   splits: AdminRecord[]
   takedowns: AdminRecord[]
+  discovery: {
+    featuredReleases: AdminRecord[]
+    featuredArtists: AdminRecord[]
+    eligibleReleases: AdminRecord[]
+    eligibleArtists: AdminRecord[]
+  }
 }
 
 type Envelope<T> = {ok: true; data: T} | {ok: false; error: string; message?: string}
@@ -41,5 +47,11 @@ export function commandMarketplaceRelease(releaseId: string, input: {
 }): Promise<AdminRecord> {
   return request(`/api/marketplace-admin/releases/${encodeURIComponent(releaseId)}/commands`, {
     method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input),
+  })
+}
+
+export function replaceMarketplaceDiscoveryFeatures(input: {releaseIds: string[]; artistIds: string[]}): Promise<typeof input> {
+  return request('/api/marketplace-admin/discovery/features', {
+    method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify(input),
   })
 }

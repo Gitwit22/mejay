@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {assetSchema, isrcAssignmentSchema, productSchema, revenueSplitsSchema, uploadInitSchema} from './schemas'
+import {assetSchema, isrcAssignmentSchema, priceSchema, productSchema, revenueSplitsSchema, uploadInitSchema} from './schemas'
 
 describe('marketplace upload validation', () => {
   it('accepts square high-resolution artwork', () => {
@@ -38,6 +38,12 @@ describe('marketplace request schemas', () => {
     expect(productSchema.safeParse({name: 'Release download', releaseId: 'release-1'}).success).toBe(true)
     expect(productSchema.safeParse({name: 'Invalid'}).success).toBe(false)
     expect(productSchema.safeParse({name: 'Invalid', releaseId: 'release-1', trackId: 'track-1'}).success).toBe(false)
+  })
+
+  it('requires marketplace prices to be at least one US dollar', () => {
+    expect(priceSchema.safeParse({amountMinor: 100, currency: 'USD'}).success).toBe(true)
+    expect(priceSchema.safeParse({amountMinor: 99, currency: 'USD'}).success).toBe(false)
+    expect(priceSchema.safeParse({amountMinor: 100, currency: 'EUR'}).success).toBe(false)
   })
 
   it('keeps artwork on releases and audio on tracks', () => {

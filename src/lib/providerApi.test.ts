@@ -1,7 +1,7 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 
 import {apiFetch} from './api'
-import {createProviderArtist, getProviderDashboard} from './providerApi'
+import {createProviderArtist, getProviderDashboard, getProviderReporting, getRecipientEarnings} from './providerApi'
 
 vi.mock('./api', () => ({apiFetch: vi.fn()}))
 
@@ -28,5 +28,15 @@ describe('provider API', () => {
       method: 'POST',
       body: JSON.stringify({name: 'Artist', metadata: {}}),
     }))
+  })
+
+  it('loads provider and recipient reporting for the selected range', async () => {
+    vi.mocked(apiFetch).mockImplementation(async () => new Response(JSON.stringify({ok: true, data: {summary: {}}}), {status: 200}))
+
+    await getProviderReporting('30d')
+    await getRecipientEarnings('ytd')
+
+    expect(apiFetch).toHaveBeenNthCalledWith(1, '/api/marketplace/reporting?range=30d', undefined)
+    expect(apiFetch).toHaveBeenNthCalledWith(2, '/api/marketplace/recipient-earnings?range=ytd', undefined)
   })
 })

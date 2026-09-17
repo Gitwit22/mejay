@@ -4,6 +4,7 @@ type Statement = {
   bind: (...values: unknown[]) => Statement
   first: <T = Record<string, unknown>>() => Promise<T | null>
   all: <T = Record<string, unknown>>() => Promise<{results: T[]}>
+  run: () => Promise<unknown>
 }
 
 type Database = {prepare: (sql: string) => Statement}
@@ -96,6 +97,24 @@ export class StoreService {
        ORDER BY t.disc_number, t.track_number`,
     ).bind(releaseId).all()
     return {release, tracks}
+  }
+
+  async recordPreview(assetId: string, userId: string | null): Promise<void> {
+    const preview = await this.database.prepare(
+      `SELECT asset.id, asset.track_id, track.release_id
+       FROM marketplace_assets asset
+       JOIN tracks track ON track.id = asset.track_id
+       JOIN releases release ON release.id = track.release_id
+       WHERE asset.id = ?1 AND asset.kind = 'audio'
+         AND asset.processing_status = 'ready' AND release.status = 'LIVE'
+       LIMIT 1`,
+    ).bind(assetId).first<{id: string; track_id: string; release_id: string}>()
+    if (!preview) throw new MarketplaceError(404, 'preview_not_found', 'Preview audio was not found')
+
+    await this.database.prepare(
+      `INSERT INTO marketplace_preview_events (id, release_id, track_id, asset_id, user_id)
+       VALUES (?1, ?2, ?3, ?4, ?5)`,
+    ).bind(crypto.randomUUID(), preview.release_id, preview.track_id, preview.id, userId).run()
   }
 
   async getAsset(assetId: string): Promise<StoreAsset> {

@@ -57,6 +57,14 @@ export function getStoreRelease(releaseId: string): Promise<StoreReleaseDetail> 
   return request(`/api/store/releases/${encodeURIComponent(releaseId)}`)
 }
 
+export async function recordStorePreview(assetId: string): Promise<void> {
+  await apiFetch('/api/store/previews', {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify({assetId}),
+  })
+}
+
 export function storeAssetUrl(assetId: string | null | undefined): string | null {
   return assetId ? apiUrl(`/api/store/assets/${encodeURIComponent(assetId)}`) : null
 }

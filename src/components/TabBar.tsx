@@ -1,7 +1,7 @@
-import { Music, Play, ListMusic, Upload } from 'lucide-react';
+import { Compass, Music, Play, ListMusic, Upload } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-type TabId = 'library' | 'playlists' | 'import' | 'party';
+export type TabId = 'library' | 'playlists' | 'import' | 'music' | 'party';
 
 interface TabBarProps {
   activeTab: TabId;
@@ -12,6 +12,7 @@ const tabs: { id: TabId; label: string; icon: typeof Music }[] = [
   { id: 'library', label: 'My Music', icon: Music },
   { id: 'playlists', label: 'Playlists', icon: ListMusic },
   { id: 'import', label: 'Import', icon: Upload },
+  { id: 'music', label: 'Discover', icon: Compass },
   { id: 'party', label: 'Play Mode', icon: Play },
 ];
 

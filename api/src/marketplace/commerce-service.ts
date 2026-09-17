@@ -89,7 +89,12 @@ type StripeCheckoutSession = {
 type StripePaymentIntent = {
   id: string
   status?: string
-  latest_charge?: string | {id?: string; balance_transaction?: string | {id?: string; fee?: number}}
+  latest_charge?: string | {
+    id?: string
+    balance_transaction?: string | {id?: string; fee?: number}
+    billing_details?: {address?: {country?: string | null} | null}
+    payment_method_details?: {card?: {country?: string | null} | null}
+  }
 }
 
 type OrderRow = {
@@ -123,6 +128,16 @@ function parseSnapshot(value: CheckoutSnapshot | string): CheckoutSnapshot {
 function paymentIntentId(session: StripeCheckoutSession): string | null {
   if (typeof session.payment_intent === 'string') return session.payment_intent
   return typeof session.payment_intent?.id === 'string' ? session.payment_intent.id : null
+}
+
+export function paymentCountry(intent: StripePaymentIntent): string | null {
+  if (!intent.latest_charge || typeof intent.latest_charge === 'string') return null
+  const normalize = (value?: string | null) => {
+    const normalized = value?.trim().toUpperCase() ?? ''
+    return /^[A-Z]{2}$/.test(normalized) ? normalized : null
+  }
+  return normalize(intent.latest_charge.billing_details?.address?.country)
+    ?? normalize(intent.latest_charge.payment_method_details?.card?.country)
 }
 
 function chargeDetails(intent: StripePaymentIntent): {chargeId: string | null; balanceTransactionId: string | null; stripeFeeMinor: number | null} {
@@ -337,15 +352,16 @@ export class CommerceService {
       const paidAt = new Date().toISOString()
       const insertedOrder = await db.prepare(
         `INSERT INTO marketplace_orders
-          (id, buyer_user_id, provider_profile_id, checkout_attempt_id, buyer_email, currency,
+          (id, buyer_user_id, provider_profile_id, checkout_attempt_id, buyer_email, buyer_country_code, currency,
             gross_amount_minor, platform_fee_minor, provider_proceeds_minor, stripe_fee_minor,
             stripe_checkout_session_id, stripe_payment_intent_id, stripe_charge_id, stripe_balance_transaction_id,
             payment_status, paid_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 'paid', ?15)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'paid', ?16)
          RETURNING *`,
       ).bind(
         orderId, userId, attempt.provider_profile_id, attempt.id,
         session.customer_details?.email ?? session.customer_email ?? null,
+        paymentCountry(intent),
         attempt.currency, amounts.grossAmountMinor, amounts.platformFeeMinor, amounts.providerProceedsMinor,
         charge.stripeFeeMinor, session.id, intentId, charge.chargeId, charge.balanceTransactionId, paidAt,
       ).first<OrderRow>()

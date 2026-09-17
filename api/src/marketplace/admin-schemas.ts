@@ -16,3 +16,12 @@ export const releaseAdminCommandSchema = z.discriminatedUnion('action', [
 ])
 
 export type ReleaseAdminCommand = z.infer<typeof releaseAdminCommandSchema>
+
+const orderedIds = z.array(z.string().trim().min(1)).max(20).refine((ids) => new Set(ids).size === ids.length, 'IDs must be unique')
+
+export const discoveryFeaturesSchema = z.object({
+  releaseIds: orderedIds,
+  artistIds: orderedIds,
+})
+
+export type DiscoveryFeaturesInput = z.infer<typeof discoveryFeaturesSchema>

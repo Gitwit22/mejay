@@ -466,6 +466,9 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                     <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/app/purchased')}>
                       Purchased Music
                     </Button>
+                    {authStatus === 'authenticated' && <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/app/earnings')}>
+                      Earnings
+                    </Button>}
                     <Button type="button" variant="outline" className="w-full justify-start" onClick={() => void handleArtistEntry()} disabled={artistSwitchPending}>
                       {artistSwitchPending
                         ? 'Activating Artist Account...'

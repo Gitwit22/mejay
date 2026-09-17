@@ -35,6 +35,7 @@ import ArtistPortalGate from "./app/components/ArtistPortalGate";
 import MarketplaceAdminGate from "./app/components/MarketplaceAdminGate";
 import MarketplaceAdminPage from "./app/pages/MarketplaceAdminPage";
 import PurchasedMusicPage from "./app/pages/PurchasedMusicPage";
+import RecipientEarningsPage from "./app/pages/RecipientEarningsPage";
 import PlaylistEditorPage from "./pages/PlaylistEditorPage";
 
 const queryClient = new QueryClient();
@@ -564,6 +565,7 @@ const AnimatedRoutes = () => {
           <Route path="store" element={<MusicStorePage />} />
           <Route path="store/:releaseId" element={<StoreReleasePage />} />
           <Route path="purchased" element={<PurchasedMusicPage />} />
+          <Route path="earnings" element={<RecipientEarningsPage />} />
           <Route path="artist" element={<ArtistPortalGate />}>
             <Route index element={<ProviderPortalPage />} />
             <Route path="onboarding" element={<ProviderOnboardingPage />} />

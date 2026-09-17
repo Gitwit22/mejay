@@ -1,5 +1,5 @@
 import {useState} from 'react'
-import {useNavigate} from 'react-router-dom'
+import {useNavigate, useSearchParams} from 'react-router-dom'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {
   BadgeDollarSign,
@@ -29,6 +29,7 @@ import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
 import {getProviderStatusLabel, parseProviderStatus} from '@/lib/marketplace'
 import {getConnectStatus, openConnectDashboard, startConnectOnboarding} from '@/lib/marketplaceCommerceApi'
+import {ProviderEarningsReporting, ProviderOverviewReporting, ProviderSalesReporting} from '@/app/components/provider/ProviderReporting'
 import {
   createProviderArtist,
   createProviderRelease,
@@ -36,6 +37,7 @@ import {
   listProviderArtists,
   listProviderReleases,
   type ProviderArtist,
+  type ReportingRange,
 } from '@/lib/providerApi'
 
 type Section = 'overview' | 'artists' | 'releases' | 'sales' | 'earnings' | 'isrcs' | 'payout' | 'settings'
@@ -52,9 +54,25 @@ const navigation: Array<{id: Section; label: string; icon: typeof LayoutDashboar
 ]
 
 export default function ProviderPortalPage() {
-  const [section, setSection] = useState<Section>(() => new URLSearchParams(window.location.search).get('section') === 'payout' ? 'payout' : 'overview')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedSection = searchParams.get('section')
+  const section: Section = navigation.some((item) => item.id === requestedSection) ? requestedSection as Section : 'overview'
+  const requestedRange = searchParams.get('range')
+  const range: ReportingRange = ['7d', '30d', '90d', 'ytd', 'all'].includes(requestedRange ?? '') ? requestedRange as ReportingRange : '30d'
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const dashboard = useQuery({queryKey: ['provider', 'dashboard'], queryFn: getProviderDashboard})
+  const setSection = (next: Section) => setSearchParams((current) => {
+    const params = new URLSearchParams(current)
+    if (next === 'overview') params.delete('section')
+    else params.set('section', next)
+    return params
+  })
+  const setRange = (next: ReportingRange) => setSearchParams((current) => {
+    const params = new URLSearchParams(current)
+    if (next === '30d') params.delete('range')
+    else params.set('range', next)
+    return params
+  })
 
   return (
     <div className="min-h-screen bg-[#09090b] text-zinc-100">
@@ -93,7 +111,7 @@ export default function ProviderPortalPage() {
 
           <div className="mx-auto max-w-7xl p-4 sm:p-7">
             {dashboard.isError ? <ErrorState message={dashboard.error.message} /> : (
-              <PortalSection section={section} dashboard={dashboard.data} loading={dashboard.isLoading} onNavigate={setSection} />
+              <PortalSection section={section} dashboard={dashboard.data} loading={dashboard.isLoading} onNavigate={setSection} range={range} onRangeChange={setRange} />
             )}
           </div>
         </main>
@@ -117,14 +135,14 @@ function PortalNavigation({active, onSelect}: {active: Section; onSelect: (secti
   </nav>
 }
 
-function PortalSection({section, dashboard, loading, onNavigate}: {section: Section; dashboard?: Awaited<ReturnType<typeof getProviderDashboard>>; loading: boolean; onNavigate: (section: Section) => void}) {
-  if (section === 'overview') return <Overview dashboard={dashboard} loading={loading} onNavigate={onNavigate} />
+function PortalSection({section, dashboard, loading, onNavigate, range, onRangeChange}: {section: Section; dashboard?: Awaited<ReturnType<typeof getProviderDashboard>>; loading: boolean; onNavigate: (section: Section) => void; range: ReportingRange; onRangeChange: (range: ReportingRange) => void}) {
+  if (section === 'overview') return <Overview dashboard={dashboard} loading={loading} onNavigate={onNavigate} range={range} onRangeChange={onRangeChange} />
   if (section === 'artists') return <Artists />
   if (section === 'releases') return <Releases />
+  if (section === 'sales') return <ProviderSalesReporting range={range} onRangeChange={onRangeChange} />
+  if (section === 'earnings') return <ProviderEarningsReporting range={range} onRangeChange={onRangeChange} />
   if (section === 'payout') return <PayoutAccount />
-  const labels: Record<Exclude<Section, 'overview' | 'artists' | 'releases' | 'payout'>, {title: string; detail: string}> = {
-    sales: {title: 'No sales yet', detail: 'Sales reporting will appear here after marketplace transactions launch.'},
-    earnings: {title: 'No earnings yet', detail: 'Your revenue and split earnings will be summarized here.'},
+  const labels: Record<Exclude<Section, 'overview' | 'artists' | 'releases' | 'sales' | 'earnings' | 'payout'>, {title: string; detail: string}> = {
     isrcs: {title: 'ISRC registry is next', detail: 'Assigned and imported ISRC history will appear here as release creation comes online.'},
     settings: {title: 'Provider settings are next', detail: 'Business identity, contact, and team settings will be managed here.'},
   }
@@ -153,7 +171,7 @@ function PayoutAccount() {
       <div className="rounded-md border border-white/10 bg-[#141417] p-5">
         <div className="flex flex-wrap items-center gap-3"><p className="font-semibold">Stripe Connect</p><span className={`rounded-full border px-2.5 py-1 text-xs ${state.purchaseReady ? 'border-emerald-400/40 text-emerald-300' : 'border-amber-400/40 text-amber-300'}`}>{state.purchaseReady ? 'Ready for sales' : state.connected ? 'Action required' : 'Not connected'}</span></div>
         <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-3"><StatusDatum label="Identity" ready={state.detailsSubmitted} /><StatusDatum label="Payouts" ready={state.payoutsEnabled} /><StatusDatum label="Transfers" ready={state.transfersStatus === 'active'} /></dl>
-        {!state.purchaseReady && <p className="mt-5 text-sm text-zinc-400">Your releases can remain live, but customers cannot purchase them until Stripe enables payouts and transfers.</p>}
+        {!state.purchaseReady && <p className="mt-5 text-sm text-zinc-400">Stripe must enable payouts and transfers before you can submit or publish a release for sale.</p>}
         {due.length > 0 && <div className="mt-5 border-t border-white/10 pt-4"><p className="text-xs font-semibold uppercase text-zinc-500">Required by Stripe</p><ul className="mt-2 space-y-1 text-sm text-zinc-300">{due.map((requirement) => <li key={requirement}>{requirement.replace(/\./g, ' / ').replace(/_/g, ' ')}</li>)}</ul></div>}
       </div>
       <div className="flex gap-2 md:flex-col">
@@ -169,14 +187,16 @@ function StatusDatum({label, ready}: {label: string; ready: boolean}) {
   return <div><dt className="text-xs uppercase text-zinc-500">{label}</dt><dd className={`mt-1 font-medium ${ready ? 'text-emerald-300' : 'text-zinc-300'}`}>{ready ? 'Complete' : 'Pending'}</dd></div>
 }
 
-function Overview({dashboard, loading, onNavigate}: {dashboard?: Awaited<ReturnType<typeof getProviderDashboard>>; loading: boolean; onNavigate: (section: Section) => void}) {
+function Overview({dashboard, loading, onNavigate, range, onRangeChange}: {dashboard?: Awaited<ReturnType<typeof getProviderDashboard>>; loading: boolean; onNavigate: (section: Section) => void; range: ReportingRange; onRangeChange: (range: ReportingRange) => void}) {
   if (loading) return <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">{Array.from({length: 5}).map((_, index) => <Skeleton key={index} className="h-28 bg-white/5" />)}</div>
   const counts = dashboard?.counts
   const stats = [
     ['Artists', counts?.artists ?? 0], ['Releases', counts?.releases ?? 0], ['Drafts', counts?.drafts ?? 0], ['Live', counts?.live_releases ?? 0], ['ISRCs', counts?.active_isrcs ?? 0],
   ]
   return <div className="space-y-8">
-    <div><h1 className="text-2xl font-bold">Catalog overview</h1><p className="mt-1 text-sm text-zinc-400">Prepare and track your music catalog from one workspace.</p></div>
+    <div><h1 className="text-2xl font-bold">Overview</h1><p className="mt-1 text-sm text-zinc-400">Your marketplace performance and catalog at a glance.</p></div>
+    <ProviderOverviewReporting range={range} onRangeChange={onRangeChange} />
+    <div className="border-t border-white/10 pt-7"><h2 className="text-lg font-semibold">Catalog</h2></div>
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">{stats.map(([label, value]) => <div key={label} className="rounded-md border border-white/10 bg-[#141417] p-5"><p className="text-xs uppercase text-zinc-500">{label}</p><p className="mt-3 text-3xl font-bold">{value}</p></div>)}</div>
     <div className="border-t border-white/10 pt-7"><h2 className="text-lg font-semibold">Get moving</h2><div className="mt-4 grid gap-3 md:grid-cols-2">
       <ActionRow title="Manage artist profiles" detail="Create the artist identities used across your releases." onClick={() => onNavigate('artists')} />

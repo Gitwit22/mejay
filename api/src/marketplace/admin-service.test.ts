@@ -1,5 +1,6 @@
 import {describe, expect, it} from 'vitest'
 
+import {discoveryFeaturesSchema} from './admin-schemas'
 import {releaseCommandAllowed, releaseCommandTarget} from './admin-service'
 
 describe('marketplace admin release commands', () => {
@@ -17,5 +18,10 @@ describe('marketplace admin release commands', () => {
     expect(releaseCommandAllowed('takedown', 'LIVE')).toBe(true)
     expect(releaseCommandAllowed('takedown', 'SCHEDULED')).toBe(true)
     expect(releaseCommandAllowed('publish_now', 'SUBMITTED')).toBe(false)
+  })
+
+  it('requires unique ordered discovery feature IDs', () => {
+    expect(discoveryFeaturesSchema.safeParse({releaseIds: ['one', 'two'], artistIds: ['artist']}).success).toBe(true)
+    expect(discoveryFeaturesSchema.safeParse({releaseIds: ['one', 'one'], artistIds: []}).success).toBe(false)
   })
 })

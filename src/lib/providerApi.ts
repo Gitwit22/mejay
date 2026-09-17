@@ -16,6 +16,31 @@ export type ProviderDashboard = {
   }
 }
 
+export type ReportingRange = '7d' | '30d' | '90d' | 'ytd' | 'all'
+
+export type ReportingPeriod = {range: ReportingRange; startAt: string | null; endAt: string}
+
+export type ProviderSalesReport = {
+  period: ReportingPeriod
+  currency: 'USD'
+  summary: {grossSalesMinor: number; unitsSold: number; earningsMinor: number; pendingMinor: number; paidOutMinor: number; refundsMinor: number; refundCount: number; downloadCount: number}
+  topSongs: Array<{trackId: string | null; title: string; units: number; earningsMinor: number}>
+  salesByRelease: Array<{releaseId: string; title: string; artistName: string; units: number; grossMinor: number; earningsMinor: number; refundsMinor: number; downloads: number}>
+  salesByDay: Array<{date: string; units: number; grossMinor: number; earningsMinor: number; refundsMinor: number}>
+  salesByTerritory: Array<{countryCode: string | null; units: number; grossMinor: number; earningsMinor: number}>
+  downloads: Array<{release_id: string; release_title: string; track_id: string | null; track_title: string; download_count: number}>
+  refunds: Array<{orderId: string; saleDate: string; releaseId: string; releaseTitle: string; amountMinor: number; status: string}>
+  recipientLiabilities: Array<{name: string; email: string | null; role: string | null; allocatedMinor: number; refundAdjustmentMinor: number; owedMinor: number}>
+}
+
+export type RecipientEarningsReport = {
+  period: ReportingPeriod
+  currency: 'USD'
+  recipientEmail: string
+  summary: {allocatedMinor: number; refundAdjustmentMinor: number; owedMinor: number}
+  rows: Array<{allocationId: string; orderId: string; saleDate: string; releaseId: string; releaseTitle: string; trackId: string | null; trackTitle: string; role: string | null; allocatedMinor: number; refundAdjustmentMinor: number; owedMinor: number}>
+}
+
 export type ProviderArtist = {
   id: string
   name: string
@@ -95,6 +120,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function getProviderDashboard(): Promise<ProviderDashboard> {
   return request('/api/marketplace/dashboard')
+}
+
+export function getProviderReporting(range: ReportingRange): Promise<ProviderSalesReport> {
+  return request(`/api/marketplace/reporting?range=${encodeURIComponent(range)}`)
+}
+
+export function getRecipientEarnings(range: ReportingRange): Promise<RecipientEarningsReport> {
+  return request(`/api/marketplace/recipient-earnings?range=${encodeURIComponent(range)}`)
 }
 
 export function listProviderArtists(): Promise<ProviderArtist[]> {

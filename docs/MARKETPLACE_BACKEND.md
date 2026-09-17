@@ -99,11 +99,11 @@ Release-owned tracks, assets, rights, ISRCs, products, prices, and splits are lo
 | `METADATA_COMPLETE` | Required release metadata, primary artist, one or more tracks, ready release artwork, ready audio for every track |
 | `RIGHTS_COMPLETE` | Distribution rights total 10000 bps; master and composition rights each total 10000 bps for every track |
 | `ISRC_COMPLETE` | Every track has one active, globally unique ISRC |
-| `PRICING_COMPLETE` | Active release product/current price and active 10000-bps split set for every track |
+| `PRICING_COMPLETE` | Active release product priced at least $1.00 USD, completed Stripe payout setup, and active 10000-bps split set for every track |
 | `SUBMITTED` | All prior prerequisites are rechecked |
 | `UNDER_REVIEW`, `APPROVED` | Separate marketplace reviewer/admin |
 | `SCHEDULED` | Future `scheduled_release_at` |
-| `LIVE` | No future schedule remains |
+| `LIVE` | No future schedule remains; the $1.00 USD minimum and Stripe payout readiness are rechecked |
 
 Every successful mutation and transition writes an append-only `marketplace_audit_events` row in the same transaction.
 
@@ -116,14 +116,56 @@ The consumer Marketplace reads directly from the publishing catalog:
 | `GET /api/store/releases` | Public discovery list |
 | `GET /api/store/releases/:releaseId` | Release and track details |
 | `GET /api/store/assets/:assetId` | LIVE-gated artwork or bounded audio preview |
+| `POST /api/store/previews` | Record a validated preview start |
+| `GET /api/music/discovery` | MEJay Music overview feeds |
+| `PUT /api/marketplace-admin/discovery/features` | Replace ordered featured releases and artists |
 
 List, detail, and media queries independently require `releases.status = 'LIVE'`. Publishing an approved release therefore makes it appear automatically, while unpublishing or taking it down removes both catalog metadata and future media access. Store assets remain private in R2 and are streamed with `Cache-Control: private, no-store`; audio responses are limited to the first 5 MB of the uploaded master.
 
 Catalog purchases use authenticated Stripe Checkout sessions that are separate from plan billing. Verified Stripe webhooks create the Neon order, immutable ledger entries, equal-per-track payee allocations, and download entitlement. MEJay retains 10% of gross and transfers the remaining provider proceeds to the provider's Stripe Connect Express account using separate charges and transfers.
 
-Providers connect Stripe from the Provider Portal. LIVE releases remain public while onboarding is incomplete, but checkout remains disabled until Stripe reports submitted details, enabled payouts, and an active transfers capability. Full refunds revoke downloads and reverse the provider transfer; open disputes suspend downloads until Stripe resolves them.
+## Music discovery
+
+MEJay Music is the editorial discovery surface; Marketplace remains the transactional search, pricing, and purchase surface. `GET /api/music/discovery` returns newest releases, newest singles, newest EP/album projects, most purchased, most previewed, ordered featured releases, and ordered featured artists.
+
+All discovery queries independently require `releases.status = 'LIVE'`. New feeds order by `published_at DESC`. Most Purchased counts order items attached to paid or partially refunded orders, while Most Previewed counts validated preview-start events. Zero-activity releases are excluded from Trending, and publication date breaks ties. These rankings are global and intentionally do not use personalization or AI recommendations.
+
+The client records a preview only after audio playback starts successfully. `POST /api/store/previews` verifies that the requested asset is ready audio attached to a LIVE release; raw asset range requests are not counted because browsers may issue several requests for one listen.
+
+Marketplace admins maintain ordered release and artist picks through one atomic replacement command. Reviewers can inspect curation but cannot change it. Featured releases that cease to be LIVE and artists without a LIVE release are omitted from public results. Until artists have dedicated profile imagery, Featured Artists use artwork from their latest LIVE release.
+
+Publishing does not insert or synchronize feed rows. The existing atomic transition to `LIVE` sets `published_at` and activates the product; both Store and Music read that same state on their next no-store request. Unpublish and takedown transitions therefore remove releases from both surfaces without a second write path.
+
+Providers connect Stripe from the Provider Portal. Every uploaded release is a paid marketplace release: its active USD price must be at least $1.00, and submission/publication is blocked until Stripe reports submitted details, enabled payouts, and an active transfers capability. Full refunds revoke downloads and reverse the provider transfer; open disputes suspend downloads until Stripe resolves them.
 
 Purchased source files remain private in R2. `GET /api/store/purchases/:entitlementId/files/:fileId/download` requires the owning session and an active entitlement, supports byte ranges, and never exposes the storage key. Sprint 4 temporarily fulfills the original WAV/FLAC upload; standardized consumer derivatives are deferred.
+
+## Sales and earnings reporting
+
+Authenticated reporting is available through:
+
+| Endpoint | Access | Purpose |
+| --- | --- | --- |
+| `GET /api/marketplace/reporting?range=30d` | Provider member | Provider sales, earnings, downloads, refunds, and split liabilities |
+| `GET /api/marketplace/recipient-earnings?range=30d` | Any authenticated account | Split allocations matching the account's normalized email |
+
+Supported ranges are `7d`, `30d`, `90d`, `ytd`, and `all`; the default is `30d`. Bounded ranges start at 00:00 UTC and include the current day. The range selects a cohort by sale date, and every financial metric reports the current reconciliation state of those sales. Sales by Day uses UTC dates and zero-fills days without activity.
+
+Provider reports define their summary metrics as follows:
+
+- **Gross Sales** is completed-order gross before refunds.
+- **Units Sold** is the order-item count. Refunded units remain sold and are reconciled through Refunds.
+- **Your Earnings** is provider proceeds after provider-side refunds and lost disputes.
+- **Pending** is net provider earnings attached to pending or failed transfers, excluding open and lost disputes.
+- **Paid Out** is the amount transferred to the provider's Stripe Connect account. Reversed transfers count as zero.
+- **Downloads** counts successful private-file download events, not entitlements or attempts.
+- **Refunds** reports refund totals and order status separately from gross sales.
+
+Top Songs, Sales by Release, Sales by Day, Sales by Territory, Downloads, and Refunds all derive from immutable order, order-item, allocation, and download records scoped to the provider. Migration 9 stores the Stripe billing country on each fulfilled order, falling back to the payment card country. Territory is an uppercase ISO alpha-2 code; unavailable values are grouped as `Unknown`.
+
+Money calculations use integer USD minor units. Partial refunds use the same platform/provider apportionment as webhook fulfillment. Recipient allocations are then reconciled with deterministic largest-remainder rounding so their adjusted amounts exactly equal provider proceeds. Open disputes remove amounts from Pending while unresolved; lost disputes reduce earnings to zero. Provider transfer totals and refund adjustments remain separately visible.
+
+Recipient access does not require Artist Pro. `/app/earnings` matches `LOWER(marketplace_split_allocations.payee_email)` to the authenticated account's canonical email and returns only that email's rows. It never exposes buyer details, Stripe identifiers, or other recipients. Recipient **Owed** means the provider owes the collaborator after refund adjustments; a Stripe transfer to the provider does not mean MEJay paid individual split recipients.
 
 ## Minimal payloads
 

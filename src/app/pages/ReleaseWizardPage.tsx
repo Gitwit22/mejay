@@ -183,9 +183,10 @@ function RightsStep({detail}: {detail: ProviderReleaseDetail}) {
 
 function PricingStep({detail}: {detail: ProviderReleaseDetail}) {
   const queryClient = useQueryClient()
-  const [price, setPrice] = useState(detail.product?.amount_minor != null ? (detail.product.amount_minor / 100).toFixed(2) : '')
+  const [price, setPrice] = useState(detail.product?.amount_minor != null ? (detail.product.amount_minor / 100).toFixed(2) : '1.00')
+  const numericPrice = Number(price)
   const save = useMutation({mutationFn: () => createProviderPricing(detail.release.id, detail.release.title, Math.round(Number(price) * 100)), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', detail.release.id]}); toast({title: 'Release price saved'})}})
-  return <><StepHeading title="Pricing" detail="Set the current USD catalog price for this release." /><div className="max-w-sm space-y-5"><Field label="USD price"><Input type="number" min="0" step="0.01" value={price} onChange={(event) => setPrice(event.target.value)} disabled={Boolean(detail.product)} /></Field>{detail.product ? <p className="text-sm text-emerald-400">Current price: ${(Number(detail.product.amount_minor) / 100).toFixed(2)} USD</p> : <Button disabled={price === '' || Number(price) < 0 || save.isPending} onClick={() => save.mutate()}>Save price</Button>}{save.isError && <p className="text-sm text-red-400">{save.error.message}</p>}</div></>
+  return <><StepHeading title="Pricing" detail="Every MEJay release is sold in USD for at least $1.00." /><div className="max-w-sm space-y-5"><Field label="USD price"><Input type="number" min="1" step="0.01" value={price} onChange={(event) => setPrice(event.target.value)} disabled={Boolean(detail.product)} /></Field>{detail.product ? <p className="text-sm text-emerald-400">Current price: ${(Number(detail.product.amount_minor) / 100).toFixed(2)} USD</p> : <Button disabled={!Number.isFinite(numericPrice) || numericPrice < 1 || save.isPending} onClick={() => save.mutate()}>Save price</Button>}{save.isError && <p className="text-sm text-red-400">{save.error.message}</p>}</div></>
 }
 
 function SplitsStep({detail}: {detail: ProviderReleaseDetail}) {

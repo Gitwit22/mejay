@@ -1,17 +1,17 @@
 import {useState} from 'react'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
-import {BarChart3, BadgeDollarSign, Copyright, Disc3, Fingerprint, Menu, Scale, Scissors, ShieldAlert, Users, UserRound, X} from 'lucide-react'
+import {ArrowDown, ArrowUp, BarChart3, BadgeDollarSign, Copyright, Disc3, Fingerprint, Menu, Plus, Scale, Scissors, ShieldAlert, Sparkles, Trash2, Users, UserRound, X} from 'lucide-react'
 
 import {Button} from '@/components/ui/button'
 import {Input} from '@/components/ui/input'
 import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
-import {commandMarketplaceRelease, getMarketplaceAdminOverview, type AdminRecord, type ReleaseAdminAction} from '@/lib/marketplaceAdminApi'
+import {commandMarketplaceRelease, getMarketplaceAdminOverview, replaceMarketplaceDiscoveryFeatures, type AdminRecord, type MarketplaceAdminOverview, type ReleaseAdminAction} from '@/lib/marketplaceAdminApi'
 
-type Section = 'pending' | 'catalog' | 'providers' | 'artists' | 'isrcs' | 'rights' | 'pricing' | 'splits' | 'takedowns' | 'reporting'
+type Section = 'pending' | 'catalog' | 'discovery' | 'providers' | 'artists' | 'isrcs' | 'rights' | 'pricing' | 'splits' | 'takedowns' | 'reporting'
 
 const navigation = [
-  ['pending', 'Pending Releases', ShieldAlert], ['catalog', 'Live Catalog', Disc3], ['providers', 'Providers', Users],
+  ['pending', 'Pending Releases', ShieldAlert], ['catalog', 'Live Catalog', Disc3], ['discovery', 'Discovery', Sparkles], ['providers', 'Providers', Users],
   ['artists', 'Artists', UserRound], ['isrcs', 'ISRC Registry', Fingerprint], ['rights', 'Rights Review', Copyright],
   ['pricing', 'Pricing', BadgeDollarSign], ['splits', 'Splits', Scissors], ['takedowns', 'Takedowns', Scale],
   ['reporting', 'Reporting', BarChart3],
@@ -37,8 +37,38 @@ function Navigation({active, onSelect}: {active: Section; onSelect: (section: Se
 
 function SectionView({section, data}: {section: Section; data: Awaited<ReturnType<typeof getMarketplaceAdminOverview>>}) {
   if (section === 'reporting') return <Reporting counts={data.counts} />
+  if (section === 'discovery') return <DiscoveryCuration data={data} />
   const rows = data[section]
   return <RecordTable title={navigation.find(([id]) => id === section)?.[1] || section} rows={rows} actionable={section === 'pending' || section === 'catalog'} role={data.role} />
+}
+
+function DiscoveryCuration({data}: {data: MarketplaceAdminOverview}) {
+  const queryClient = useQueryClient()
+  const [releaseIds, setReleaseIds] = useState(() => data.discovery.featuredReleases.map((row) => String(row.id)))
+  const [artistIds, setArtistIds] = useState(() => data.discovery.featuredArtists.map((row) => String(row.id)))
+  const save = useMutation({
+    mutationFn: () => replaceMarketplaceDiscoveryFeatures({releaseIds, artistIds}),
+    onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['marketplace-admin']}); toast({title: 'Discovery picks saved'})},
+    onError: (error) => toast({title: 'Discovery picks not saved', description: error.message, variant: 'destructive'}),
+  })
+  const readOnly = data.role !== 'admin'
+  return <div className="space-y-7"><div><h1 className="text-2xl font-bold">Discovery</h1><p className="mt-1 text-sm text-zinc-400">Curate ordered releases and artists for MEJay Music.</p></div>
+    <div className="grid gap-8 xl:grid-cols-2">
+      <FeaturePicker title="Featured Releases" ids={releaseIds} onChange={setReleaseIds} candidates={data.discovery.eligibleReleases} labelKey="title" readOnly={readOnly} />
+      <FeaturePicker title="Featured Artists" ids={artistIds} onChange={setArtistIds} candidates={data.discovery.eligibleArtists} labelKey="name" readOnly={readOnly} />
+    </div>
+    {readOnly ? <p className="text-sm text-zinc-500">Reviewer access is read-only.</p> : <Button className="bg-emerald-400 text-zinc-950 hover:bg-emerald-300" disabled={save.isPending} onClick={() => save.mutate()}>{save.isPending ? 'Saving...' : 'Save discovery picks'}</Button>}
+  </div>
+}
+
+function FeaturePicker({title, ids, onChange, candidates, labelKey, readOnly}: {title: string; ids: string[]; onChange: (ids: string[]) => void; candidates: AdminRecord[]; labelKey: 'title' | 'name'; readOnly: boolean}) {
+  const [selected, setSelected] = useState('')
+  const byId = new Map(candidates.map((row) => [String(row.id), row]))
+  const available = candidates.filter((row) => !ids.includes(String(row.id)))
+  const move = (index: number, direction: -1 | 1) => {const next = [...ids]; const target = index + direction; if (target < 0 || target >= next.length) return; [next[index], next[target]] = [next[target], next[index]]; onChange(next)}
+  return <section className="border-y border-white/10 py-5"><h2 className="font-bold">{title}</h2><div className="mt-4 space-y-2">{ids.length === 0 ? <p className="py-4 text-sm text-zinc-500">No picks selected.</p> : ids.map((id, index) => <div key={id} className="flex items-center gap-2 bg-white/[0.03] px-3 py-2"><span className="w-6 text-xs text-zinc-600">{index + 1}</span><span className="min-w-0 flex-1 truncate text-sm">{String(byId.get(id)?.[labelKey] || id)}</span>{!readOnly && <><Button size="icon" variant="ghost" className="h-8 w-8" disabled={index === 0} onClick={() => move(index, -1)} aria-label={`Move ${id} up`}><ArrowUp className="h-4 w-4" /></Button><Button size="icon" variant="ghost" className="h-8 w-8" disabled={index === ids.length - 1} onClick={() => move(index, 1)} aria-label={`Move ${id} down`}><ArrowDown className="h-4 w-4" /></Button><Button size="icon" variant="ghost" className="h-8 w-8 text-red-300" onClick={() => onChange(ids.filter((item) => item !== id))} aria-label={`Remove ${id}`}><Trash2 className="h-4 w-4" /></Button></>}</div>)}</div>
+    {!readOnly && <div className="mt-4 flex gap-2"><select value={selected} onChange={(event) => setSelected(event.target.value)} className="min-w-0 flex-1 rounded-md border border-white/10 bg-[#141417] px-3 text-sm"><option value="">Select...</option>{available.map((row) => <option key={String(row.id)} value={String(row.id)}>{String(row[labelKey])}</option>)}</select><Button variant="outline" size="icon" disabled={!selected} onClick={() => {onChange([...ids, selected]); setSelected('')}} aria-label={`Add to ${title}`}><Plus className="h-4 w-4" /></Button></div>}
+  </section>
 }
 
 function RecordTable({title, rows, actionable, role}: {title: string; rows: AdminRecord[]; actionable: boolean; role: 'reviewer' | 'admin'}) {

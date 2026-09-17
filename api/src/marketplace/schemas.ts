@@ -174,8 +174,8 @@ export const productSchema = z.object({
 })
 
 export const priceSchema = z.object({
-  amountMinor: z.number().int().nonnegative(),
-  currency,
+  amountMinor: z.number().int().min(100, 'Marketplace releases must cost at least $1.00'),
+  currency: z.literal('USD'),
   effectiveFrom: z.string().datetime({offset: true}).optional(),
   effectiveUntil: z.string().datetime({offset: true}).optional(),
 }).superRefine((value, context) => {

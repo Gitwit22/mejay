@@ -1,5 +1,6 @@
-import type {ReleaseAdminCommand} from './admin-schemas'
+import type {DiscoveryFeaturesInput, ReleaseAdminCommand} from './admin-schemas'
 import {MarketplaceError} from './service'
+import {getReleaseSaleReadiness} from './sale-policy'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -131,7 +132,50 @@ export class MarketplaceAdminService {
         (SELECT COUNT(*)::integer FROM artists) AS artists,
         (SELECT COUNT(*)::integer FROM release_takedowns WHERE restored_at IS NULL) AS active_takedowns`,
     ).first()
-    return {role: staff.role, counts, pending: pending.results, catalog: catalog.results, providers: providers.results, artists: artists.results, isrcs: isrcs.results, rights: rights.results, pricing: pricing.results, splits: splits.results, takedowns: takedowns.results}
+    const featuredReleases = await this.database.prepare(
+      `SELECT r.id, r.title, feature.position FROM marketplace_discovery_features feature
+       JOIN releases r ON r.id = feature.release_id AND r.status = 'LIVE'
+       ORDER BY feature.position`,
+    ).all()
+    const featuredArtists = await this.database.prepare(
+      `SELECT a.id, a.name, feature.position FROM marketplace_discovery_features feature
+       JOIN artists a ON a.id = feature.artist_id
+       WHERE EXISTS (SELECT 1 FROM release_artists credit JOIN releases r ON r.id = credit.release_id
+         WHERE credit.artist_id = a.id AND r.status = 'LIVE')
+       ORDER BY feature.position`,
+    ).all()
+    const eligibleArtists = await this.database.prepare(
+      `SELECT a.id, a.name FROM artists a
+       WHERE EXISTS (SELECT 1 FROM release_artists credit JOIN releases r ON r.id = credit.release_id
+         WHERE credit.artist_id = a.id AND r.status = 'LIVE')
+       ORDER BY LOWER(a.name)`,
+    ).all()
+    return {role: staff.role, counts, pending: pending.results, catalog: catalog.results, providers: providers.results, artists: artists.results, isrcs: isrcs.results, rights: rights.results, pricing: pricing.results, splits: splits.results, takedowns: takedowns.results, discovery: {featuredReleases: featuredReleases.results, featuredArtists: featuredArtists.results, eligibleReleases: catalog.results.filter((row) => (row as {status?: string}).status === 'LIVE'), eligibleArtists: eligibleArtists.results}}
+  }
+
+  async replaceDiscoveryFeatures(userId: string, input: DiscoveryFeaturesInput): Promise<{releaseIds: string[]; artistIds: string[]}> {
+    return this.database.transaction(async (db) => {
+      const staff = await db.prepare('SELECT role FROM marketplace_staff WHERE user_id = ?1').bind(userId).first<{role: Staff['role']}>()
+      if (!staff) throw new MarketplaceError(403, 'marketplace_staff_required', 'Marketplace staff access is required')
+      if (staff.role !== 'admin') throw new MarketplaceError(403, 'marketplace_admin_required', 'Marketplace admin access is required')
+
+      await validateFeatureIds(db, 'release', input.releaseIds)
+      await validateFeatureIds(db, 'artist', input.artistIds)
+      await db.prepare('DELETE FROM marketplace_discovery_features').run()
+      for (const [position, releaseId] of input.releaseIds.entries()) {
+        await db.prepare(
+          `INSERT INTO marketplace_discovery_features (id, release_id, position, created_by_user_id)
+           VALUES (?1, ?2, ?3, ?4)`,
+        ).bind(crypto.randomUUID(), releaseId, position, userId).run()
+      }
+      for (const [position, artistId] of input.artistIds.entries()) {
+        await db.prepare(
+          `INSERT INTO marketplace_discovery_features (id, artist_id, position, created_by_user_id)
+           VALUES (?1, ?2, ?3, ?4)`,
+        ).bind(crypto.randomUUID(), artistId, position, userId).run()
+      }
+      return input
+    })
   }
 
   async commandRelease(userId: string, releaseId: string, command: ReleaseAdminCommand): Promise<unknown> {
@@ -169,6 +213,16 @@ export class MarketplaceAdminService {
       }
       if (command.action === 'publish_due' && (!release.scheduled_release_at || new Date(release.scheduled_release_at).getTime() > Date.now())) {
         throw new MarketplaceError(409, 'release_not_due', 'The scheduled release is not due yet')
+      }
+      if (['schedule', 'publish_now', 'publish_due'].includes(command.action)) {
+        const sale = await getReleaseSaleReadiness(db, release.id)
+        const unmet = [
+          ...(!sale.hasMinimumPrice ? ['active release product priced at least $1.00 USD'] : []),
+          ...(!sale.stripeReady ? ['completed Stripe payout setup'] : []),
+        ]
+        if (unmet.length > 0) {
+          throw new MarketplaceError(422, 'release_sale_not_ready', 'Release sales setup is not complete', unmet)
+        }
       }
 
       const target = releaseCommandTarget(command.action)
@@ -210,4 +264,14 @@ export class MarketplaceAdminService {
       return row
     })
   }
+}
+
+async function validateFeatureIds(db: Database, kind: 'release' | 'artist', ids: string[]): Promise<void> {
+  if (ids.length === 0) return
+  const placeholders = ids.map((_, index) => `?${index + 1}`).join(', ')
+  const sql = kind === 'release'
+    ? `SELECT COUNT(*)::integer AS count FROM releases WHERE status = 'LIVE' AND id IN (${placeholders})`
+    : `SELECT COUNT(DISTINCT a.id)::integer AS count FROM artists a JOIN release_artists credit ON credit.artist_id = a.id JOIN releases r ON r.id = credit.release_id AND r.status = 'LIVE' WHERE a.id IN (${placeholders})`
+  const row = await db.prepare(sql).bind(...ids).first<{count: number}>()
+  if (Number(row?.count) !== ids.length) throw new MarketplaceError(422, 'invalid_discovery_feature', `Every featured ${kind} must be eligible and LIVE`)
 }

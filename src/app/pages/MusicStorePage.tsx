@@ -1,13 +1,13 @@
 import {useEffect, useMemo, useRef, useState} from 'react'
 import {useMutation, useQuery} from '@tanstack/react-query'
 import {ArrowLeft, Disc3, Pause, Play, Search, ShoppingBag} from 'lucide-react'
-import {Link, useParams} from 'react-router-dom'
+import {Link, useParams, useSearchParams} from 'react-router-dom'
 
 import {Button} from '@/components/ui/button'
 import {Input} from '@/components/ui/input'
 import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
-import {getStoreRelease, listStoreReleases, storeAssetUrl, type StoreRelease, type StoreTrack} from '@/lib/musicStoreApi'
+import {getStoreRelease, listStoreReleases, recordStorePreview, storeAssetUrl, type StoreRelease, type StoreTrack} from '@/lib/musicStoreApi'
 import {startStoreCheckout} from '@/lib/marketplaceCommerceApi'
 import {usePlanStore} from '@/stores/planStore'
 
@@ -39,8 +39,10 @@ function usePreview(): PreviewController {
       toast({title: 'Preview unavailable', description: 'The audio preview could not be loaded.', variant: 'destructive'})
     }, {once: true})
     audioRef.current = audio
-    setPlayingId(trackId)
-    void audio.play().catch(() => setPlayingId(null))
+    void audio.play().then(() => {
+      setPlayingId(trackId)
+      void recordStorePreview(assetId!).catch(() => undefined)
+    }).catch(() => setPlayingId(null))
   }
 
   return {playingId, toggle}
@@ -49,30 +51,32 @@ function usePreview(): PreviewController {
 export default function MusicStorePage() {
   const catalog = useQuery({queryKey: ['music-store', 'catalog'], queryFn: listStoreReleases})
   const preview = usePreview()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [search, setSearch] = useState('')
   const [genre, setGenre] = useState<string | null>(null)
   const releases = useMemo(() => catalog.data ?? [], [catalog.data])
+  const artistId = searchParams.get('artist')
+  const selectedArtist = artistId ? releases.find((release) => release.artist_id === artistId)?.artist_name : null
   const genres = useMemo(() => [...new Set(releases.map((release) => release.genre).filter((value): value is string => Boolean(value)))].sort(), [releases])
   const filtered = releases.filter((release) => {
     const terms = `${release.title} ${release.artist_name} ${release.genre || ''}`.toLowerCase()
-    return terms.includes(search.trim().toLowerCase()) && (!genre || release.genre === genre)
+    return terms.includes(search.trim().toLowerCase()) && (!genre || release.genre === genre) && (!artistId || release.artist_id === artistId)
   })
 
   if (catalog.isLoading) return <StoreLoading />
   if (catalog.isError) return <StoreError message={catalog.error.message} />
 
   return <div className="min-h-screen bg-[#0a0a0b] text-zinc-100">
-    <header className="border-b border-white/10 bg-[#0a0a0b]/95 px-4 py-5 sm:px-8"><div className="mx-auto flex max-w-7xl items-center gap-3"><div className="min-w-0"><p className="text-base font-black tracking-[0.1em] sm:text-xl sm:tracking-[0.12em]">MUSIC MARKETPLACE</p><p className="mt-1 truncate text-xs text-zinc-500">Independent releases, direct from artists</p></div><Button asChild variant="outline" size="icon" className="ml-auto shrink-0 sm:h-10 sm:w-auto sm:gap-2 sm:px-4"><Link to="/app/purchased" aria-label="Purchases"><ShoppingBag className="h-4 w-4" /><span className="hidden sm:inline">Purchases</span></Link></Button></div></header>
+    <header className="border-b border-white/10 bg-[#0a0a0b]/95 px-4 py-5 sm:px-8"><div className="mx-auto flex max-w-7xl items-center gap-3"><Button asChild variant="ghost" size="icon" className="shrink-0"><Link to="/app" aria-label="Back to MEJay"><ArrowLeft className="h-4 w-4" /></Link></Button><div className="min-w-0"><p className="text-base font-black tracking-[0.1em] sm:text-xl sm:tracking-[0.12em]">MUSIC MARKETPLACE</p><p className="mt-1 truncate text-xs text-zinc-500">Independent releases, direct from artists</p></div><Button asChild variant="outline" size="icon" className="ml-auto shrink-0 sm:h-10 sm:w-auto sm:gap-2 sm:px-4"><Link to="/app/purchased" aria-label="Purchases"><ShoppingBag className="h-4 w-4" /><span className="hidden sm:inline">Purchases</span></Link></Button></div></header>
     <main className="mx-auto max-w-7xl space-y-12 px-4 py-8 sm:px-8">
       <div className="relative max-w-2xl"><Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-zinc-500" /><Input value={search} onChange={(event) => setSearch(event.target.value)} className="h-12 border-white/10 bg-[#151517] pl-12 text-base" placeholder="Search releases, artists, and genres" /></div>
+      {artistId && <div className="flex items-center gap-3 text-sm"><span className="text-zinc-500">Artist:</span><Button size="sm" variant="outline" onClick={() => {const next = new URLSearchParams(searchParams); next.delete('artist'); setSearchParams(next)}}>{selectedArtist || 'Selected artist'} x</Button></div>}
       {genre && <div className="flex items-center gap-3 text-sm"><span className="text-zinc-500">Genre:</span><Button size="sm" variant="outline" onClick={() => setGenre(null)}>{genre} x</Button></div>}
-      {releases.length === 0 ? <EmptyCatalog /> : search || genre ? <ReleaseSection title="Search Results" releases={filtered} preview={preview} /> : <>
-        <ReleaseSection title="Featured" releases={releases.slice(0, 4)} preview={preview} featured />
+      {releases.length === 0 ? <EmptyCatalog /> : search || genre || artistId ? <ReleaseSection title="Search Results" releases={filtered} preview={preview} /> : <>
         <ReleaseSection title="New Releases" releases={releases.slice(0, 8)} preview={preview} />
         <ReleaseSection title="Singles" releases={releases.filter((release) => release.release_type === 'single').slice(0, 8)} preview={preview} />
         <ReleaseSection title="Projects" releases={releases.filter((release) => release.release_type !== 'single').slice(0, 8)} preview={preview} />
         <section><SectionTitle title="Genres" /><div className="flex flex-wrap gap-2">{genres.map((item) => <Button key={item} variant="outline" onClick={() => setGenre(item)} className="border-white/10 bg-[#131315] hover:border-emerald-400/50">{item}</Button>)}</div></section>
-        <ReleaseSection title="Trending" releases={[...releases].sort((left, right) => right.track_count - left.track_count || Date.parse(right.published_at) - Date.parse(left.published_at)).slice(0, 8)} preview={preview} />
       </>}
     </main>
   </div>

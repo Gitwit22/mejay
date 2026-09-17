@@ -6,6 +6,9 @@ import {accountDeletionMigration} from './0003-account-deletion'
 import {providerReleaseDraftsMigration} from './0004-provider-release-drafts'
 import {marketplaceAdminPublishingMigration} from './0005-marketplace-admin-publishing'
 import {marketplaceCommerceMigration} from './0006-marketplace-commerce'
+import {marketplaceDiscoveryMigration} from './0007-marketplace-discovery'
+import {marketplaceSalePolicyMigration} from './0008-marketplace-sale-policy'
+import {marketplaceReportingMigration} from './0009-marketplace-reporting'
 import type {Migration} from './types'
 
 export const migrations: readonly Migration[] = [
@@ -15,6 +18,9 @@ export const migrations: readonly Migration[] = [
   providerReleaseDraftsMigration,
   marketplaceAdminPublishingMigration,
   marketplaceCommerceMigration,
+  marketplaceDiscoveryMigration,
+  marketplaceSalePolicyMigration,
+  marketplaceReportingMigration,
 ]
 
 const MIGRATION_LOCK_ID = 764_329_101
