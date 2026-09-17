@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest'
 
-import {allocateProviderProceeds, assertBalancedLedger, calculateSaleAmounts, saleLedgerEntries} from './commerce-money'
+import {allocateProviderProceeds, assertBalancedLedger, calculateSaleAmounts, refundLedgerEntries, saleLedgerEntries} from './commerce-money'
 
 describe('marketplace commerce money', () => {
   it('calculates the configured platform fee in integer minor units', () => {
@@ -56,6 +56,19 @@ describe('marketplace commerce money', () => {
       {accountCode: 'stripe_clearing', debitMinor: 999, creditMinor: 0},
       {accountCode: 'platform_revenue', debitMinor: 0, creditMinor: 100},
       {accountCode: 'provider_payable', debitMinor: 0, creditMinor: 899},
+    ])
+  })
+
+  it('posts only the incremental amount for successive partial refunds', () => {
+    expect(refundLedgerEntries({grossAmountMinor: 1000, platformFeeMinor: 100, previousRefundedMinor: 200, refundedAmountMinor: 500})).toEqual([
+      {accountCode: 'platform_revenue', debitMinor: 30, creditMinor: 0},
+      {accountCode: 'provider_payable', debitMinor: 270, creditMinor: 0},
+      {accountCode: 'stripe_clearing', debitMinor: 0, creditMinor: 300},
+    ])
+    expect(refundLedgerEntries({grossAmountMinor: 1000, platformFeeMinor: 100, previousRefundedMinor: 500, refundedAmountMinor: 1000})).toEqual([
+      {accountCode: 'platform_revenue', debitMinor: 50, creditMinor: 0},
+      {accountCode: 'provider_payable', debitMinor: 450, creditMinor: 0},
+      {accountCode: 'stripe_clearing', debitMinor: 0, creditMinor: 500},
     ])
   })
 })

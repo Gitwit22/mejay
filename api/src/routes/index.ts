@@ -40,6 +40,7 @@ import {
   finalizeUpload,
 } from './marketplace'
 import {commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview, replaceDiscoveryFeatures} from './marketplace-admin'
+import {createIndustryReportingBatch, exportIndustryReportingBatch, getIndustryReporting, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting} from './marketplace-admin/reporting'
 import {onRequest as stripeWebhook} from './stripe-webhook'
 import {getCatalogAsset, getCatalogRelease, listCatalog, recordCatalogPreview} from './store'
 import {createConnectDashboard, createConnectOnboarding, getConnectStatus} from './marketplace/connect'
@@ -105,6 +106,12 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'post', path: '/api/marketplace-admin/releases/:releaseId/commands', handler: marketplaceAdminCommandRelease},
   {method: 'get', path: '/api/marketplace-admin/overview', handler: marketplaceAdminOverview},
   {method: 'put', path: '/api/marketplace-admin/discovery/features', handler: replaceDiscoveryFeatures},
+  {method: 'get', path: '/api/marketplace-admin/reporting', handler: getIndustryReporting},
+  {method: 'post', path: '/api/marketplace-admin/reporting/validate', handler: validateIndustryReporting},
+  {method: 'post', path: '/api/marketplace-admin/reporting/batches', handler: createIndustryReportingBatch},
+  {method: 'get', path: '/api/marketplace-admin/reporting/batches/:batchId/export', handler: exportIndustryReportingBatch},
+  {method: 'post', path: '/api/marketplace-admin/reporting/batches/:batchId/submit', handler: submitIndustryReportingBatch},
+  {method: 'post', path: '/api/marketplace-admin/reporting/batches/:batchId/resolve', handler: resolveIndustryReportingBatch},
   {method: 'post', path: '/api/stripe-webhook', handler: stripeWebhook},
 ]
 

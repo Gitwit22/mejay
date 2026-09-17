@@ -1,4 +1,5 @@
-import {allocateProviderProceeds, calculateSaleAmounts, saleLedgerEntries, type TrackSplitInput} from './commerce-money'
+import {allocateProviderProceeds, calculateSaleAmounts, refundLedgerEntries, saleLedgerEntries, type TrackSplitInput} from './commerce-money'
+import {allocateCumulativeRefunds, buildReportingEvents, buildReportingEventsForTrackAmounts, insertReportingEvents} from './industry-reporting'
 import {MarketplaceError} from './service'
 import {stripeRequest} from '../services/stripe'
 
@@ -23,6 +24,7 @@ type ProductRow = {
   release_id: string
   release_title: string
   release_type: string
+  upc: string | null
   artist_name: string
   artwork_asset_id: string | null
   provider_profile_id: string
@@ -33,6 +35,7 @@ type ProductRow = {
 type TrackRow = {
   track_id: string
   track_title: string
+  isrc: string | null
   disc_number: number
   track_number: number
   asset_id: string
@@ -52,6 +55,7 @@ type CheckoutSnapshot = {
   tracks: Array<{
     id: string
     title: string
+    isrc: string | null
     discNumber: number
     trackNumber: number
     asset: {id: string; storageKey: string; mimeType: string; byteSize: number; fileName: string}
@@ -96,6 +100,9 @@ type StripePaymentIntent = {
     payment_method_details?: {card?: {country?: string | null} | null}
   }
 }
+
+type StripeRefund = {id?: string; created?: number}
+type StripeChargeRefund = {id?: string; amount?: number; amount_refunded?: number; refunds?: {data?: StripeRefund[]}}
 
 type OrderRow = {
   id: string
@@ -173,7 +180,7 @@ export class CommerceService {
     const product = await this.database.prepare(
       `SELECT product.id AS product_id, product.name AS product_name, price.id AS price_id,
         price.amount_minor, price.currency, release.id AS release_id, release.title AS release_title,
-        release.release_type, artist.name AS artist_name, artwork.id AS artwork_asset_id,
+        release.release_type, release.upc, artist.name AS artist_name, artwork.id AS artwork_asset_id,
         release.provider_profile_id, provider.stripe_account_id,
         (provider.stripe_details_submitted AND provider.stripe_payouts_enabled
           AND provider.stripe_transfers_status = 'active') AS purchase_ready
@@ -204,6 +211,7 @@ export class CommerceService {
 
     const {results: trackRows} = await this.database.prepare(
       `SELECT track.id AS track_id, track.title AS track_title, track.disc_number, track.track_number,
+        isrc.isrc,
         asset.id AS asset_id, asset.storage_key, asset.mime_type, asset.byte_size,
         asset.metadata->>'fileName' AS file_name,
         entry.id AS split_entry_id, entry.payee_name, entry.payee_email, entry.role AS payee_role, entry.share_bps
@@ -215,6 +223,7 @@ export class CommerceService {
        ) asset ON TRUE
        JOIN revenue_split_sets split_set ON split_set.track_id = track.id AND split_set.active = TRUE
        JOIN revenue_split_entries entry ON entry.split_set_id = split_set.id
+      LEFT JOIN isrc_assignments isrc ON isrc.track_id = track.id AND isrc.revoked_at IS NULL
        WHERE track.release_id = ?1
        ORDER BY track.disc_number, track.track_number, entry.created_at, entry.id`,
     ).bind(product.release_id).all<TrackRow>()
@@ -226,6 +235,7 @@ export class CommerceService {
         track = {
           id: row.track_id,
           title: row.track_title,
+          isrc: row.isrc,
           discNumber: row.disc_number,
           trackNumber: row.track_number,
           asset: {
@@ -398,15 +408,37 @@ export class CommerceService {
       const ledgerTransactionId = crypto.randomUUID()
       await db.prepare(
         `INSERT INTO marketplace_ledger_transactions
-          (id, order_id, transaction_type, currency, stripe_reference_id, idempotency_key)
-         VALUES (?1, ?2, 'sale', ?3, ?4, ?5)`,
-      ).bind(ledgerTransactionId, orderId, attempt.currency, intentId, `sale-${session.id}`).run()
+          (id, order_id, transaction_type, currency, stripe_reference_id, idempotency_key, occurred_at)
+         VALUES (?1, ?2, 'sale', ?3, ?4, ?5, ?6)`,
+      ).bind(ledgerTransactionId, orderId, attempt.currency, intentId, `sale-${session.id}`, paidAt).run()
       for (const entry of saleLedgerEntries(amounts)) {
         await db.prepare(
           `INSERT INTO marketplace_ledger_entries (id, transaction_id, account_code, debit_minor, credit_minor)
            VALUES (?1, ?2, ?3, ?4, ?5)`,
         ).bind(crypto.randomUUID(), ledgerTransactionId, entry.accountCode, entry.debitMinor, entry.creditMinor).run()
       }
+
+      await insertReportingEvents(db, buildReportingEvents({
+        orderId,
+        orderItemId: itemId,
+        ledgerTransactionId,
+        eventType: 'sale',
+        upc: snapshot.product.upc,
+        artistName: snapshot.product.artist_name,
+        releaseTitle: snapshot.product.release_title,
+        stripeTransactionId: intentId,
+        currency: attempt.currency,
+        amountMinor: attempt.amount_minor,
+        territory: paymentCountry(intent),
+        occurredAt: paidAt,
+        tracks: snapshot.tracks.map((track) => ({
+          id: track.id,
+          title: track.title,
+          isrc: track.isrc,
+          discNumber: track.discNumber,
+          trackNumber: track.trackNumber,
+        })),
+      }))
 
       const entitlementId = crypto.randomUUID()
       await db.prepare(
@@ -485,14 +517,17 @@ export class CommerceService {
     })
   }
 
-  async handleRefund(charge: {id?: string; amount?: number; amount_refunded?: number}): Promise<void> {
+  async handleRefund(charge: StripeChargeRefund): Promise<void> {
     if (!charge.id || !Number.isSafeInteger(charge.amount_refunded)) return
+    const chargeId = charge.id
+    const refundReference = stripeRefundReference(charge) ?? chargeId
     const order = await this.database.prepare(
       `SELECT * FROM marketplace_orders WHERE stripe_charge_id = ?1`,
-    ).bind(charge.id).first<OrderRow>()
+    ).bind(chargeId).first<OrderRow>()
     if (!order?.gross_amount_minor) return
-    const refundedAmount = Math.min(charge.amount_refunded ?? 0, order.gross_amount_minor)
-    const fullRefund = refundedAmount >= order.gross_amount_minor
+    const grossAmountMinor = order.gross_amount_minor
+    const refundedAmount = Math.min(charge.amount_refunded ?? 0, grossAmountMinor)
+    const fullRefund = refundedAmount >= grossAmountMinor
     if (fullRefund && order.stripe_transfer_id && order.transfer_status === 'transferred') {
       const params = new URLSearchParams()
       params.set('amount', String(order.provider_proceeds_minor))
@@ -511,13 +546,15 @@ export class CommerceService {
     await this.database.transaction(async (db) => {
       const current = await db.prepare('SELECT * FROM marketplace_orders WHERE id = ?1 FOR UPDATE').bind(order.id).first<OrderRow>()
       if (!current || (current.refunded_amount_minor ?? 0) >= refundedAmount) return
+      const previousRefundedMinor = current.refunded_amount_minor ?? 0
+      const refundOccurredAt = new Date().toISOString()
       const refundIdempotencyKey = `refund-${order.id}-${refundedAmount}`
       const transactionId = crypto.randomUUID()
       await db.prepare(
         `INSERT INTO marketplace_ledger_transactions
-          (id, order_id, transaction_type, currency, stripe_reference_id, idempotency_key)
-         VALUES (?1, ?2, 'refund', ?3, ?4, ?5) ON CONFLICT (idempotency_key) DO NOTHING`,
-      ).bind(transactionId, order.id, order.currency, charge.id, refundIdempotencyKey).run()
+          (id, order_id, transaction_type, currency, stripe_reference_id, idempotency_key, occurred_at)
+         VALUES (?1, ?2, 'refund', ?3, ?4, ?5, ?6) ON CONFLICT (idempotency_key) DO NOTHING`,
+      ).bind(transactionId, order.id, order.currency, refundReference, refundIdempotencyKey, refundOccurredAt).run()
       const transaction = await db.prepare(
         'SELECT id FROM marketplace_ledger_transactions WHERE idempotency_key = ?1',
       ).bind(refundIdempotencyKey).first<{id: string}>()
@@ -526,21 +563,68 @@ export class CommerceService {
         'SELECT id FROM marketplace_ledger_entries WHERE transaction_id = ?1 LIMIT 1',
       ).bind(transaction.id).first()
       if (!hasEntries) {
-        const platformRefund = fullRefund
-          ? current.platform_fee_minor ?? 0
-          : Math.floor(refundedAmount * (current.platform_fee_minor ?? 0) / order.gross_amount_minor!)
-        const providerRefund = refundedAmount - platformRefund
-        const entries = [
-          {account: 'platform_revenue', debit: platformRefund, credit: 0},
-          {account: 'provider_payable', debit: providerRefund, credit: 0},
-          {account: 'stripe_clearing', debit: 0, credit: refundedAmount},
-        ].filter((entry) => entry.debit > 0 || entry.credit > 0)
+        const entries = refundLedgerEntries({
+          grossAmountMinor,
+          platformFeeMinor: current.platform_fee_minor ?? 0,
+          previousRefundedMinor,
+          refundedAmountMinor: refundedAmount,
+        })
         for (const entry of entries) {
           await db.prepare(
             `INSERT INTO marketplace_ledger_entries (id, transaction_id, account_code, debit_minor, credit_minor)
              VALUES (?1, ?2, ?3, ?4, ?5)`,
-          ).bind(crypto.randomUUID(), transaction.id, entry.account, entry.debit, entry.credit).run()
+          ).bind(crypto.randomUUID(), transaction.id, entry.accountCode, entry.debitMinor, entry.creditMinor).run()
         }
+      }
+      const {results: saleEvents} = await db.prepare(
+        `SELECT event.order_item_id, event.track_id AS id, event.track_title AS title, event.isrc,
+          event.upc, event.artist_name, event.release_title, event.territory, event.price_minor,
+          COALESCE((SELECT SUM(refund.price_minor) FROM marketplace_reporting_events refund
+            WHERE refund.order_id = event.order_id AND refund.track_id = event.track_id
+              AND refund.event_type = 'refund'), 0)::integer AS refunded_minor
+         FROM marketplace_reporting_events event
+         WHERE event.order_id = ?1 AND event.event_type = 'sale'
+         ORDER BY event.track_id`,
+      ).bind(order.id).all<{
+        order_item_id: string
+        id: string
+        title: string
+        isrc: string | null
+        upc: string | null
+        artist_name: string
+        release_title: string
+        territory: string | null
+        price_minor: number
+        refunded_minor: number
+      }>()
+      if (saleEvents.length > 0) {
+        const refundAmounts = allocateCumulativeRefunds(
+          refundedAmount,
+          saleEvents.map((event) => ({trackId: event.id, priceMinor: Number(event.price_minor)})),
+          new Map(saleEvents.map((event) => [event.id, Number(event.refunded_minor)])),
+        )
+        const refundedTracks = saleEvents.filter((event) => (refundAmounts.get(event.id) ?? 0) > 0)
+        await insertReportingEvents(db, buildReportingEventsForTrackAmounts({
+          orderId: order.id,
+          orderItemId: saleEvents[0].order_item_id,
+          ledgerTransactionId: transaction.id,
+          eventType: 'refund',
+          upc: saleEvents[0].upc,
+          artistName: saleEvents[0].artist_name,
+          releaseTitle: saleEvents[0].release_title,
+          stripeTransactionId: refundReference,
+          currency: order.currency,
+          territory: saleEvents[0].territory,
+          occurredAt: refundOccurredAt,
+          tracks: refundedTracks.map((event) => ({
+            id: event.id,
+            title: event.title,
+            isrc: event.isrc,
+            discNumber: 1,
+            trackNumber: 1,
+            priceMinor: refundAmounts.get(event.id) ?? 0,
+          })),
+        }))
       }
       await db.prepare(
         `UPDATE marketplace_orders SET refunded_amount_minor = ?1,
@@ -674,4 +758,10 @@ export class CommerceService {
     if (!file) throw new MarketplaceError(404, 'download_not_found', 'Download is unavailable')
     return {storageKey: file.storage_key, fileName: file.file_name, mimeType: file.mime_type, byteSize: Number(file.byte_size)}
   }
+}
+
+export function stripeRefundReference(charge: StripeChargeRefund): string | null {
+  const refunds = charge.refunds?.data?.filter((refund): refund is StripeRefund & {id: string} => Boolean(refund.id)) ?? []
+  refunds.sort((left, right) => (right.created ?? 0) - (left.created ?? 0))
+  return refunds[0]?.id ?? charge.id ?? null
 }

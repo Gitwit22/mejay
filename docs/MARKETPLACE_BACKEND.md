@@ -167,6 +167,36 @@ Money calculations use integer USD minor units. Partial refunds use the same pla
 
 Recipient access does not require Artist Pro. `/app/earnings` matches `LOWER(marketplace_split_allocations.payee_email)` to the authenticated account's canonical email and returns only that email's rows. It never exposes buyer details, Stripe identifiers, or other recipients. Recipient **Owed** means the provider owes the collaborator after refund adjustments; a Stripe transfer to the provider does not mean MEJay paid individual split recipients.
 
+## Industry reporting
+
+Migration 10 adds the append-only industry reporting trail. Every newly fulfilled sale writes one immutable reporting event per track in the same database transaction as the order, order item, split allocations, and balanced sale ledger transaction. Refund webhooks write corresponding per-track refund events in the same transaction as the incremental refund ledger posting. The migration also backfills existing sale and refund ledger transactions so historical qualified commerce is connected from deployment onward.
+
+Each reporting event snapshots:
+
+- ISRC and UPC
+- artist, release, and track names
+- Stripe transaction reference and MEJay ledger transaction ID
+- allocated price in integer minor units and quantity
+- payment territory and UTC occurrence timestamp
+- sale or refund event type
+
+Track allocations use deterministic ordering and distribute every remainder cent, so event totals exactly equal the associated sale or incremental refund ledger transaction. Reporting event rows cannot be updated or deleted. Validation and batch membership live in a separate workflow-state table so operational status can change without rewriting the original commercial fact.
+
+The validator marks an event `ready` only when ISRC, UPC, artist, release, track, Stripe reference, currency, amount, and territory are valid. Incomplete events remain visible as `metadata_error`; they are never silently dropped from the reporting desk. The admin dashboard exposes Today's Sales, Ready, Metadata Errors, Submitted, and Rejected counts plus the full Stripe transaction → ledger transaction → track/ISRC → reporting event trace.
+
+Marketplace reporting endpoints are staff-authenticated and no-store:
+
+| Method | Endpoint | Access | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/marketplace-admin/reporting?date=YYYY-MM-DD` | Reviewer/Admin | Daily counts, trace rows, and recent batches |
+| `POST` | `/api/marketplace-admin/reporting/validate` | Admin | Revalidate unbatched events for one UTC date |
+| `POST` | `/api/marketplace-admin/reporting/batches` | Admin | Create the date's immutable CSV export from ready events |
+| `GET` | `/api/marketplace-admin/reporting/batches/:batchId/export` | Reviewer/Admin | Download the no-store CSV export |
+| `POST` | `/api/marketplace-admin/reporting/batches/:batchId/submit` | Admin | Mark an exported or rejected batch submitted |
+| `POST` | `/api/marketplace-admin/reporting/batches/:batchId/resolve` | Admin | Mark a submitted batch accepted or rejected |
+
+Only one daily batch may exist per UTC report date. A batch snapshots its exact CSV payload and event count before events are attached to it. Export rows include both external transaction and internal ledger identifiers but no buyer PII. Submission and acceptance are manual workflow transitions in Sprint 7; a future Luminate adapter plugs into the submit/resolve boundary without changing the reporting event or export contract.
+
 ## Minimal payloads
 
 ```json

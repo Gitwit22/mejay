@@ -23,6 +23,7 @@ describe('runMigrations', () => {
       {version: 7, name: 'marketplace_discovery'},
       {version: 8, name: 'marketplace_sale_policy'},
       {version: 9, name: 'marketplace_reporting'},
+      {version: 10, name: 'industry_reporting'},
     ])
   })
 
@@ -31,6 +32,23 @@ describe('runMigrations', () => {
     expect(migration?.sql).toContain('ADD COLUMN buyer_country_code TEXT')
     expect(migration?.sql).toContain("buyer_country_code ~ '^[A-Z]{2}$'")
     expect(migration?.sql).toContain('provider_profile_id, paid_at DESC, buyer_country_code')
+  })
+
+  it('adds append-only reporting events and daily export batches', () => {
+    const migration = migrations.find(({version}) => version === 10)
+    expect(migration?.sql).toContain('CREATE TABLE marketplace_reporting_events')
+    expect(migration?.sql).toContain('ledger_transaction_id TEXT NOT NULL REFERENCES marketplace_ledger_transactions')
+    expect(migration?.sql).toContain("event_type IN ('sale', 'refund')")
+    expect(migration?.sql).toContain('UNIQUE (ledger_transaction_id, track_id)')
+    expect(migration?.sql).toContain('marketplace_reporting_events_append_only')
+    expect(migration?.sql).toContain('CREATE TABLE marketplace_reporting_event_states')
+    expect(migration?.sql).toContain('CREATE TABLE marketplace_reporting_batches')
+    expect(migration?.sql).toContain("status IN ('exported', 'submitted', 'accepted', 'rejected')")
+    expect(migration?.sql).toContain("ledger.transaction_type IN ('sale', 'refund')")
+    expect(migration?.sql).toContain('LAG(target_minor, 1, 0)')
+    expect(migration?.sql).toContain("SUBSTRING(ledger.idempotency_key FROM '([0-9]+)$')")
+    expect(migration?.sql).toContain('cumulative_refunded_minor::numeric * sale_price_minor / gross_amount_minor')
+    expect(migration?.sql).toContain("'report-' || MD5(ledger_transaction_id || ':' || track_id)")
   })
 
   it('applies migrations in version order inside transactions', async () => {

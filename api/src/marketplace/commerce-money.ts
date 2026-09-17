@@ -101,3 +101,30 @@ export function saleLedgerEntries(amounts: SaleAmounts): LedgerEntry[] {
   assertBalancedLedger(entries)
   return entries
 }
+
+export function refundLedgerEntries(input: {
+  grossAmountMinor: number
+  platformFeeMinor: number
+  previousRefundedMinor: number
+  refundedAmountMinor: number
+}): LedgerEntry[] {
+  requireMinorUnits(input.grossAmountMinor, 'grossAmountMinor')
+  requireMinorUnits(input.platformFeeMinor, 'platformFeeMinor')
+  requireMinorUnits(input.previousRefundedMinor, 'previousRefundedMinor')
+  requireMinorUnits(input.refundedAmountMinor, 'refundedAmountMinor')
+  if (input.grossAmountMinor <= 0 || input.platformFeeMinor > input.grossAmountMinor) throw new Error('Original sale amounts are inconsistent')
+  if (input.previousRefundedMinor >= input.refundedAmountMinor || input.refundedAmountMinor > input.grossAmountMinor) throw new Error('Refund totals must increase without exceeding gross')
+  const platformAt = (refundedMinor: number) => refundedMinor === input.grossAmountMinor
+    ? input.platformFeeMinor
+    : Math.floor(refundedMinor * input.platformFeeMinor / input.grossAmountMinor)
+  const refundDeltaMinor = input.refundedAmountMinor - input.previousRefundedMinor
+  const platformRefundMinor = platformAt(input.refundedAmountMinor) - platformAt(input.previousRefundedMinor)
+  const providerRefundMinor = refundDeltaMinor - platformRefundMinor
+  const entries = [
+    {accountCode: 'platform_revenue', debitMinor: platformRefundMinor, creditMinor: 0},
+    {accountCode: 'provider_payable', debitMinor: providerRefundMinor, creditMinor: 0},
+    {accountCode: 'stripe_clearing', debitMinor: 0, creditMinor: refundDeltaMinor},
+  ].filter((entry) => entry.debitMinor > 0 || entry.creditMinor > 0)
+  assertBalancedLedger(entries)
+  return entries
+}

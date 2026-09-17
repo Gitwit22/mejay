@@ -1,12 +1,12 @@
 import {useState} from 'react'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
-import {ArrowDown, ArrowUp, BarChart3, BadgeDollarSign, Copyright, Disc3, Fingerprint, Menu, Plus, Scale, Scissors, ShieldAlert, Sparkles, Trash2, Users, UserRound, X} from 'lucide-react'
+import {ArrowDown, ArrowUp, BarChart3, BadgeDollarSign, CheckCircle2, Copyright, Disc3, Download, Fingerprint, Menu, Plus, RefreshCw, Scale, Scissors, Send, ShieldAlert, Sparkles, Trash2, Users, UserRound, X, XCircle} from 'lucide-react'
 
 import {Button} from '@/components/ui/button'
 import {Input} from '@/components/ui/input'
 import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
-import {commandMarketplaceRelease, getMarketplaceAdminOverview, replaceMarketplaceDiscoveryFeatures, type AdminRecord, type MarketplaceAdminOverview, type ReleaseAdminAction} from '@/lib/marketplaceAdminApi'
+import {commandMarketplaceRelease, createIndustryReportingBatch, downloadIndustryReportingBatch, getIndustryReporting, getMarketplaceAdminOverview, replaceMarketplaceDiscoveryFeatures, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting, type AdminRecord, type IndustryReportingDashboard, type MarketplaceAdminOverview, type ReleaseAdminAction} from '@/lib/marketplaceAdminApi'
 
 type Section = 'pending' | 'catalog' | 'discovery' | 'providers' | 'artists' | 'isrcs' | 'rights' | 'pricing' | 'splits' | 'takedowns' | 'reporting'
 
@@ -36,7 +36,7 @@ function Brand() { return <div className="mb-8"><p className="text-xl font-bold"
 function Navigation({active, onSelect}: {active: Section; onSelect: (section: Section) => void}) { return <nav className="space-y-1">{navigation.map(([id, label, Icon]) => <button key={id} type="button" onClick={() => onSelect(id)} className={`flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm ${active === id ? 'bg-emerald-400 text-zinc-950' : 'text-zinc-400 hover:bg-white/5 hover:text-white'}`}><Icon className="h-4 w-4" />{label}</button>)}</nav> }
 
 function SectionView({section, data}: {section: Section; data: Awaited<ReturnType<typeof getMarketplaceAdminOverview>>}) {
-  if (section === 'reporting') return <Reporting counts={data.counts} />
+  if (section === 'reporting') return <Reporting />
   if (section === 'discovery') return <DiscoveryCuration data={data} />
   const rows = data[section]
   return <RecordTable title={navigation.find(([id]) => id === section)?.[1] || section} rows={rows} actionable={section === 'pending' || section === 'catalog'} role={data.role} />
@@ -91,6 +91,45 @@ function ReleaseActions({row, role}: {row: AdminRecord; role: 'reviewer' | 'admi
   return <div className="flex gap-2">{actions.filter((item) => !item.admin || role === 'admin').map((item) => <Button key={item.action} size="sm" variant="outline" disabled={mutation.isPending} onClick={() => {const note = item.note ? window.prompt(`${item.label} reason`)?.trim() : undefined; if (item.note && !note) return; mutation.mutate({action: item.action, note})}}>{item.label}</Button>)}</div>
 }
 
-function Reporting({counts}: {counts: AdminRecord}) { return <div className="space-y-5"><div><h1 className="text-2xl font-bold">Operational reporting</h1><p className="mt-1 text-sm text-zinc-400">Catalog activity only. Commerce and royalty reporting require a future ledger.</p></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{Object.entries(counts).map(([label, value]) => <div key={label} className="border border-white/10 bg-[#141417] p-5"><p className="text-xs uppercase text-zinc-500">{label.replace(/_/g, ' ')}</p><p className="mt-3 text-3xl font-bold">{formatValue(value)}</p></div>)}</div></div> }
+function Reporting() {
+  const queryClient = useQueryClient()
+  const [reportDate, setReportDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const reporting = useQuery({queryKey: ['marketplace-admin', 'reporting', reportDate], queryFn: () => getIndustryReporting(reportDate)})
+  const refresh = async () => queryClient.invalidateQueries({queryKey: ['marketplace-admin', 'reporting']})
+  const mutation = useMutation({
+    mutationFn: async (action: () => Promise<unknown>) => action(),
+    onSuccess: refresh,
+    onError: (error) => toast({title: 'Reporting action failed', description: error.message, variant: 'destructive'}),
+  })
+  if (reporting.isLoading) return <Skeleton className="h-72 bg-white/5" />
+  if (reporting.isError || !reporting.data) return <ErrorState message={reporting.error?.message || 'Reporting is unavailable'} />
+  const data = reporting.data
+  const metrics: Array<[string, number]> = [
+    ["Today's Sales", data.counts.todaySales],
+    ['Ready', data.counts.ready],
+    ['Metadata Errors', data.counts.metadataErrors],
+    ['Submitted', data.counts.submitted],
+    ['Rejected', data.counts.rejected],
+  ]
+  const admin = data.role === 'admin'
+  return <div className="space-y-8">
+    <div className="flex flex-wrap items-end justify-between gap-4"><div><h1 className="text-2xl font-bold">Reporting</h1><p className="mt-1 text-sm text-zinc-400">Validate, export, and trace daily industry reporting events.</p></div><Input type="date" aria-label="Reporting date" className="w-44" value={reportDate} onChange={(event) => setReportDate(event.target.value)} /></div>
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">{metrics.map(([label, value]) => <div key={label} className="border border-white/10 bg-[#141417] p-5"><p className="text-xs uppercase text-zinc-500">{label}</p><p className="mt-3 text-3xl font-bold tabular-nums">{value}</p></div>)}</div>
+    <div className="flex flex-wrap gap-2">{admin && <><Button variant="outline" disabled={mutation.isPending} onClick={() => mutation.mutate(() => validateIndustryReporting(reportDate))}><RefreshCw className="h-4 w-4" />Validate</Button><Button className="bg-emerald-400 text-zinc-950 hover:bg-emerald-300" disabled={mutation.isPending || data.counts.ready === 0} onClick={() => mutation.mutate(() => createIndustryReportingBatch(reportDate))}><Download className="h-4 w-4" />Create daily export</Button></>}</div>
+    <ReportingEvents events={data.events} />
+    <ReportingBatches data={data} pending={mutation.isPending} run={(action) => mutation.mutate(action)} />
+  </div>
+}
+
+function ReportingEvents({events}: {events: IndustryReportingDashboard['events']}) {
+  return <section><h2 className="text-lg font-semibold">Sales ledger trace</h2><p className="mt-1 text-sm text-zinc-500">Stripe transaction to MEJay ledger, track identifier, and reporting event.</p>{events.length === 0 ? <div className="mt-4 border-y border-dashed border-white/10 py-12 text-center text-sm text-zinc-500">No reporting events for this date.</div> : <div className="mt-4 overflow-x-auto border-y border-white/10"><table className="w-full min-w-[1050px] text-left text-sm"><thead><tr className="text-xs uppercase text-zinc-500"><th className="px-3 py-3">Status</th><th className="px-3 py-3">Sale / Refund</th><th className="px-3 py-3">Artist / Release / Track</th><th className="px-3 py-3">ISRC / UPC</th><th className="px-3 py-3">Price</th><th className="px-3 py-3">Territory</th><th className="px-3 py-3">Transaction trace</th></tr></thead><tbody className="divide-y divide-white/10">{events.map((event) => <tr key={event.id}><td className="px-3 py-3"><span className={event.validationStatus === 'ready' ? 'text-emerald-300' : 'text-amber-300'}>{event.validationStatus === 'metadata_error' ? 'Metadata error' : event.validationStatus}</span>{event.validationErrors.length > 0 && <p className="mt-1 max-w-48 text-xs text-zinc-500">{event.validationErrors.join(', ').replace(/_/g, ' ')}</p>}</td><td className="px-3 py-3 capitalize">{event.eventType}</td><td className="px-3 py-3"><p>{event.trackTitle}</p><p className="text-xs text-zinc-500">{event.artistName} · {event.releaseTitle}</p></td><td className="px-3 py-3 font-mono text-xs"><p>{event.isrc || '-'}</p><p className="text-zinc-500">{event.upc || '-'}</p></td><td className="px-3 py-3 tabular-nums">{money(event.priceMinor)}</td><td className="px-3 py-3">{event.territory || 'Unknown'}</td><td className="px-3 py-3 font-mono text-xs"><p title={event.transactionId}>{shortId(event.transactionId)}</p><p className="text-zinc-500" title={event.ledgerTransactionId}>{shortId(event.ledgerTransactionId)}</p></td></tr>)}</tbody></table></div>}</section>
+}
+
+function ReportingBatches({data, pending, run}: {data: IndustryReportingDashboard; pending: boolean; run: (action: () => Promise<unknown>) => void}) {
+  return <section><h2 className="text-lg font-semibold">Daily reporting batches</h2>{data.batches.length === 0 ? <p className="mt-4 border-y border-dashed border-white/10 py-10 text-center text-sm text-zinc-500">No exports created yet.</p> : <div className="mt-4 overflow-x-auto border-y border-white/10"><table className="w-full min-w-[760px] text-left text-sm"><thead><tr className="text-xs uppercase text-zinc-500"><th className="px-3 py-3">Report date</th><th className="px-3 py-3">Events</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Reason</th><th className="px-3 py-3">Actions</th></tr></thead><tbody className="divide-y divide-white/10">{data.batches.map((batch) => <tr key={batch.id}><td className="px-3 py-3">{batch.report_date}</td><td className="px-3 py-3 tabular-nums">{batch.event_count}</td><td className="px-3 py-3 capitalize">{batch.status}</td><td className="px-3 py-3 text-zinc-500">{batch.rejection_reason || '-'}</td><td className="px-3 py-3"><div className="flex gap-2"><Button size="sm" variant="outline" disabled={pending} onClick={() => run(() => downloadIndustryReportingBatch(batch.id))}><Download className="h-4 w-4" />Export</Button>{data.role === 'admin' && (batch.status === 'exported' || batch.status === 'rejected') && <Button size="sm" variant="outline" disabled={pending} onClick={() => run(() => submitIndustryReportingBatch(batch.id))}><Send className="h-4 w-4" />Submit</Button>}{data.role === 'admin' && batch.status === 'submitted' && <><Button size="sm" variant="outline" disabled={pending} onClick={() => run(() => resolveIndustryReportingBatch(batch.id, 'accepted'))}><CheckCircle2 className="h-4 w-4" />Accept</Button><Button size="sm" variant="outline" disabled={pending} onClick={() => {const reason = window.prompt('Rejection reason')?.trim(); if (reason) run(() => resolveIndustryReportingBatch(batch.id, 'rejected', reason))}}><XCircle className="h-4 w-4" />Reject</Button></>}</div></td></tr>)}</tbody></table></div>}</section>
+}
+
+function money(amountMinor: number) { return new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD'}).format(amountMinor / 100) }
+function shortId(value: string) { return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value }
 function formatValue(value: unknown) { if (value === null || value === '') return '-'; if (typeof value === 'boolean') return value ? 'Yes' : 'No'; return String(value) }
 function ErrorState({message}: {message: string}) { return <div role="alert" className="border border-red-400/30 bg-red-400/5 p-4 text-sm text-red-300">{message}</div> }
