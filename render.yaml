@@ -38,6 +38,8 @@ services:
         sync: false
       - key: STRIPE_PRICE_FULL_PROGRAM
         sync: false
+      - key: MARKETPLACE_PLATFORM_FEE_BPS
+        value: "1000"
       - key: R2_ACCOUNT_ID
         sync: false
       - key: R2_ACCESS_KEY_ID

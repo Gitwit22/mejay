@@ -19,9 +19,12 @@ export class StoreService {
         artist.id AS artist_id, artist.name AS artist_name,
         artwork.id AS artwork_asset_id,
         offer.product_id, offer.amount_minor, offer.currency,
+        (provider.stripe_details_submitted AND provider.stripe_payouts_enabled
+          AND provider.stripe_transfers_status = 'active') AS purchase_available,
         COUNT(DISTINCT track.id)::integer AS track_count,
         MIN(preview.id) AS preview_asset_id
        FROM releases r
+      JOIN provider_profiles provider ON provider.id = r.provider_profile_id
        JOIN release_artists credit ON credit.release_id = r.id AND credit.is_primary = TRUE
        JOIN artists artist ON artist.id = credit.artist_id
        JOIN LATERAL (
@@ -41,7 +44,8 @@ export class StoreService {
        LEFT JOIN marketplace_assets preview ON preview.track_id = track.id
          AND preview.kind = 'audio' AND preview.processing_status = 'ready'
        WHERE r.status = 'LIVE'
-      GROUP BY r.id, artist.id, artist.name, artwork.id, offer.product_id, offer.amount_minor, offer.currency
+      GROUP BY r.id, artist.id, artist.name, artwork.id, offer.product_id, offer.amount_minor, offer.currency,
+        provider.stripe_details_submitted, provider.stripe_payouts_enabled, provider.stripe_transfers_status
        ORDER BY r.published_at DESC, r.updated_at DESC`,
     ).all()
     return results
@@ -53,8 +57,11 @@ export class StoreService {
         r.original_release_date, r.published_at, r.label_name,
         artist.id AS artist_id, artist.name AS artist_name,
         artwork.id AS artwork_asset_id,
-        offer.product_id, offer.amount_minor, offer.currency
+        offer.product_id, offer.amount_minor, offer.currency,
+        (provider.stripe_details_submitted AND provider.stripe_payouts_enabled
+          AND provider.stripe_transfers_status = 'active') AS purchase_available
        FROM releases r
+       JOIN provider_profiles provider ON provider.id = r.provider_profile_id
        JOIN release_artists credit ON credit.release_id = r.id AND credit.is_primary = TRUE
        JOIN artists artist ON artist.id = credit.artist_id
        JOIN LATERAL (

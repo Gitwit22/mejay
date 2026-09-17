@@ -14,6 +14,7 @@ export type AppConfig = NodeJS.ProcessEnv & {
   STRIPE_PRICE_PRO: string
   STRIPE_PRICE_YEARLY: string
   STRIPE_PRICE_FULL_PROGRAM: string
+  MARKETPLACE_PLATFORM_FEE_BPS: string
   ISRC_PREFIX: string
   ISRC_COUNTRY_CODE: string
   ISRC_REGISTRANT_CODE: string
@@ -82,6 +83,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     STRIPE_PRICE_FULL_PROGRAM: production
       ? requireValue(env, 'STRIPE_PRICE_FULL_PROGRAM')
       : env.STRIPE_PRICE_FULL_PROGRAM?.trim() || '',
+    MARKETPLACE_PLATFORM_FEE_BPS: env.MARKETPLACE_PLATFORM_FEE_BPS?.trim() || '1000',
     ISRC_PREFIX: isrc?.prefix ?? '',
     ISRC_COUNTRY_CODE: isrc?.countryCode ?? '',
     ISRC_REGISTRANT_CODE: isrc?.registrantCode ?? '',
@@ -93,6 +95,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     .join(',')
 
   if (!Number.isInteger(Number(config.PORT)) || Number(config.PORT) <= 0) throw new Error('PORT must be a positive integer')
+  const marketplaceFeeBps = Number(config.MARKETPLACE_PLATFORM_FEE_BPS)
+  if (!Number.isInteger(marketplaceFeeBps) || marketplaceFeeBps < 0 || marketplaceFeeBps > 10000) {
+    throw new Error('MARKETPLACE_PLATFORM_FEE_BPS must be an integer between 0 and 10000')
+  }
   if (production && sameSite === 'none' && env.COOKIE_SECURE === 'false') {
     throw new Error('COOKIE_SAME_SITE=none cannot be used with COOKIE_SECURE=false')
   }

@@ -14,6 +14,7 @@ describe('public music store policy', () => {
 
     await expect(new StoreService({prepare} as never).listCatalog()).resolves.toEqual([])
     expect(prepare.mock.calls[0][0]).toContain("WHERE r.status = 'LIVE'")
+    expect(prepare.mock.calls[0][0]).toContain("provider.stripe_transfers_status = 'active'")
   })
 
   it('requires LIVE status when resolving public catalog assets', async () => {

@@ -7,10 +7,12 @@ import {
   BarChart3,
   ChevronRight,
   Disc3,
+  ExternalLink,
   Fingerprint,
   LayoutDashboard,
   Menu,
   Plus,
+  RefreshCw,
   Search,
   Settings,
   Users,
@@ -26,6 +28,7 @@ import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from '@/c
 import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
 import {getProviderStatusLabel, parseProviderStatus} from '@/lib/marketplace'
+import {getConnectStatus, openConnectDashboard, startConnectOnboarding} from '@/lib/marketplaceCommerceApi'
 import {
   createProviderArtist,
   createProviderRelease,
@@ -49,7 +52,7 @@ const navigation: Array<{id: Section; label: string; icon: typeof LayoutDashboar
 ]
 
 export default function ProviderPortalPage() {
-  const [section, setSection] = useState<Section>('overview')
+  const [section, setSection] = useState<Section>(() => new URLSearchParams(window.location.search).get('section') === 'payout' ? 'payout' : 'overview')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const dashboard = useQuery({queryKey: ['provider', 'dashboard'], queryFn: getProviderDashboard})
 
@@ -118,15 +121,52 @@ function PortalSection({section, dashboard, loading, onNavigate}: {section: Sect
   if (section === 'overview') return <Overview dashboard={dashboard} loading={loading} onNavigate={onNavigate} />
   if (section === 'artists') return <Artists />
   if (section === 'releases') return <Releases />
-  const labels: Record<Exclude<Section, 'overview' | 'artists' | 'releases'>, {title: string; detail: string}> = {
+  if (section === 'payout') return <PayoutAccount />
+  const labels: Record<Exclude<Section, 'overview' | 'artists' | 'releases' | 'payout'>, {title: string; detail: string}> = {
     sales: {title: 'No sales yet', detail: 'Sales reporting will appear here after marketplace transactions launch.'},
     earnings: {title: 'No earnings yet', detail: 'Your revenue and split earnings will be summarized here.'},
     isrcs: {title: 'ISRC registry is next', detail: 'Assigned and imported ISRC history will appear here as release creation comes online.'},
-    payout: {title: 'Payout setup is not available yet', detail: 'Payout account onboarding will arrive with the earnings system.'},
     settings: {title: 'Provider settings are next', detail: 'Business identity, contact, and team settings will be managed here.'},
   }
   const state = labels[section]
   return <EmptyState title={state.title} detail={state.detail} />
+}
+
+function PayoutAccount() {
+  const queryClient = useQueryClient()
+  const connect = useQuery({queryKey: ['provider', 'connect'], queryFn: getConnectStatus, retry: false})
+  const onboarding = useMutation({
+    mutationFn: startConnectOnboarding,
+    onError: (error) => toast({title: 'Could not open Stripe', description: error.message, variant: 'destructive'}),
+  })
+  const dashboard = useMutation({
+    mutationFn: openConnectDashboard,
+    onError: (error) => toast({title: 'Could not open Stripe', description: error.message, variant: 'destructive'}),
+  })
+  if (connect.isLoading) return <Skeleton className="h-72 bg-white/5" />
+  if (connect.isError || !connect.data) return <ErrorState message={connect.error?.message || 'Payout status is unavailable'} />
+  const state = connect.data
+  const due = state.requirements.currently_due ?? []
+  return <div className="space-y-7">
+    <div><h1 className="text-2xl font-bold">Payout Account</h1><p className="mt-1 text-sm text-zinc-400">Stripe verifies your identity and sends marketplace proceeds to your bank.</p></div>
+    <div className="grid gap-4 md:grid-cols-[1fr_auto] md:items-start">
+      <div className="rounded-md border border-white/10 bg-[#141417] p-5">
+        <div className="flex flex-wrap items-center gap-3"><p className="font-semibold">Stripe Connect</p><span className={`rounded-full border px-2.5 py-1 text-xs ${state.purchaseReady ? 'border-emerald-400/40 text-emerald-300' : 'border-amber-400/40 text-amber-300'}`}>{state.purchaseReady ? 'Ready for sales' : state.connected ? 'Action required' : 'Not connected'}</span></div>
+        <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-3"><StatusDatum label="Identity" ready={state.detailsSubmitted} /><StatusDatum label="Payouts" ready={state.payoutsEnabled} /><StatusDatum label="Transfers" ready={state.transfersStatus === 'active'} /></dl>
+        {!state.purchaseReady && <p className="mt-5 text-sm text-zinc-400">Your releases can remain live, but customers cannot purchase them until Stripe enables payouts and transfers.</p>}
+        {due.length > 0 && <div className="mt-5 border-t border-white/10 pt-4"><p className="text-xs font-semibold uppercase text-zinc-500">Required by Stripe</p><ul className="mt-2 space-y-1 text-sm text-zinc-300">{due.map((requirement) => <li key={requirement}>{requirement.replace(/\./g, ' / ').replace(/_/g, ' ')}</li>)}</ul></div>}
+      </div>
+      <div className="flex gap-2 md:flex-col">
+        <Button className="gap-2 bg-emerald-400 text-zinc-950 hover:bg-emerald-300" disabled={onboarding.isPending} onClick={() => onboarding.mutate()}><ExternalLink className="h-4 w-4" />{state.connected ? 'Continue setup' : 'Connect Stripe'}</Button>
+        {state.connected && <Button variant="outline" className="gap-2" disabled={dashboard.isPending} onClick={() => dashboard.mutate()}><ExternalLink className="h-4 w-4" />Stripe dashboard</Button>}
+        <Button variant="ghost" className="gap-2" disabled={connect.isFetching} onClick={() => void queryClient.invalidateQueries({queryKey: ['provider', 'connect']})}><RefreshCw className={`h-4 w-4 ${connect.isFetching ? 'animate-spin' : ''}`} />Refresh</Button>
+      </div>
+    </div>
+  </div>
+}
+
+function StatusDatum({label, ready}: {label: string; ready: boolean}) {
+  return <div><dt className="text-xs uppercase text-zinc-500">{label}</dt><dd className={`mt-1 font-medium ${ready ? 'text-emerald-300' : 'text-zinc-300'}`}>{ready ? 'Complete' : 'Pending'}</dd></div>
 }
 
 function Overview({dashboard, loading, onNavigate}: {dashboard?: Awaited<ReturnType<typeof getProviderDashboard>>; loading: boolean; onNavigate: (section: Section) => void}) {

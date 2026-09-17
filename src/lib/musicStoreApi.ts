@@ -13,6 +13,7 @@ export type StoreRelease = {
   product_id: string
   amount_minor: number
   currency: string
+  purchase_available: boolean
   track_count: number
   preview_asset_id: string | null
 }

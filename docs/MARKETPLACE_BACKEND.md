@@ -119,7 +119,11 @@ The consumer Marketplace reads directly from the publishing catalog:
 
 List, detail, and media queries independently require `releases.status = 'LIVE'`. Publishing an approved release therefore makes it appear automatically, while unpublishing or taking it down removes both catalog metadata and future media access. Store assets remain private in R2 and are streamed with `Cache-Control: private, no-store`; audio responses are limited to the first 5 MB of the uploaded master.
 
-Catalog purchase controls are present but do not charge customers yet. They must remain disconnected from the plan checkout until music orders, ownership entitlements, and purchased downloads have a dedicated commerce ledger.
+Catalog purchases use authenticated Stripe Checkout sessions that are separate from plan billing. Verified Stripe webhooks create the Neon order, immutable ledger entries, equal-per-track payee allocations, and download entitlement. MEJay retains 10% of gross and transfers the remaining provider proceeds to the provider's Stripe Connect Express account using separate charges and transfers.
+
+Providers connect Stripe from the Provider Portal. LIVE releases remain public while onboarding is incomplete, but checkout remains disabled until Stripe reports submitted details, enabled payouts, and an active transfers capability. Full refunds revoke downloads and reverse the provider transfer; open disputes suspend downloads until Stripe resolves them.
+
+Purchased source files remain private in R2. `GET /api/store/purchases/:entitlementId/files/:fileId/download` requires the owning session and an active entitlement, supports byte ranges, and never exposes the storage key. Sprint 4 temporarily fulfills the original WAV/FLAC upload; standardized consumer derivatives are deferred.
 
 ## Minimal payloads
 

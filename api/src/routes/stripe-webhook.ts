@@ -1,4 +1,6 @@
 import {cadenceFromPrice, persistSubscriptionState, stripeTimestampToIso, type SubscriptionState} from '../services/billing'
+import {CommerceService} from '../marketplace/commerce-service'
+import {ConnectService} from '../marketplace/connect-service'
 
 type D1Database = any
 
@@ -8,6 +10,7 @@ type Env = {
   STRIPE_WEBHOOK_SECRET: string
   STRIPE_PRICE_PRO: string
   STRIPE_PRICE_YEARLY: string
+  MARKETPLACE_PLATFORM_FEE_BPS?: string
 }
 
 type AccessType = 'free' | 'pro' | 'full_program'
@@ -229,9 +232,19 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     const obj = event?.data?.object
     const eventCreatedAt = stripeTimestampToIso(event?.created) ?? new Date().toISOString()
 
+    if (type === 'account.updated' && typeof obj?.id === 'string') {
+      await new ConnectService(env.DB, secretKey).syncAccount(obj)
+      return json({ok: true})
+    }
+
     if (type === 'checkout.session.completed') {
       const session = obj
       const meta = session?.metadata
+      if (meta?.kind === 'marketplace_purchase') {
+        if (session?.payment_status !== 'paid') return json({ok: true, ignored: true})
+        const result = await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).fulfillPaidSession(session)
+        return json({ok: true, orderId: result.orderId})
+      }
       const userId = getUserIdFromMetadata(meta)
       const plan = getPlanFromMetadata(meta)
 
@@ -277,6 +290,26 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
       }
 
       return json({ok: true, ignored: true})
+    }
+
+    if (type === 'checkout.session.async_payment_succeeded' && obj?.metadata?.kind === 'marketplace_purchase') {
+      const result = await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).fulfillPaidSession(obj)
+      return json({ok: true, orderId: result.orderId})
+    }
+
+    if (type === 'charge.refunded') {
+      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).handleRefund(obj)
+      return json({ok: true})
+    }
+
+    if (type === 'charge.dispute.created') {
+      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).handleDispute(obj, true)
+      return json({ok: true})
+    }
+
+    if (type === 'charge.dispute.closed') {
+      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).handleDispute(obj, false)
+      return json({ok: true})
     }
 
     if (type === 'customer.subscription.updated' || type === 'customer.subscription.created') {

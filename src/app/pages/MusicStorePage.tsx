@@ -1,5 +1,5 @@
 import {useEffect, useMemo, useRef, useState} from 'react'
-import {useQuery} from '@tanstack/react-query'
+import {useMutation, useQuery} from '@tanstack/react-query'
 import {ArrowLeft, Disc3, Pause, Play, Search, ShoppingBag} from 'lucide-react'
 import {Link, useParams} from 'react-router-dom'
 
@@ -8,6 +8,8 @@ import {Input} from '@/components/ui/input'
 import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
 import {getStoreRelease, listStoreReleases, storeAssetUrl, type StoreRelease, type StoreTrack} from '@/lib/musicStoreApi'
+import {startStoreCheckout} from '@/lib/marketplaceCommerceApi'
+import {usePlanStore} from '@/stores/planStore'
 
 type PreviewController = {
   playingId: string | null
@@ -84,7 +86,7 @@ export function StoreReleasePage() {
   if (detail.isError || !detail.data) return <StoreError message={detail.error?.message || 'Release not found'} />
   const {release, tracks} = detail.data
   return <div className="min-h-screen bg-[#0a0a0b] text-zinc-100"><main className="mx-auto max-w-6xl px-4 py-6 sm:px-8 sm:py-10"><Button asChild variant="ghost" className="mb-7 gap-2"><Link to="/app/store"><ArrowLeft className="h-4 w-4" />Back to Marketplace</Link></Button>
-    <div className="grid gap-8 md:grid-cols-[minmax(240px,380px)_1fr] md:gap-12"><Cover release={release} className="aspect-square w-full" /><div className="min-w-0 md:pt-4"><p className="text-sm font-semibold uppercase text-emerald-400">{release.artist_name}</p><h1 className="mt-2 text-4xl font-black sm:text-5xl">{release.title}</h1>{release.version_title && <p className="mt-2 text-lg text-zinc-400">{release.version_title}</p>}<div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-sm text-zinc-400"><span>{releaseTypeLabel(release.release_type)}</span><span>{release.genre || 'Uncategorized'}</span><span>{formatDate(release.original_release_date || release.published_at)}</span>{release.label_name && <span>{release.label_name}</span>}</div><p className="mt-8 text-3xl font-bold">{formatPrice(release.amount_minor, release.currency)}</p><PurchaseButton className="mt-5 h-12 w-full sm:w-56" /></div></div>
+    <div className="grid gap-8 md:grid-cols-[minmax(240px,380px)_1fr] md:gap-12"><Cover release={release} className="aspect-square w-full" /><div className="min-w-0 md:pt-4"><p className="text-sm font-semibold uppercase text-emerald-400">{release.artist_name}</p><h1 className="mt-2 text-4xl font-black sm:text-5xl">{release.title}</h1>{release.version_title && <p className="mt-2 text-lg text-zinc-400">{release.version_title}</p>}<div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-sm text-zinc-400"><span>{releaseTypeLabel(release.release_type)}</span><span>{release.genre || 'Uncategorized'}</span><span>{formatDate(release.original_release_date || release.published_at)}</span>{release.label_name && <span>{release.label_name}</span>}</div><p className="mt-8 text-3xl font-bold">{formatPrice(release.amount_minor, release.currency)}</p><PurchaseButton className="mt-5 h-12 w-full sm:w-56" available={release.purchase_available} productId={release.product_id} /></div></div>
     <section className="mt-12"><SectionTitle title="Track List" /><div className="divide-y divide-white/10 border-y border-white/10">{tracks.map((track) => <TrackRow key={track.id} track={track} preview={preview} />)}</div></section>
   </main></div>
 }
@@ -96,7 +98,7 @@ function ReleaseSection({title, releases, preview, featured = false}: {title: st
 
 function ProductCard({release, preview, featured}: {release: StoreRelease; preview: PreviewController; featured: boolean}) {
   const playing = preview.playingId === release.id
-  return <article className="group min-w-0"><Link to={`/app/store/${release.id}`}><Cover release={release} className="aspect-square w-full transition duration-300 group-hover:brightness-110" /></Link><div className="pt-4"><Link to={`/app/store/${release.id}`} className={`block truncate font-bold hover:text-emerald-400 ${featured ? 'text-lg' : ''}`}>{release.title}</Link><p className="mt-1 truncate text-sm text-zinc-400">{release.artist_name}</p><p className="mt-1 text-xs text-zinc-600">{releaseTypeLabel(release.release_type)} · {release.genre || 'Uncategorized'}</p><div className="mt-4 flex items-center justify-between gap-2"><Button size="sm" variant="ghost" className="h-8 gap-1.5 px-2 text-zinc-300" disabled={!release.preview_asset_id} onClick={() => preview.toggle(release.id, release.preview_asset_id)}>{playing ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}Preview</Button><span className="font-semibold">{formatPrice(release.amount_minor, release.currency)}</span></div><PurchaseButton className="mt-2 w-full" label="Buy" /></div></article>
+  return <article className="group min-w-0"><Link to={`/app/store/${release.id}`}><Cover release={release} className="aspect-square w-full transition duration-300 group-hover:brightness-110" /></Link><div className="pt-4"><Link to={`/app/store/${release.id}`} className={`block truncate font-bold hover:text-emerald-400 ${featured ? 'text-lg' : ''}`}>{release.title}</Link><p className="mt-1 truncate text-sm text-zinc-400">{release.artist_name}</p><p className="mt-1 text-xs text-zinc-600">{releaseTypeLabel(release.release_type)} · {release.genre || 'Uncategorized'}</p><div className="mt-4 flex items-center justify-between gap-2"><Button size="sm" variant="ghost" className="h-8 gap-1.5 px-2 text-zinc-300" disabled={!release.preview_asset_id} onClick={() => preview.toggle(release.id, release.preview_asset_id)}>{playing ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}Preview</Button><span className="font-semibold">{formatPrice(release.amount_minor, release.currency)}</span></div><PurchaseButton className="mt-2 w-full" label="Buy" available={release.purchase_available} productId={release.product_id} /></div></article>
 }
 
 function Cover({release, className}: {release: Pick<StoreRelease, 'artwork_asset_id' | 'title'>; className?: string}) {
@@ -109,8 +111,21 @@ function TrackRow({track, preview}: {track: StoreTrack; preview: PreviewControll
   return <div className="grid grid-cols-[2rem_1fr_auto_auto] items-center gap-3 py-4"><span className="text-sm text-zinc-600">{track.track_number}</span><div className="min-w-0"><p className="truncate font-medium">{track.title}{track.version_title ? ` (${track.version_title})` : ''}</p>{track.explicit && <span className="text-[10px] uppercase text-zinc-500">Explicit</span>}</div><span className="text-xs text-zinc-500">{formatDuration(track.duration_ms)}</span><Button size="icon" variant="ghost" aria-label={`${playing ? 'Pause' : 'Play'} ${track.title}`} disabled={!track.preview_asset_id} onClick={() => preview.toggle(track.id, track.preview_asset_id)}>{playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}</Button></div>
 }
 
-function PurchaseButton({className, label = 'Purchase'}: {className?: string; label?: string}) {
-  return <Button className={`bg-emerald-400 font-bold text-zinc-950 hover:bg-emerald-300 ${className || ''}`} onClick={() => toast({title: 'Purchasing is not available yet', description: 'Secure catalog checkout and owned-download access require the upcoming commerce ledger.'})}>{label}</Button>
+function PurchaseButton({className, label = 'Purchase', available, productId}: {className?: string; label?: string; available: boolean; productId: string}) {
+  const authStatus = usePlanStore((state) => state.authStatus)
+  const mutation = useMutation({
+    mutationFn: () => startStoreCheckout(productId),
+    onError: (error) => toast({title: 'Checkout unavailable', description: error.message, variant: 'destructive'}),
+  })
+  const purchase = () => {
+    if (authStatus !== 'authenticated') {
+      const returnTo = `${window.location.pathname}${window.location.search}`
+      window.location.assign(`/login?returnTo=${encodeURIComponent(returnTo)}`)
+      return
+    }
+    mutation.mutate()
+  }
+  return <Button disabled={!available || mutation.isPending} title={available ? undefined : 'This provider is completing payout setup'} className={`bg-emerald-400 font-bold text-zinc-950 hover:bg-emerald-300 ${className || ''}`} onClick={purchase}>{available ? mutation.isPending ? 'Opening Stripe...' : label : 'Payout setup pending'}</Button>
 }
 
 function SectionTitle({title}: {title: string}) { return <div className="mb-5 flex items-center gap-4"><h2 className="shrink-0 text-xl font-black">{title}</h2><div className="h-px flex-1 bg-white/10" /></div> }

@@ -42,6 +42,8 @@ import {
 import {commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview} from './marketplace-admin'
 import {onRequest as stripeWebhook} from './stripe-webhook'
 import {getCatalogAsset, getCatalogRelease, listCatalog} from './store'
+import {createConnectDashboard, createConnectOnboarding, getConnectStatus} from './marketplace/connect'
+import {createStoreCheckout, downloadStorePurchase, getStoreOrderStatus, listStorePurchases} from './store/commerce'
 
 export type RouteHandler = (context: any) => Promise<Response> | Response
 
@@ -66,6 +68,13 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'get', path: '/api/store/releases', handler: listCatalog},
   {method: 'get', path: '/api/store/releases/:releaseId', handler: getCatalogRelease},
   {method: 'get', path: '/api/store/assets/:assetId', handler: getCatalogAsset},
+  {method: 'post', path: '/api/store/checkout', handler: createStoreCheckout},
+  {method: 'get', path: '/api/store/orders/by-session/:sessionId', handler: getStoreOrderStatus},
+  {method: 'get', path: '/api/store/purchases', handler: listStorePurchases},
+  {method: 'get', path: '/api/store/purchases/:entitlementId/files/:fileId/download', handler: downloadStorePurchase},
+  {method: 'get', path: '/api/marketplace/connect', handler: getConnectStatus},
+  {method: 'post', path: '/api/marketplace/connect/onboarding', handler: createConnectOnboarding},
+  {method: 'post', path: '/api/marketplace/connect/dashboard', handler: createConnectDashboard},
   {method: 'post', path: '/api/marketplace/providers', handler: createProvider},
   {method: 'get', path: '/api/marketplace/dashboard', handler: getDashboard},
   {method: 'get', path: '/api/marketplace/artists', handler: listArtists},

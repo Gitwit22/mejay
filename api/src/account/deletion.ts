@@ -82,6 +82,13 @@ export class AccountDeletionService {
           throw new AccountDeletionError(409, 'provider_ownership_transfer_required', 'Transfer provider ownership before deleting this account')
         }
 
+        const financialHistory = await db.prepare(
+          'SELECT id FROM marketplace_orders WHERE provider_profile_id = ?1 LIMIT 1',
+        ).bind(membership.provider_profile_id).first<{id: string}>()
+        if (financialHistory) {
+          throw new AccountDeletionError(409, 'provider_financial_history_retained', 'Contact support to close or transfer a provider with marketplace sales')
+        }
+
         await this.anonymizeAudits(db, user.id, membership.provider_profile_id)
         await db.prepare('DELETE FROM releases WHERE provider_profile_id = ?1').bind(membership.provider_profile_id).run()
         await db.prepare('DELETE FROM artists WHERE provider_profile_id = ?1').bind(membership.provider_profile_id).run()

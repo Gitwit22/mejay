@@ -12,12 +12,14 @@ function clientWithApplied(rows: Array<{version: number; checksum: string}> = []
 }
 
 describe('runMigrations', () => {
-  it('registers provider release drafts after account deletion', () => {
+  it('registers marketplace migrations in forward-only order', () => {
     expect(migrations.map(({version, name}) => ({version, name}))).toEqual([
       {version: 1, name: 'existing_schema'},
       {version: 2, name: 'marketplace_foundation'},
       {version: 3, name: 'account_deletion'},
       {version: 4, name: 'provider_release_drafts'},
+      {version: 5, name: 'marketplace_admin_publishing'},
+      {version: 6, name: 'marketplace_commerce'},
     ])
   })
 
