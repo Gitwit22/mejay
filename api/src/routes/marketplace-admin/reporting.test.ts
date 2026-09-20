@@ -1,6 +1,6 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {createIndustryReportingBatch, exportIndustryReportingBatch, getIndustryReporting, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting} from './reporting'
+import {createIndustryReportingBatch, createIndustryReportingCorrection, exportIndustryReportingBatch, getIndustryReporting, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting} from './reporting'
 
 const getSessionUserId = vi.fn()
 const getDashboard = vi.fn()
@@ -9,6 +9,7 @@ const createBatch = vi.fn()
 const getExport = vi.fn()
 const submitBatch = vi.fn()
 const resolveBatch = vi.fn()
+const createCorrection = vi.fn()
 
 vi.mock('../_auth', async (importOriginal) => ({
   ...await importOriginal<typeof import('../_auth')>(),
@@ -22,6 +23,7 @@ vi.mock('../../marketplace/industry-reporting-service', () => ({
     getExport = getExport
     submitBatch = submitBatch
     resolveBatch = resolveBatch
+    createCorrection = createCorrection
   },
 }))
 
@@ -33,7 +35,7 @@ const context = (path: string, init?: RequestInit, params: Record<string, string
 
 describe('industry reporting admin routes', () => {
   beforeEach(() => {
-    for (const mock of [getSessionUserId, getDashboard, validate, createBatch, getExport, submitBatch, resolveBatch]) mock.mockReset()
+    for (const mock of [getSessionUserId, getDashboard, validate, createBatch, getExport, submitBatch, resolveBatch, createCorrection]) mock.mockReset()
   })
 
   it('requires authentication and rejects invalid report dates', async () => {
@@ -71,5 +73,17 @@ describe('industry reporting admin routes', () => {
     expect(response.headers.get('content-disposition')).toContain('mejay-reporting-2026-09-17.csv')
     expect(response.headers.get('cache-control')).toContain('no-store')
     expect(await response.text()).toContain('event-1')
+  })
+
+  it('creates validated append-only reporting corrections', async () => {
+    getSessionUserId.mockResolvedValue('admin-1')
+    createCorrection.mockResolvedValue({id: 'correction-1'})
+    const response = await createIndustryReportingCorrection(context(
+      '/api/marketplace-admin/reporting/events/event-1/corrections',
+      {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({correctionType: 'void', reason: 'Duplicate submission'})},
+      {eventId: 'event-1'},
+    ))
+    expect(response.status).toBe(201)
+    expect(createCorrection).toHaveBeenCalledWith('admin-1', 'event-1', {correctionType: 'void', reason: 'Duplicate submission'})
   })
 })

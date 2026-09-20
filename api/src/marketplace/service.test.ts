@@ -1,7 +1,21 @@
 import {describe, expect, it, vi} from 'vitest'
-import {isReleaseMutable, isReleaseTransitionAllowed, MarketplaceService} from './service'
+import {exceedsProviderStorageLimit, isReleaseMutable, isReleaseTransitionAllowed, MarketplaceService, PROVIDER_STORAGE_LIMIT_BYTES, releaseFingerprint} from './service'
 
 describe('release state machine', () => {
+  it('enforces the aggregate provider storage boundary exactly', () => {
+    expect(exceedsProviderStorageLimit(PROVIDER_STORAGE_LIMIT_BYTES - 1, 1)).toBe(false)
+    expect(exceedsProviderStorageLimit(PROVIDER_STORAGE_LIMIT_BYTES, 1)).toBe(true)
+  })
+
+  it('normalizes duplicate release identity without collapsing distinct versions', () => {
+    const original = releaseFingerprint({primaryArtistId: 'artist-1', title: '  Night   Drive ', versionTitle: null, releaseType: 'album', originalReleaseDate: '2026-09-17'})
+    const duplicate = releaseFingerprint({primaryArtistId: 'artist-1', title: 'night drive', versionTitle: '', releaseType: 'album', originalReleaseDate: '2026-09-17'})
+    const remix = releaseFingerprint({primaryArtistId: 'artist-1', title: 'Night Drive', versionTitle: 'Remix', releaseType: 'album', originalReleaseDate: '2026-09-17'})
+
+    expect(duplicate).toBe(original)
+    expect(remix).not.toBe(original)
+  })
+
   it('allows only adjacent provider workflow transitions', () => {
     expect(isReleaseTransitionAllowed('DRAFT', 'METADATA_COMPLETE')).toBe(true)
     expect(isReleaseTransitionAllowed('METADATA_COMPLETE', 'RIGHTS_COMPLETE')).toBe(true)

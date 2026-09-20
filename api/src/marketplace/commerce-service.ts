@@ -75,6 +75,7 @@ type AttemptRow = {
   platform_fee_bps: number
   stripe_checkout_session_id: string | null
   transfer_group: string
+  stripe_destination_account_id: string | null
   status: string
   snapshot: CheckoutSnapshot
 }
@@ -111,6 +112,7 @@ type OrderRow = {
   currency: string
   stripe_charge_id: string | null
   stripe_transfer_id: string | null
+  stripe_destination_account_id: string | null
   transfer_status: string
   gross_amount_minor?: number
   platform_fee_minor?: number
@@ -182,7 +184,7 @@ export class CommerceService {
         price.amount_minor, price.currency, release.id AS release_id, release.title AS release_title,
         release.release_type, release.upc, artist.name AS artist_name, artwork.id AS artwork_asset_id,
         release.provider_profile_id, provider.stripe_account_id,
-        (provider.stripe_details_submitted AND provider.stripe_payouts_enabled
+        (provider.suspended_at IS NULL AND provider.stripe_details_submitted AND provider.stripe_payouts_enabled
           AND provider.stripe_transfers_status = 'active') AS purchase_ready
        FROM products product
        JOIN releases release ON release.id = product.release_id AND release.status = 'LIVE'
@@ -274,11 +276,11 @@ export class CommerceService {
     await this.database.prepare(
       `INSERT INTO marketplace_checkout_attempts
         (id, buyer_user_id, provider_profile_id, product_id, release_id, price_id, amount_minor, currency,
-          platform_fee_bps, stripe_idempotency_key, transfer_group, snapshot, expires_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, CURRENT_TIMESTAMP + INTERVAL '30 minutes')`,
+          platform_fee_bps, stripe_idempotency_key, transfer_group, snapshot, stripe_destination_account_id, expires_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, CURRENT_TIMESTAMP + INTERVAL '30 minutes')`,
     ).bind(
       attemptId, userId, product.provider_profile_id, product.product_id, product.release_id, product.price_id,
-      product.amount_minor, product.currency, this.platformFeeBps, idempotencyKey, transferGroup, JSON.stringify(snapshot),
+      product.amount_minor, product.currency, this.platformFeeBps, idempotencyKey, transferGroup, JSON.stringify(snapshot), product.stripe_account_id,
     ).run()
 
     const params = new URLSearchParams()
@@ -340,10 +342,6 @@ export class CommerceService {
     if (!charge.chargeId) throw new MarketplaceError(409, 'charge_missing', 'Stripe charge is unavailable')
 
     const order = await this.database.transaction(async (db) => {
-      const existing = await db.prepare(
-        'SELECT * FROM marketplace_orders WHERE stripe_checkout_session_id = ?1 FOR UPDATE',
-      ).bind(session.id).first<OrderRow>()
-      if (existing) return existing
       const attempt = await db.prepare(
         'SELECT * FROM marketplace_checkout_attempts WHERE id = ?1 FOR UPDATE',
       ).bind(attemptId).first<AttemptRow>()
@@ -353,6 +351,10 @@ export class CommerceService {
       if (attempt.buyer_user_id !== userId || attempt.product_id !== productId) {
         throw new MarketplaceError(409, 'checkout_identity_mismatch', 'Checkout ownership metadata does not match')
       }
+      const existing = await db.prepare(
+        'SELECT * FROM marketplace_orders WHERE stripe_checkout_session_id = ?1',
+      ).bind(session.id).first<OrderRow>()
+      if (existing) return existing
       if (session.amount_total !== attempt.amount_minor || session.currency?.toUpperCase() !== attempt.currency) {
         throw new MarketplaceError(409, 'checkout_amount_mismatch', 'Stripe amount does not match the authoritative checkout snapshot')
       }
@@ -365,15 +367,16 @@ export class CommerceService {
           (id, buyer_user_id, provider_profile_id, checkout_attempt_id, buyer_email, buyer_country_code, currency,
             gross_amount_minor, platform_fee_minor, provider_proceeds_minor, stripe_fee_minor,
             stripe_checkout_session_id, stripe_payment_intent_id, stripe_charge_id, stripe_balance_transaction_id,
-            payment_status, paid_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'paid', ?16)
+            stripe_destination_account_id, payment_status, paid_at)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 'paid', ?17)
          RETURNING *`,
       ).bind(
         orderId, userId, attempt.provider_profile_id, attempt.id,
         session.customer_details?.email ?? session.customer_email ?? null,
         paymentCountry(intent),
         attempt.currency, amounts.grossAmountMinor, amounts.platformFeeMinor, amounts.providerProceedsMinor,
-        charge.stripeFeeMinor, session.id, intentId, charge.chargeId, charge.balanceTransactionId, paidAt,
+        charge.stripeFeeMinor, session.id, intentId, charge.chargeId, charge.balanceTransactionId,
+        attempt.stripe_destination_account_id, paidAt,
       ).first<OrderRow>()
       if (!insertedOrder) throw new Error('Order insert failed')
 
@@ -471,13 +474,14 @@ export class CommerceService {
     if (order.stripe_transfer_id && order.transfer_status === 'transferred') return
     if (!order.provider_profile_id || !order.stripe_charge_id) throw new Error('Order transfer destination is incomplete')
     const provider = await this.database.prepare(
-      `SELECT stripe_account_id FROM provider_profiles WHERE id = ?1`,
-    ).bind(order.provider_profile_id).first<{stripe_account_id: string | null}>()
-    if (!provider?.stripe_account_id) throw new Error('Provider Stripe account is unavailable')
+      `SELECT suspended_at FROM provider_profiles WHERE id = ?1`,
+    ).bind(order.provider_profile_id).first<{suspended_at: string | null}>()
+    if (provider?.suspended_at) return
+    if (!order.stripe_destination_account_id) throw new Error('Provider Stripe account is unavailable')
     const params = new URLSearchParams()
     params.set('amount', String(order.provider_proceeds_minor))
     params.set('currency', order.currency.toLowerCase())
-    params.set('destination', provider.stripe_account_id)
+    params.set('destination', order.stripe_destination_account_id)
     params.set('source_transaction', order.stripe_charge_id)
     params.set('metadata[orderId]', order.id)
     const transfer = await stripeRequest<{id?: string}>({
@@ -670,7 +674,7 @@ export class CommerceService {
     })
   }
 
-  async handleDispute(dispute: {id?: string; charge?: string; status?: string}, opened: boolean): Promise<void> {
+  async handleDispute(dispute: {id?: string; charge?: string; status?: string}, opened: boolean, stripeEventId?: string): Promise<void> {
     const chargeId = typeof dispute.charge === 'string' ? dispute.charge : ''
     if (!chargeId) return
     const order = await this.database.prepare(
@@ -701,6 +705,40 @@ export class CommerceService {
             suspended_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE order_id = ?1`,
         ).bind(order.id).run()
       }
+      const incidentType = opened ? 'chargeback_opened' : won ? 'chargeback_won' : lost ? 'chargeback_lost' : null
+      if (incidentType) {
+        await db.prepare(
+          `INSERT INTO marketplace_operational_incidents
+            (id, provider_profile_id, order_id, stripe_event_id, incident_type, external_reference, details)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+           ON CONFLICT (stripe_event_id, incident_type) DO NOTHING`,
+        ).bind(
+          crypto.randomUUID(), order.provider_profile_id, order.id, stripeEventId ?? null,
+          incidentType, dispute.id ?? null, JSON.stringify({status: dispute.status ?? null}),
+        ).run()
+      }
+    })
+  }
+
+  async handleTransferFailed(transfer: {id?: string; metadata?: {orderId?: string}}, stripeEventId: string): Promise<void> {
+    const transferId = typeof transfer.id === 'string' ? transfer.id : ''
+    const metadataOrderId = typeof transfer.metadata?.orderId === 'string' ? transfer.metadata.orderId : ''
+    if (!transferId && !metadataOrderId) return
+    await this.database.transaction(async (db) => {
+      const order = await db.prepare(
+        `SELECT * FROM marketplace_orders
+         WHERE stripe_transfer_id = ?1 OR (?2 <> '' AND id = ?2) FOR UPDATE`,
+      ).bind(transferId, metadataOrderId).first<OrderRow>()
+      if (!order) return
+      await db.prepare(
+        `UPDATE marketplace_orders SET transfer_status = 'failed', updated_at = CURRENT_TIMESTAMP WHERE id = ?1`,
+      ).bind(order.id).run()
+      await db.prepare(
+        `INSERT INTO marketplace_operational_incidents
+          (id, provider_profile_id, order_id, stripe_event_id, incident_type, external_reference)
+         VALUES (?1, ?2, ?3, ?4, 'transfer_failed', ?5)
+         ON CONFLICT (stripe_event_id, incident_type) DO NOTHING`,
+      ).bind(crypto.randomUUID(), order.provider_profile_id, order.id, stripeEventId, transferId || null).run()
     })
   }
 

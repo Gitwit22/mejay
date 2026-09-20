@@ -10,6 +10,7 @@ import {marketplaceDiscoveryMigration} from './0007-marketplace-discovery'
 import {marketplaceSalePolicyMigration} from './0008-marketplace-sale-policy'
 import {marketplaceReportingMigration} from './0009-marketplace-reporting'
 import {industryReportingMigration} from './0010-industry-reporting'
+import {productionHardeningMigration} from './0011-production-hardening'
 import type {Migration} from './types'
 
 export const migrations: readonly Migration[] = [
@@ -23,6 +24,7 @@ export const migrations: readonly Migration[] = [
   marketplaceSalePolicyMigration,
   marketplaceReportingMigration,
   industryReportingMigration,
+  productionHardeningMigration,
 ]
 
 const MIGRATION_LOCK_ID = 764_329_101

@@ -17,6 +17,22 @@ export const releaseAdminCommandSchema = z.discriminatedUnion('action', [
 
 export type ReleaseAdminCommand = z.infer<typeof releaseAdminCommandSchema>
 
+export const providerAdminCommandSchema = z.discriminatedUnion('action', [
+  z.object({action: z.literal('suspend'), reason: note}),
+  z.object({action: z.literal('reinstate'), reason: note}),
+])
+
+export type ProviderAdminCommand = z.infer<typeof providerAdminCommandSchema>
+
+export const splitDisputeSchema = z.object({
+  providerId: z.string().trim().min(1).max(128),
+  splitSetId: z.string().trim().min(1).max(128),
+  orderId: z.string().trim().min(1).max(128).optional(),
+  reason: note,
+}).strict()
+
+export type SplitDisputeInput = z.infer<typeof splitDisputeSchema>
+
 const orderedIds = z.array(z.string().trim().min(1)).max(20).refine((ids) => new Set(ids).size === ids.length, 'IDs must be unique')
 
 export const discoveryFeaturesSchema = z.object({

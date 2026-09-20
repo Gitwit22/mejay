@@ -20,7 +20,7 @@ export class StoreService {
         artist.id AS artist_id, artist.name AS artist_name,
         artwork.id AS artwork_asset_id,
         offer.product_id, offer.amount_minor, offer.currency,
-        (provider.stripe_details_submitted AND provider.stripe_payouts_enabled
+        (provider.suspended_at IS NULL AND provider.stripe_details_submitted AND provider.stripe_payouts_enabled
           AND provider.stripe_transfers_status = 'active') AS purchase_available,
         COUNT(DISTINCT track.id)::integer AS track_count,
         MIN(preview.id) AS preview_asset_id
@@ -46,7 +46,7 @@ export class StoreService {
          AND preview.kind = 'audio' AND preview.processing_status = 'ready'
        WHERE r.status = 'LIVE'
       GROUP BY r.id, artist.id, artist.name, artwork.id, offer.product_id, offer.amount_minor, offer.currency,
-        provider.stripe_details_submitted, provider.stripe_payouts_enabled, provider.stripe_transfers_status
+        provider.suspended_at, provider.stripe_details_submitted, provider.stripe_payouts_enabled, provider.stripe_transfers_status
        ORDER BY r.published_at DESC, r.updated_at DESC`,
     ).all()
     return results
@@ -59,7 +59,7 @@ export class StoreService {
         artist.id AS artist_id, artist.name AS artist_name,
         artwork.id AS artwork_asset_id,
         offer.product_id, offer.amount_minor, offer.currency,
-        (provider.stripe_details_submitted AND provider.stripe_payouts_enabled
+        (provider.suspended_at IS NULL AND provider.stripe_details_submitted AND provider.stripe_payouts_enabled
           AND provider.stripe_transfers_status = 'active') AS purchase_available
        FROM releases r
        JOIN provider_profiles provider ON provider.id = r.provider_profile_id

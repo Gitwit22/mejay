@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest'
 
-import {buildReportingCsv, type IndustryReportingExportEvent} from './industry-reporting-service'
+import {MarketplaceError} from './service'
+import {applyReportingCorrection, buildReportingCsv, IndustryReportingService, type IndustryReportingExportEvent} from './industry-reporting-service'
 
 const event: IndustryReportingExportEvent = {
   id: 'event-1',
@@ -32,5 +33,36 @@ describe('industry reporting CSV export', () => {
     expect(csv).toContain('event_id,event_type,isrc,upc,artist,release,track,transaction,ledger_transaction')
     expect(csv).toContain('event-1,sale,QTA3L2600001,123456789012,"Artist, Jr.","Night ""Drive""",Getaway,pi_1,ledger-1,100,USD,1,US')
     expect(csv.endsWith('\r\n')).toBe(true)
+  })
+
+  it('applies replacement fields without changing immutable trace identifiers', () => {
+    const corrected = applyReportingCorrection({
+      ...event,
+      correction_type: 'replace',
+      replacement_data: {isrc: 'QTA3L2600099', priceMinor: 125, orderId: 'other-order'},
+    })
+    expect(corrected.isrc).toBe('QTA3L2600099')
+    expect(corrected.priceMinor).toBe(125)
+    expect(corrected.orderId).toBe('order-1')
+    expect(buildReportingCsv([corrected])).toContain('QTA3L2600099')
+  })
+
+  it('rejects corrections after an event belongs to an immutable batch', async () => {
+    const database = {
+      prepare: (sql: string) => ({
+        bind: () => ({
+          first: async () => sql.includes('marketplace_staff')
+            ? {role: 'admin'}
+            : {id: 'event-1', order_id: 'order-1', batch_id: 'batch-1'},
+        }),
+      }),
+      transaction: async <T>(callback: (value: unknown) => Promise<T>) => callback(database),
+    }
+    const service = new IndustryReportingService(database as never)
+
+    await expect(service.createCorrection('admin-1', 'event-1', {
+      correctionType: 'void',
+      reason: 'Duplicate submission',
+    })).rejects.toMatchObject({status: 409, code: 'reporting_event_batched'} satisfies Partial<MarketplaceError>)
   })
 })

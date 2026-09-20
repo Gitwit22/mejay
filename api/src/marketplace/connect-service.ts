@@ -139,6 +139,10 @@ export class ConnectService {
   async syncAccount(account: StripeAccount): Promise<void> {
     const transferState = account.capabilities?.transfers
     const transfersStatus = transferState === 'active' ? 'active' : transferState === 'pending' ? 'pending' : 'inactive'
+    const before = await this.database.prepare(
+      `SELECT id, stripe_details_submitted, stripe_charges_enabled, stripe_payouts_enabled,
+        stripe_transfers_status, stripe_requirements FROM provider_profiles WHERE stripe_account_id = ?1`,
+    ).bind(account.id).first<Record<string, unknown> & {id: string}>()
     await this.database.prepare(
       `UPDATE provider_profiles SET stripe_details_submitted = ?1, stripe_charges_enabled = ?2,
         stripe_payouts_enabled = ?3, stripe_transfers_status = ?4, stripe_requirements = ?5,
@@ -151,6 +155,37 @@ export class ConnectService {
       transfersStatus,
       JSON.stringify(account.requirements ?? {}),
       account.id,
+    ).run()
+    if (before) {
+      const after = {
+        stripe_details_submitted: account.details_submitted === true,
+        stripe_charges_enabled: account.charges_enabled === true,
+        stripe_payouts_enabled: account.payouts_enabled === true,
+        stripe_transfers_status: transfersStatus,
+        stripe_requirements: account.requirements ?? {},
+      }
+      await this.database.prepare(
+        `INSERT INTO marketplace_audit_events
+          (id, provider_profile_id, entity_type, entity_id, action, before_data, after_data, metadata)
+         VALUES (?1, ?2, 'stripe_account', ?3, 'stripe_account.synced', ?4, ?5, '{}'::jsonb)`,
+      ).bind(crypto.randomUUID(), before.id, account.id, JSON.stringify(before), JSON.stringify(after)).run()
+    }
+  }
+
+  async handlePayoutFailed(accountId: string | null, payout: {id?: string; failure_code?: string; failure_message?: string}, stripeEventId: string): Promise<void> {
+    if (!accountId) return
+    const provider = await this.database.prepare(
+      'SELECT id FROM provider_profiles WHERE stripe_account_id = ?1',
+    ).bind(accountId).first<{id: string}>()
+    if (!provider) return
+    await this.database.prepare(
+      `INSERT INTO marketplace_operational_incidents
+        (id, provider_profile_id, stripe_event_id, incident_type, external_reference, details)
+       VALUES (?1, ?2, ?3, 'payout_failed', ?4, ?5)
+       ON CONFLICT (stripe_event_id, incident_type) DO NOTHING`,
+    ).bind(
+      crypto.randomUUID(), provider.id, stripeEventId, payout.id ?? null,
+      JSON.stringify({failureCode: payout.failure_code ?? null, failureMessage: payout.failure_message ?? null}),
     ).run()
   }
 }

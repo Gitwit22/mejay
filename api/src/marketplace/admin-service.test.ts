@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest'
 
-import {discoveryFeaturesSchema} from './admin-schemas'
+import {discoveryFeaturesSchema, providerAdminCommandSchema, splitDisputeSchema} from './admin-schemas'
 import {releaseCommandAllowed, releaseCommandTarget} from './admin-service'
 
 describe('marketplace admin release commands', () => {
@@ -23,5 +23,12 @@ describe('marketplace admin release commands', () => {
   it('requires unique ordered discovery feature IDs', () => {
     expect(discoveryFeaturesSchema.safeParse({releaseIds: ['one', 'two'], artistIds: ['artist']}).success).toBe(true)
     expect(discoveryFeaturesSchema.safeParse({releaseIds: ['one', 'one'], artistIds: []}).success).toBe(false)
+  })
+
+  it('requires reasons for provider commands and split disputes', () => {
+    expect(providerAdminCommandSchema.safeParse({action: 'suspend', reason: 'Rights investigation'}).success).toBe(true)
+    expect(providerAdminCommandSchema.safeParse({action: 'suspend', reason: ''}).success).toBe(false)
+    expect(splitDisputeSchema.safeParse({providerId: 'provider-1', splitSetId: 'split-1', reason: 'Producer claim'}).success).toBe(true)
+    expect(splitDisputeSchema.safeParse({providerId: 'provider-1', splitSetId: 'split-1', reason: ''}).success).toBe(false)
   })
 })

@@ -42,7 +42,14 @@ function json(body: unknown, init?: ResponseInit): Response {
 }
 
 function databaseError(error: unknown): Response | null {
-  const code = (error as {code?: string})?.code
+  const databaseError = error as {code?: string; constraint?: string}
+  const code = databaseError?.code
+  if (code === '23505' && databaseError.constraint === 'uq_releases_provider_fingerprint') {
+    return json({ok: false, error: 'duplicate_release'}, {status: 409})
+  }
+  if (code === '23505' && ['isrc_registry_isrc_key', 'uq_isrc_assignments_active_isrc'].includes(databaseError.constraint ?? '')) {
+    return json({ok: false, error: 'duplicate_isrc'}, {status: 409})
+  }
   if (code === '23505') return json({ok: false, error: 'conflict'}, {status: 409})
   if (code === '23503') return json({ok: false, error: 'invalid_reference'}, {status: 422})
   if (code === '23514' || code === '22P02') return json({ok: false, error: 'invalid_value'}, {status: 422})

@@ -20,6 +20,7 @@ import type {
   UploadInitInput,
 } from './schemas'
 import {getReleaseSaleReadiness} from './sale-policy'
+import {inspectUpload, validateInspectedUpload} from './upload-validation'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -36,6 +37,34 @@ type Database = {
 type ProviderContext = {
   providerId: string
   role: 'owner' | 'admin' | 'editor' | 'viewer'
+}
+
+function normalizeReleasePart(value: string | null | undefined): string {
+  return value?.trim().toLowerCase().replace(/\s+/g, ' ') ?? ''
+}
+
+export function releaseFingerprint(input: {
+  primaryArtistId: string
+  title: string
+  versionTitle?: string | null
+  releaseType: ReleaseInput['releaseType']
+  originalReleaseDate?: string | null
+}): string {
+  return [
+    input.primaryArtistId,
+    normalizeReleasePart(input.title),
+    normalizeReleasePart(input.versionTitle),
+    input.releaseType,
+    input.originalReleaseDate ?? '',
+  ].join('|')
+}
+
+export const PROVIDER_STORAGE_LIMIT_BYTES = 20 * 1024 * 1024 * 1024
+
+export function exceedsProviderStorageLimit(currentBytes: number, incomingBytes: number): boolean {
+  return !Number.isSafeInteger(currentBytes) || currentBytes < 0
+    || !Number.isSafeInteger(incomingBytes) || incomingBytes <= 0
+    || currentBytes + incomingBytes > PROVIDER_STORAGE_LIMIT_BYTES
 }
 
 type ReleaseStatus =
@@ -93,10 +122,13 @@ async function providerContext(db: Database, userId: string, mutate = true): Pro
     throw new MarketplaceError(403, 'pro_subscription_required', 'An active Pro subscription is required for Artist access')
   }
   const row = await db
-    .prepare('SELECT provider_profile_id, role FROM provider_members WHERE user_id = ?1 ORDER BY created_at LIMIT 1')
+    .prepare(`SELECT member.provider_profile_id, member.role, provider.suspended_at
+      FROM provider_members member JOIN provider_profiles provider ON provider.id = member.provider_profile_id
+      WHERE member.user_id = ?1 ORDER BY member.created_at LIMIT 1`)
     .bind(userId)
-    .first<{provider_profile_id: string; role: ProviderContext['role']}>()
+    .first<{provider_profile_id: string; role: ProviderContext['role']; suspended_at: string | null}>()
   if (!row) throw new MarketplaceError(403, 'provider_required', 'A provider profile is required')
+  if (mutate && row.suspended_at) throw new MarketplaceError(403, 'provider_suspended', 'This provider account is suspended')
   if (mutate && !['owner', 'admin', 'editor'].includes(row.role)) {
     throw new MarketplaceError(403, 'provider_write_forbidden', 'Provider write access is required')
   }
@@ -301,19 +333,21 @@ export class MarketplaceService {
       }
       await assertOwned(db, 'artists', input.primaryArtistId, context.providerId)
       const now = nowIso()
+      const duplicateFingerprint = releaseFingerprint(input)
       const row = await inserted<Record<string, unknown>>(db.prepare(
         `UPDATE releases SET
           title = ?1, version_title = ?2, release_type = ?3, label_name = ?4, catalog_number = ?5,
           original_release_date = ?6, scheduled_release_at = ?7, genre = ?8, subgenre = ?9, upc = ?10,
           copyright_year = ?11, copyright_holder = ?12, phonographic_copyright_year = ?13,
-          phonographic_copyright_holder = ?14, draft_step = ?15, version = version + 1, updated_at = ?16
-         WHERE id = ?17 AND provider_profile_id = ?18 AND version = ?19 RETURNING *`,
+          phonographic_copyright_holder = ?14, draft_step = ?15, duplicate_fingerprint = ?16,
+          version = version + 1, updated_at = ?17
+         WHERE id = ?18 AND provider_profile_id = ?19 AND version = ?20 RETURNING *`,
       ).bind(
         input.title, input.versionTitle ?? null, input.releaseType, input.labelName ?? null,
         input.catalogNumber ?? null, input.originalReleaseDate ?? null, input.scheduledReleaseAt ?? null,
         input.genre ?? null, input.subgenre ?? null, input.upc ?? null, input.copyrightYear ?? null,
         input.copyrightHolder ?? null, input.phonographicCopyrightYear ?? null,
-        input.phonographicCopyrightHolder ?? null, input.draftStep, now, releaseId, context.providerId,
+        input.phonographicCopyrightHolder ?? null, input.draftStep, duplicateFingerprint, now, releaseId, context.providerId,
         input.expectedVersion,
       ))
       await db.prepare(
@@ -369,11 +403,13 @@ export class MarketplaceService {
       const context = await providerContext(db, userId)
       await assertOwned(db, 'artists', input.primaryArtistId, context.providerId)
       const id = crypto.randomUUID()
+      const duplicateFingerprint = releaseFingerprint(input)
       const row = await inserted<any>(db.prepare(
         `INSERT INTO releases
-          (id, provider_profile_id, title, version_title, release_type, label_name, catalog_number, original_release_date, scheduled_release_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) RETURNING *`,
-      ).bind(id, context.providerId, input.title, input.versionTitle ?? null, input.releaseType, input.labelName ?? null, input.catalogNumber ?? null, input.originalReleaseDate ?? null, input.scheduledReleaseAt ?? null))
+          (id, provider_profile_id, title, version_title, release_type, label_name, catalog_number,
+            original_release_date, scheduled_release_at, duplicate_fingerprint)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) RETURNING *`,
+      ).bind(id, context.providerId, input.title, input.versionTitle ?? null, input.releaseType, input.labelName ?? null, input.catalogNumber ?? null, input.originalReleaseDate ?? null, input.scheduledReleaseAt ?? null, duplicateFingerprint))
       await db.prepare(
         `INSERT INTO release_artists (provider_profile_id, release_id, artist_id, role, is_primary)
          VALUES (?1, ?2, ?3, 'primary', TRUE)`,
@@ -457,6 +493,14 @@ export class MarketplaceService {
       const context = await providerContext(db, userId)
       if (input.kind === 'artwork') await assertReleaseMutable(db, input.releaseId, context.providerId)
       else await assertTrackMutable(db, input.trackId, context.providerId)
+      await db.prepare('SELECT id FROM provider_profiles WHERE id = ?1 FOR UPDATE').bind(context.providerId).first()
+      const storage = await db.prepare(
+        `SELECT COALESCE(SUM(byte_size), 0)::bigint AS used_bytes FROM marketplace_assets
+         WHERE provider_profile_id = ?1 AND processing_status <> 'failed'`,
+      ).bind(context.providerId).first<{used_bytes: number | string}>()
+      if (exceedsProviderStorageLimit(Number(storage?.used_bytes ?? 0), input.byteSize)) {
+        throw new MarketplaceError(422, 'provider_storage_limit_exceeded', 'Provider storage limit exceeded')
+      }
 
       const id = crypto.randomUUID()
       const extension = input.mimeType.includes('png') ? 'png'
@@ -485,7 +529,8 @@ export class MarketplaceService {
 
   async finalizeUpload(userId: string, assetId: string, bucket: PrivateBucket | undefined): Promise<unknown> {
     if (!bucket) throw new MarketplaceError(503, 'storage_unavailable', 'Private upload storage is not configured')
-    return this.database.transaction(async (db: Database) => {
+    try {
+      return await this.database.transaction(async (db: Database) => {
       const context = await providerContext(db, userId)
       const asset = await db.prepare(
         'SELECT * FROM marketplace_assets WHERE id = ?1 AND provider_profile_id = ?2 FOR UPDATE',
@@ -498,13 +543,35 @@ export class MarketplaceService {
       if (object.byteSize !== Number(asset.byte_size) || object.contentType !== asset.mime_type) {
         throw new MarketplaceError(422, 'upload_mismatch', 'The uploaded object does not match the declared file')
       }
+      const objectBytes = await bucket.getExact(asset.storage_key, 'bytes=0-65535')
+      if (!objectBytes) throw new MarketplaceError(422, 'upload_missing', 'The uploaded object was not found')
+      const bytes = new Uint8Array(await new Response(objectBytes.body).arrayBuffer())
+      const metadata = typeof asset.metadata === 'string' ? JSON.parse(asset.metadata) : asset.metadata ?? {}
+      const validationErrors = validateInspectedUpload({
+        declaredMimeType: asset.mime_type,
+        kind: asset.kind,
+        metadata,
+        inspected: inspectUpload(bytes),
+      })
+      if (validationErrors.length > 0) {
+        throw new MarketplaceError(422, 'upload_validation_failed', 'The uploaded media failed validation', validationErrors)
+      }
       const row = await inserted<any>(db.prepare(
         `UPDATE marketplace_assets SET processing_status = 'ready'
          WHERE id = ?1 AND provider_profile_id = ?2 RETURNING *`,
       ).bind(assetId, context.providerId))
       await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'asset', entityId: assetId, action: 'asset.upload_finalized', before: asset, after: row})
       return row
-    })
+      })
+    } catch (error) {
+      if (error instanceof MarketplaceError && error.code === 'upload_validation_failed') {
+        await this.database.prepare(
+          `UPDATE marketplace_assets SET processing_status = 'failed', metadata = metadata || ?1::jsonb
+           WHERE id = ?2`,
+        ).bind(JSON.stringify({validationErrors: error.details}), assetId).run()
+      }
+      throw error
+    }
   }
 
   async createRightsDeclaration(userId: string, input: RightsDeclarationInput): Promise<unknown> {

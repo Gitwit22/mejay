@@ -1,4 +1,4 @@
-import type {DiscoveryFeaturesInput, ReleaseAdminCommand} from './admin-schemas'
+import type {DiscoveryFeaturesInput, ProviderAdminCommand, ReleaseAdminCommand, SplitDisputeInput} from './admin-schemas'
 import {MarketplaceError} from './service'
 import {getReleaseSaleReadiness} from './sale-policy'
 
@@ -175,6 +175,77 @@ export class MarketplaceAdminService {
         ).bind(crypto.randomUUID(), artistId, position, userId).run()
       }
       return input
+    })
+  }
+
+  async commandProvider(userId: string, providerId: string, command: ProviderAdminCommand): Promise<unknown> {
+    return this.database.transaction(async (db) => {
+      const staff = await db.prepare('SELECT role FROM marketplace_staff WHERE user_id = ?1')
+        .bind(userId).first<{role: Staff['role']}>()
+      if (staff?.role !== 'admin') throw new MarketplaceError(403, 'marketplace_admin_required', 'Marketplace admin access is required')
+      const provider = await db.prepare(
+        'SELECT * FROM provider_profiles WHERE id = ?1 FOR UPDATE',
+      ).bind(providerId).first<Record<string, unknown> & {suspended_at: string | null}>()
+      if (!provider) throw new MarketplaceError(404, 'not_found', 'Provider profile was not found')
+      const suspend = command.action === 'suspend'
+      if (suspend === Boolean(provider.suspended_at)) {
+        throw new MarketplaceError(409, suspend ? 'provider_already_suspended' : 'provider_not_suspended', 'Provider suspension state is unchanged')
+      }
+      const row = await db.prepare(
+        `UPDATE provider_profiles SET suspended_at = CASE WHEN ?1 THEN CURRENT_TIMESTAMP ELSE NULL END,
+          suspension_reason = CASE WHEN ?1 THEN ?2 ELSE NULL END, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?3 RETURNING *`,
+      ).bind(suspend, command.reason, providerId).first()
+      if (suspend) {
+        await db.prepare(
+          `UPDATE products SET active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE provider_profile_id = ?1`,
+        ).bind(providerId).run()
+      }
+      await db.prepare(
+        `INSERT INTO marketplace_operational_incidents
+          (id, provider_profile_id, incident_type, details)
+         VALUES (?1, ?2, ?3, ?4)`,
+      ).bind(crypto.randomUUID(), providerId, suspend ? 'provider_suspended' : 'provider_reinstated', JSON.stringify({reason: command.reason})).run()
+      await db.prepare(
+        `INSERT INTO marketplace_audit_events
+          (id, provider_profile_id, actor_user_id, entity_type, entity_id, action, before_data, after_data, metadata)
+         VALUES (?1, ?2, ?3, 'provider', ?2, ?4, ?5, ?6, ?7)`,
+      ).bind(
+        crypto.randomUUID(), providerId, userId, `provider.${command.action}`,
+        JSON.stringify(provider), JSON.stringify(row), JSON.stringify({reason: command.reason}),
+      ).run()
+      return row
+    })
+  }
+
+  async recordSplitDispute(userId: string, input: SplitDisputeInput): Promise<{id: string}> {
+    return this.database.transaction(async (db) => {
+      const staff = await db.prepare('SELECT role FROM marketplace_staff WHERE user_id = ?1')
+        .bind(userId).first<{role: Staff['role']}>()
+      if (staff?.role !== 'admin') throw new MarketplaceError(403, 'marketplace_admin_required', 'Marketplace admin access is required')
+      const split = await db.prepare(
+        `SELECT id FROM revenue_split_sets WHERE id = ?1 AND provider_profile_id = ?2`,
+      ).bind(input.splitSetId, input.providerId).first<{id: string}>()
+      if (!split) throw new MarketplaceError(404, 'split_set_not_found', 'Revenue split set was not found')
+      if (input.orderId) {
+        const order = await db.prepare(
+          'SELECT id FROM marketplace_orders WHERE id = ?1 AND provider_profile_id = ?2',
+        ).bind(input.orderId, input.providerId).first<{id: string}>()
+        if (!order) throw new MarketplaceError(404, 'order_not_found', 'Marketplace order was not found')
+      }
+      const id = crypto.randomUUID()
+      const details = {splitSetId: input.splitSetId, reason: input.reason}
+      await db.prepare(
+        `INSERT INTO marketplace_operational_incidents
+          (id, provider_profile_id, order_id, incident_type, details)
+         VALUES (?1, ?2, ?3, 'split_dispute', ?4)`,
+      ).bind(id, input.providerId, input.orderId ?? null, JSON.stringify(details)).run()
+      await db.prepare(
+        `INSERT INTO marketplace_audit_events
+          (id, provider_profile_id, actor_user_id, entity_type, entity_id, action, after_data, metadata)
+         VALUES (?1, ?2, ?3, 'revenue_split_set', ?4, 'revenue_splits.disputed', ?5, ?6)`,
+      ).bind(crypto.randomUUID(), input.providerId, userId, input.splitSetId, JSON.stringify(details), JSON.stringify({orderId: input.orderId ?? null})).run()
+      return {id}
     })
   }
 

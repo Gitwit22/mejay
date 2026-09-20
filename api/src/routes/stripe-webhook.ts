@@ -1,6 +1,7 @@
 import {cadenceFromPrice, persistSubscriptionState, stripeTimestampToIso, type SubscriptionState} from '../services/billing'
 import {CommerceService} from '../marketplace/commerce-service'
 import {ConnectService} from '../marketplace/connect-service'
+import {claimStripeWebhookEvent, finalizeStripeWebhookEvent} from '../marketplace/webhook-events'
 
 type D1Database = any
 
@@ -151,7 +152,7 @@ function parseStripeSignatureHeader(header: string): {timestamp: string | null; 
   return {timestamp: t, signatures: v1}
 }
 
-async function verifyStripeWebhook(args: {payload: string; header: string; secret: string}): Promise<boolean> {
+export async function verifyStripeWebhook(args: {payload: string; header: string; secret: string; nowSeconds?: number}): Promise<boolean> {
   const {payload, header, secret} = args
   const parsed = parseStripeSignatureHeader(header)
   if (!parsed.timestamp || parsed.signatures.length === 0) return false
@@ -160,7 +161,7 @@ async function verifyStripeWebhook(args: {payload: string; header: string; secre
   // https://stripe.com/docs/webhooks/signatures
   const ts = Number(parsed.timestamp)
   if (!Number.isFinite(ts) || ts <= 0) return false
-  const now = Math.floor(Date.now() / 1000)
+  const now = args.nowSeconds ?? Math.floor(Date.now() / 1000)
   const toleranceSeconds = 5 * 60
   if (Math.abs(now - ts) > toleranceSeconds) return false
 
@@ -213,6 +214,8 @@ async function subscriptionUserId(db: D1Database, sub: any): Promise<string | nu
 
 export const onRequest = async (context: {request: Request; env: Env}): Promise<Response> => {
   const {request, env} = context
+  let claimedEventId: string | null = null
+  let webhookError: unknown
 
   if (request.method === 'OPTIONS') return json({ok: true}, {status: 200})
   if (request.method !== 'POST') return json({error: 'Method not allowed'}, {status: 405})
@@ -231,6 +234,11 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     const type = String(event?.type ?? '')
     const obj = event?.data?.object
     const eventCreatedAt = stripeTimestampToIso(event?.created) ?? new Date().toISOString()
+    const eventId = typeof event?.id === 'string' ? event.id.trim() : ''
+    if (!eventId) return json({error: 'Missing event ID'}, {status: 400})
+    const claimed = await claimStripeWebhookEvent(env.DB, {id: eventId, type, createdAt: eventCreatedAt})
+    if (!claimed) return json({ok: true, duplicate: true})
+    claimedEventId = eventId
 
     if (type === 'account.updated' && typeof obj?.id === 'string') {
       await new ConnectService(env.DB, secretKey).syncAccount(obj)
@@ -303,12 +311,23 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     }
 
     if (type === 'charge.dispute.created') {
-      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).handleDispute(obj, true)
+      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).handleDispute(obj, true, eventId)
       return json({ok: true})
     }
 
     if (type === 'charge.dispute.closed') {
-      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).handleDispute(obj, false)
+      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).handleDispute(obj, false, eventId)
+      return json({ok: true})
+    }
+
+    if (type === 'transfer.failed') {
+      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).handleTransferFailed(obj, eventId)
+      return json({ok: true})
+    }
+
+    if (type === 'payout.failed') {
+      const accountId = typeof event?.account === 'string' ? event.account : null
+      await new ConnectService(env.DB, secretKey).handlePayoutFailed(accountId, obj, eventId)
       return json({ok: true})
     }
 
@@ -351,8 +370,17 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
 
     return json({ok: true, ignored: true})
   } catch (e) {
+    webhookError = e
     console.error('[stripe-webhook] Handler failed', e)
     // 500 triggers retry by Stripe.
     return json({error: 'Webhook error'}, {status: 500})
+  } finally {
+    if (claimedEventId) {
+      try {
+        await finalizeStripeWebhookEvent(env.DB, claimedEventId, webhookError)
+      } catch (finalizeError) {
+        console.error('[stripe-webhook] Failed to finalize event state', {eventId: claimedEventId, finalizeError})
+      }
+    }
   }
 }

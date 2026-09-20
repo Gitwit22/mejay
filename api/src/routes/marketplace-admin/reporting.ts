@@ -1,7 +1,7 @@
 import {ZodError} from 'zod'
 
 import {IndustryReportingService} from '../../marketplace/industry-reporting-service'
-import {reportingBatchResolutionSchema, reportingBatchSchema, reportingDateSchema} from '../../marketplace/industry-reporting-schemas'
+import {reportingBatchResolutionSchema, reportingBatchSchema, reportingCorrectionSchema, reportingDateSchema} from '../../marketplace/industry-reporting-schemas'
 import {MarketplaceError} from '../../marketplace/service'
 import {getSessionUserId, readJson, type EnvWithDb} from '../_auth'
 
@@ -76,4 +76,11 @@ export const resolveIndustryReportingBatch = handle(async (service, userId, {req
   const input = reportingBatchResolutionSchema.parse(await readJson(request))
   await service.resolveBatch(userId, batchId, input.status, input.reason)
   return json({ok: true})
+})
+
+export const createIndustryReportingCorrection = handle(async (service, userId, {request, params}) => {
+  const eventId = params.eventId?.trim()
+  if (!eventId) return json({ok: false, error: 'missing_parameter'}, {status: 400})
+  const input = reportingCorrectionSchema.parse(await readJson(request))
+  return json({ok: true, data: await service.createCorrection(userId, eventId, input)}, {status: 201})
 })

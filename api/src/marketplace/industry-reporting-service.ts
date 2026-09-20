@@ -106,15 +106,39 @@ function eventForValidation(row: EventRow): Omit<ReportingEventSnapshot, 'valida
   }
 }
 
+export function applyReportingCorrection(row: EventRow): EventRow {
+  if (row.correction_type !== 'replace' || !row.replacement_data) return row
+  let replacement: Record<string, unknown>
+  try {
+    const parsed = typeof row.replacement_data === 'string' ? JSON.parse(row.replacement_data) as unknown : row.replacement_data
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return row
+    replacement = parsed as Record<string, unknown>
+  } catch {
+    return row
+  }
+  const allowed = new Set([
+    'isrc', 'upc', 'artistName', 'releaseTitle', 'trackTitle', 'stripeTransactionId',
+    'currency', 'priceMinor', 'quantity', 'territory', 'occurredAt',
+  ])
+  return Object.fromEntries(Object.entries({...row, ...Object.fromEntries(
+    Object.entries(replacement).filter(([key]) => allowed.has(key)),
+  )})) as EventRow
+}
+
 const eventSelect = `SELECT event.id, event.order_id AS "orderId", event.order_item_id AS "orderItemId",
   event.ledger_transaction_id AS "ledgerTransactionId", event.track_id AS "trackId",
   event.event_type AS "eventType", event.isrc, event.upc, event.artist_name AS "artistName",
   event.release_title AS "releaseTitle", event.track_title AS "trackTitle",
   event.stripe_transaction_id AS "stripeTransactionId", event.currency,
   event.price_minor AS "priceMinor", event.quantity, event.territory, event.occurred_at AS "occurredAt",
-  state.validation_status, state.validation_errors, state.batch_id
+  state.validation_status, state.validation_errors, state.batch_id,
+  correction.correction_type, correction.replacement_data
  FROM marketplace_reporting_events event
  JOIN marketplace_reporting_event_states state ON state.event_id = event.id`
+  + ` LEFT JOIN LATERAL (
+    SELECT item.correction_type, item.replacement_data FROM marketplace_reporting_corrections item
+    WHERE item.reporting_event_id = event.id ORDER BY item.created_at DESC, item.id DESC LIMIT 1
+  ) correction ON TRUE`
 
 export class IndustryReportingService {
   constructor(private readonly database: Database) {}
@@ -128,11 +152,13 @@ export class IndustryReportingService {
 
   private async validateDate(database: Database, reportDate: string): Promise<{ready: number; metadataErrors: number}> {
     const {results} = await database.prepare(
-      `${eventSelect} WHERE (event.occurred_at AT TIME ZONE 'UTC')::date = ?1::date AND state.batch_id IS NULL ORDER BY event.occurred_at, event.id`,
+      `${eventSelect} WHERE (event.occurred_at AT TIME ZONE 'UTC')::date = ?1::date AND state.batch_id IS NULL
+        AND COALESCE(correction.correction_type, '') <> 'void' ORDER BY event.occurred_at, event.id`,
     ).bind(reportDate).all<EventRow>()
     let ready = 0
     let metadataErrors = 0
-    for (const event of results) {
+    for (const source of results) {
+      const event = applyReportingCorrection(source)
       const errors = validateReportingMetadata(eventForValidation(event))
       const status = errors.length === 0 ? 'ready' : 'metadata_error'
       if (status === 'ready') ready += 1
@@ -143,6 +169,35 @@ export class IndustryReportingService {
       ).bind(status, JSON.stringify(errors), event.id).run()
     }
     return {ready, metadataErrors}
+  }
+
+  async createCorrection(userId: string, eventId: string, input: {
+    correctionType: 'void' | 'replace'
+    reason: string
+    replacementData?: Record<string, unknown>
+  }): Promise<{id: string}> {
+    return this.database.transaction(async (database) => {
+      await this.requireStaff(database, userId, true)
+      const event = await database.prepare(
+        `SELECT event.id, event.order_id, state.batch_id FROM marketplace_reporting_events event
+         JOIN marketplace_reporting_event_states state ON state.event_id = event.id
+         WHERE event.id = ?1 FOR UPDATE OF state`,
+      ).bind(eventId).first<{id: string; order_id: string; batch_id: string | null}>()
+      if (!event) throw new MarketplaceError(404, 'reporting_event_not_found', 'Reporting event was not found')
+      if (event.batch_id) throw new MarketplaceError(409, 'reporting_event_batched', 'Batched reporting events cannot be corrected in place')
+      const id = crypto.randomUUID()
+      await database.prepare(
+        `INSERT INTO marketplace_reporting_corrections
+          (id, reporting_event_id, correction_type, reason, replacement_data, created_by_user_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+      ).bind(id, eventId, input.correctionType, input.reason, input.replacementData ? JSON.stringify(input.replacementData) : null, userId).run()
+      await database.prepare(
+        `INSERT INTO marketplace_audit_events
+          (id, actor_user_id, entity_type, entity_id, action, after_data, metadata)
+         VALUES (?1, ?2, 'reporting_event', ?3, 'reporting.correction_created', ?4, ?5)`,
+      ).bind(crypto.randomUUID(), userId, eventId, JSON.stringify({id, ...input}), JSON.stringify({orderId: event.order_id})).run()
+      return {id}
+    })
   }
 
   async getDashboard(userId: string, reportDate: string): Promise<IndustryReportingDashboard> {
@@ -157,7 +212,10 @@ export class IndustryReportingService {
        FROM marketplace_reporting_events event
        JOIN marketplace_reporting_event_states state ON state.event_id = event.id
        LEFT JOIN marketplace_reporting_batches batch ON batch.id = state.batch_id
-       WHERE (event.occurred_at AT TIME ZONE 'UTC')::date = ?1::date`,
+       LEFT JOIN LATERAL (SELECT item.correction_type FROM marketplace_reporting_corrections item
+         WHERE item.reporting_event_id = event.id ORDER BY item.created_at DESC, item.id DESC LIMIT 1) correction ON TRUE
+       WHERE (event.occurred_at AT TIME ZONE 'UTC')::date = ?1::date
+         AND COALESCE(correction.correction_type, '') <> 'void'`,
     ).bind(reportDate).first<IndustryReportingDashboard['counts']>()
     const events = await this.database.prepare(
       `${eventSelect} WHERE (event.occurred_at AT TIME ZONE 'UTC')::date = ?1::date ORDER BY event.occurred_at DESC, event.id`,
@@ -208,7 +266,9 @@ export class IndustryReportingService {
       await this.validateDate(database, reportDate)
       const {results} = await database.prepare(
         `${eventSelect} WHERE (event.occurred_at AT TIME ZONE 'UTC')::date = ?1::date
-          AND state.validation_status = 'ready' AND state.batch_id IS NULL ORDER BY event.occurred_at, event.id FOR UPDATE OF state`,
+          AND state.validation_status = 'ready' AND state.batch_id IS NULL
+          AND COALESCE(correction.correction_type, '') <> 'void'
+          ORDER BY event.occurred_at, event.id FOR UPDATE OF state`,
       ).bind(reportDate).all<EventRow>()
       if (results.length === 0) throw new MarketplaceError(409, 'reporting_batch_empty', 'No validated reporting events are ready for this date')
       const id = crypto.randomUUID()
@@ -218,7 +278,7 @@ export class IndustryReportingService {
          VALUES (?1, ?2::date, ?3, ?4, ?5)
          RETURNING id, report_date::text, status, event_count, export_format, submitted_at,
            resolved_at, rejection_reason, created_at`,
-      ).bind(id, reportDate, results.length, buildReportingCsv(results), userId).first<Omit<BatchRow, 'export_data'>>()
+      ).bind(id, reportDate, results.length, buildReportingCsv(results.map(applyReportingCorrection)), userId).first<Omit<BatchRow, 'export_data'>>()
       if (!row) throw new Error('Reporting batch insert failed')
       for (const event of results) {
         await database.prepare(
@@ -259,4 +319,7 @@ export class IndustryReportingService {
   }
 }
 
-type EventRow = IndustryReportingExportEvent
+export type EventRow = IndustryReportingExportEvent & {
+  correction_type?: 'void' | 'replace' | null
+  replacement_data?: Record<string, unknown> | string | null
+}

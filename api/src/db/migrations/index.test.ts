@@ -24,7 +24,26 @@ describe('runMigrations', () => {
       {version: 8, name: 'marketplace_sale_policy'},
       {version: 9, name: 'marketplace_reporting'},
       {version: 10, name: 'industry_reporting'},
+      {version: 11, name: 'production_hardening'},
     ])
+  })
+
+  it('adds production hardening invariants and append-only correction history', () => {
+    const migration = migrations.find(({version}) => version === 11)
+    expect(migration?.sql).toContain('uq_releases_provider_fingerprint')
+    expect(migration?.sql).toContain('provider_suspension_complete')
+    expect(migration?.sql).toContain('CREATE TABLE marketplace_operational_incidents')
+    expect(migration?.sql).toContain('CREATE TABLE marketplace_reporting_corrections')
+    expect(migration?.sql).toContain('marketplace_reporting_corrections_append_only')
+    expect(migration?.sql).toContain("'|legacy-duplicate|' || release.id")
+    expect(migration?.sql).toContain('stripe_destination_account_id')
+    const commerce = migrations.find(({version}) => version === 6)
+    const foundation = migrations.find(({version}) => version === 2)
+    const drafts = migrations.find(({version}) => version === 4)
+    expect(commerce?.sql).toContain('stripe_checkout_session_id TEXT NOT NULL UNIQUE')
+    expect(foundation?.sql).toContain('uq_isrc_assignments_active_isrc')
+    expect(drafts?.sql).toContain('ON CONFLICT (prefix, assignment_year) DO UPDATE')
+    expect(foundation?.sql).toContain('uq_revenue_split_sets_active_track')
   })
 
   it('adds nullable ISO territory data for provider reporting', () => {
