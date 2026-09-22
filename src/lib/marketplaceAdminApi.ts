@@ -126,7 +126,7 @@ export async function downloadIsrcRegistryExport(filters: {
   provider?: string
   year?: string
 } = {}): Promise<void> {
-  const response = await apiFetch(getIsrcExportUrl(filters), {cache: 'no-store'})
+  const response = await fetch(getIsrcExportUrl(filters), {cache: 'no-store', credentials: 'include'})
   if (!response.ok) throw new Error(`Export failed (${response.status})`)
   const blob = await response.blob()
   const disposition = response.headers.get('content-disposition') || ''

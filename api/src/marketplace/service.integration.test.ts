@@ -216,8 +216,11 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
         authorizeAssignment: true,
       }, {prefix: 'QTA3L', countryCode: 'QT', registrantCode: 'A3L'}) as Promise<{isrc: string}>,
     ])
-    const registry = await pool.query<{count: number; distinct_count: number}>(
-      `SELECT COUNT(*)::integer AS count, COUNT(DISTINCT isrc)::integer AS distinct_count
+    const registry = await pool.query<{count: number; distinct_count: number; certifications: number}>(
+      `SELECT
+         COUNT(*)::integer AS count,
+         COUNT(DISTINCT isrc)::integer AS distinct_count,
+         COUNT(rights_certification_id)::integer AS certifications
        FROM isrc_registry WHERE prefix = 'QTA3L' AND assignment_year = $1`,
       [currentYear],
     )
@@ -226,7 +229,7 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       `QTA3L${String(currentYear).padStart(2, '0')}00001`,
       `QTA3L${String(currentYear).padStart(2, '0')}00002`,
     ])
-    expect(registry.rows[0]).toEqual({count: 2, distinct_count: 2})
+    expect(registry.rows[0]).toEqual({count: 2, distinct_count: 2, certifications: 2})
   })
 
   it('creates the complete catalog and advances it to live', async () => {

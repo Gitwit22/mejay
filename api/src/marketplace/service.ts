@@ -695,6 +695,30 @@ export class MarketplaceService {
         throw new MarketplaceError(409, 'isrc_range_exhausted', `The ${assignmentYear} ISRC range is exhausted`)
       }
 
+      const isrc = buildGeneratedIsrc(config.prefix, assignmentYear, counter.next_number)
+      const id = crypto.randomUUID()
+      await db.prepare(
+        `INSERT INTO isrc_registry
+          (id, isrc, track_id, provider_profile_id, artist_id, rights_owner_id, prefix, country_code, registrant_code,
+           assignment_year, designation, source, assignment_type, status, original_track_id, assigned_by_user_id,
+           track_title, artist_name, provider_name, rights_owner_name)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?4, ?6, ?7, ?8, ?9, ?10, 'agency', 'MEJAY_ASSIGNED', 'ASSIGNED', ?3, ?11, ?12, ?13, ?14, ?14)`,
+      ).bind(
+        id,
+        isrc,
+        trackId,
+        context.providerId,
+        track.artist_id,
+        config.prefix,
+        config.countryCode,
+        config.registrantCode,
+        assignmentYear,
+        counter.next_number,
+        userId,
+        track.title,
+        track.artist_name,
+        track.provider_name,
+      ).run()
       const certificationId = crypto.randomUUID()
       await db.prepare(
         `INSERT INTO isrc_rights_certifications
@@ -709,32 +733,11 @@ export class MarketplaceService {
         input.neverAssignedIsrc,
         input.authorizeAssignment,
       ).run()
-
-      const isrc = buildGeneratedIsrc(config.prefix, assignmentYear, counter.next_number)
-      const id = crypto.randomUUID()
       await db.prepare(
-        `INSERT INTO isrc_registry
-          (id, isrc, track_id, provider_profile_id, artist_id, rights_owner_id, prefix, country_code, registrant_code,
-           assignment_year, designation, source, assignment_type, status, original_track_id, assigned_by_user_id,
-           rights_certification_id, track_title, artist_name, provider_name, rights_owner_name)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?4, ?6, ?7, ?8, ?9, ?10, 'agency', 'MEJAY_ASSIGNED', 'ASSIGNED', ?3, ?11, ?12, ?13, ?14, ?15, ?15)`,
-      ).bind(
-        id,
-        isrc,
-        trackId,
-        context.providerId,
-        track.artist_id,
-        config.prefix,
-        config.countryCode,
-        config.registrantCode,
-        assignmentYear,
-        counter.next_number,
-        userId,
-        certificationId,
-        track.title,
-        track.artist_name,
-        track.provider_name,
-      ).run()
+        `UPDATE isrc_registry
+         SET rights_certification_id = ?2, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?1`,
+      ).bind(id, certificationId).run()
       await db.prepare(
         `UPDATE isrc_sequences
          SET next_number = ?3, updated_at = CURRENT_TIMESTAMP
