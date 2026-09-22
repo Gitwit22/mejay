@@ -111,7 +111,7 @@ export function StarterPacksOnboardingModal(props: StarterPacksOnboardingModalPr
                 <Label htmlFor={`starter-pack-${pack.id}`} className="flex flex-1 items-start gap-3 cursor-pointer">
                   <img
                     src={pack.artworkUrl}
-                    alt={`${pack.title} artwork`}
+                    alt=""
                     className="h-20 w-20 rounded-lg object-cover"
                   />
                   <div className="grid gap-1 leading-tight">

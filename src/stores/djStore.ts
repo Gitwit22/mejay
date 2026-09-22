@@ -9,7 +9,7 @@ import { TEMPO_PRESET_RATIOS, TEMPO_PRESET_MAX_STRETCH, computePresetTempo } fro
 import { usePlanStore } from '@/stores/planStore';
 import { toast } from '@/hooks/use-toast';
 import { detectTrueEndTime, detectTrueStartTime } from '@/lib/trueEndTime';
-import { getStarterPackTracks, isStarterPackId, type StarterPackId, valentine2026Pack } from '@/config/starterPacks';
+import { getStarterPackTracks, isStarterPackId, type StarterPackId } from '@/config/starterPacks';
 
 interface DeckState {
   trackId: string | null;
@@ -712,7 +712,7 @@ export const useDJStore = create<DJState>()(
     repeatMode: 'playlist',
   };
 
-  const seedValentine2026StarterTracksIfEmpty = async (): Promise<boolean> => {
+  const seedStarterTracksIfLibraryEmpty = async (packIds: StarterPackId[]): Promise<boolean> => {
     if (didAttemptStarterSeedThisSession) return false;
     didAttemptStarterSeedThisSession = true;
 
@@ -727,10 +727,13 @@ export const useDJStore = create<DJState>()(
       if (get().tracks.length > 0) return false;
     }
 
+    const tracksToSeed = getStarterPackTracks(packIds);
+    if (tracksToSeed.length === 0) return false;
+
     // Fetch starter MP3s from /public and store them as blobs like normal imports.
     const seeded: Track[] = [];
 
-    for (const starter of valentine2026Pack) {
+    for (const starter of tracksToSeed) {
       try {
         const response = await fetch(starter.url);
         if (!response.ok) {
@@ -1222,9 +1225,9 @@ export const useDJStore = create<DJState>()(
       if (ids.length === 0) return false;
 
       const validIds = ids.filter((packId): packId is StarterPackId => isStarterPackId(packId));
-      if (!validIds.includes('valentine-2026')) return false;
+      if (validIds.length === 0) return false;
 
-      const seeded = await seedValentine2026StarterTracksIfEmpty();
+      const seeded = await seedStarterTracksIfLibraryEmpty(validIds);
       if (seeded) {
         // Refresh state from IndexedDB when available.
         try {
