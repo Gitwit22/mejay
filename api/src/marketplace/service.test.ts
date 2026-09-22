@@ -122,7 +122,11 @@ describe('release state machine', () => {
 
   it('fails generated assignment when the purchased prefix is not configured', async () => {
     const service = new MarketplaceService({} as never)
-    await expect(service.assignGeneratedIsrc('user-1', 'track-1', null)).rejects.toMatchObject({
+    await expect(service.assignGeneratedIsrc('user-1', 'track-1', {
+      controlsRecording: true,
+      neverAssignedIsrc: true,
+      authorizeAssignment: true,
+    }, null)).rejects.toMatchObject({
       status: 503,
       code: 'isrc_generation_unavailable',
     })

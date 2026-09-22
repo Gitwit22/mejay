@@ -4,6 +4,7 @@ import {ArrowLeft, Check, ChevronRight, Disc3, Upload} from 'lucide-react'
 import {Link, useNavigate, useParams} from 'react-router-dom'
 
 import {Button} from '@/components/ui/button'
+import {Checkbox} from '@/components/ui/checkbox'
 import {Input} from '@/components/ui/input'
 import {Label} from '@/components/ui/label'
 import {Switch} from '@/components/ui/switch'
@@ -159,13 +160,57 @@ function TrackMetadataForm({track, artistId, releaseId}: {track: ProviderTrack; 
 }
 
 function IsrcStep({detail}: {detail: ProviderReleaseDetail}) {
-  return <><StepHeading title="ISRC" detail="Enter an existing code or permanently assign the next MEJay QTA3L code." /><div className="divide-y divide-white/10 border-y border-white/10">{detail.tracks.map((track) => <IsrcRow key={track.id} track={track} releaseId={detail.release.id} />)}</div>{detail.tracks.length === 0 && <p className="text-sm text-zinc-500">Add tracks before assigning ISRCs.</p>}</>
+  return <><StepHeading title="ISRC" detail="Register an existing ISRC or certify the recording so MEJay can permanently assign the next QTA3L code." /><div className="divide-y divide-white/10 border-y border-white/10">{detail.tracks.map((track) => <IsrcRow key={track.id} track={track} releaseId={detail.release.id} />)}</div>{detail.tracks.length === 0 && <p className="text-sm text-zinc-500">Add tracks before assigning ISRCs.</p>}</>
 }
 
 function IsrcRow({track, releaseId}: {track: ProviderTrack; releaseId: string}) {
-  const queryClient = useQueryClient(), [value, setValue] = useState('')
-  const assign = useMutation({mutationFn: (generated: boolean) => generated ? generateProviderIsrc(track.id) : assignProviderIsrc(track.id, value), onSuccess: async () => {setValue(''); await queryClient.invalidateQueries({queryKey: ['provider', 'release', releaseId]})}})
-  return <div className="py-5"><div className="flex flex-wrap items-center gap-3"><p className="min-w-40 flex-1 font-medium">{track.track_number}. {track.title}</p>{track.isrc ? <span className="font-mono text-sm text-emerald-400">{formatIsrc(track.isrc)}</span> : <><Input className="max-w-56 font-mono" value={value} onChange={(event) => setValue(event.target.value)} placeholder="QT-A3L-YY-NNNNN" /><Button variant="outline" disabled={!value.trim() || assign.isPending} onClick={() => assign.mutate(false)}>Enter ISRC</Button><Button disabled={assign.isPending} onClick={() => assign.mutate(true)}>Assign MEJay ISRC</Button></>}</div>{assign.isError && <p className="mt-2 text-sm text-red-400">{assign.error.message}</p>}</div>
+  const queryClient = useQueryClient()
+  const [value, setValue] = useState('')
+  const [controlsRecording, setControlsRecording] = useState(false)
+  const [neverAssignedIsrc, setNeverAssignedIsrc] = useState(false)
+  const [authorizeAssignment, setAuthorizeAssignment] = useState(false)
+  const mejayReady = controlsRecording && neverAssignedIsrc && authorizeAssignment
+  const assign = useMutation({
+    mutationFn: (generated: boolean) => generated
+      ? generateProviderIsrc(track.id, {controlsRecording: true, neverAssignedIsrc: true, authorizeAssignment: true})
+      : assignProviderIsrc(track.id, value),
+    onSuccess: async () => {
+      setValue('')
+      setControlsRecording(false)
+      setNeverAssignedIsrc(false)
+      setAuthorizeAssignment(false)
+      await queryClient.invalidateQueries({queryKey: ['provider', 'release', releaseId]})
+    },
+  })
+  return <div className="space-y-4 py-5">
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <p className="font-medium">{track.track_number}. {track.title}</p>
+        <p className="mt-1 text-sm text-zinc-500">Does this recording already have an ISRC?</p>
+      </div>
+      {track.isrc && <div className="text-right">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-400">ISRC Assigned</p>
+        <p className="mt-1 font-mono text-sm text-emerald-300">{formatIsrc(track.isrc)}</p>
+      </div>}
+    </div>
+    {!track.isrc && <div className="grid gap-4 rounded-md border border-white/10 bg-[#141417] p-4 lg:grid-cols-2">
+      <div className="space-y-3">
+        <p className="text-sm font-medium text-zinc-100">Enter Existing ISRC</p>
+        <Input className="max-w-full font-mono" value={value} onChange={(event) => setValue(event.target.value)} placeholder="QT-A3L-YY-NNNNN" />
+        <Button variant="outline" disabled={!value.trim() || assign.isPending} onClick={() => assign.mutate(false)}>Register existing ISRC</Button>
+      </div>
+      <div className="space-y-3">
+        <p className="text-sm font-medium text-zinc-100">Have MEJay Assign One</p>
+        <div className="space-y-2 text-sm text-zinc-300">
+          <Label className="flex items-start gap-3"><Checkbox checked={controlsRecording} onCheckedChange={(checked) => setControlsRecording(checked === true)} /><span>I control this recording</span></Label>
+          <Label className="flex items-start gap-3"><Checkbox checked={neverAssignedIsrc} onCheckedChange={(checked) => setNeverAssignedIsrc(checked === true)} /><span>This recording has never received an ISRC</span></Label>
+          <Label className="flex items-start gap-3"><Checkbox checked={authorizeAssignment} onCheckedChange={(checked) => setAuthorizeAssignment(checked === true)} /><span>I authorize MEJay to assign the identifier</span></Label>
+        </div>
+        <Button disabled={!mejayReady || assign.isPending} onClick={() => assign.mutate(true)}>Have MEJay Assign One</Button>
+      </div>
+    </div>}
+    {assign.isError && <p className="text-sm text-red-400">{assign.error.message}</p>}
+  </div>
 }
 
 function formatIsrc(value: string) {const canonical = value.replace(/[-\s]/g, '').toUpperCase(); return canonical.length === 12 ? `${canonical.slice(0, 2)}-${canonical.slice(2, 5)}-${canonical.slice(5, 7)}-${canonical.slice(7)}` : value}

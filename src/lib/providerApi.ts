@@ -215,14 +215,18 @@ export async function uploadProviderAsset(input: UploadInput, file: File): Promi
 }
 
 export function assignProviderIsrc(trackId: string, isrc: string): Promise<{isrc: string}> {
-  return request(`/api/marketplace/tracks/${encodeURIComponent(trackId)}/isrc-assignments`, {
-    method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({isrc, source: 'provider'}),
+  return request(`/api/tracks/${encodeURIComponent(trackId)}/isrc/existing`, {
+    method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({isrc}),
   })
 }
 
-export function generateProviderIsrc(trackId: string): Promise<{isrc: string}> {
-  return request(`/api/marketplace/tracks/${encodeURIComponent(trackId)}/isrc-assignments/generated`, {
-    method: 'POST', headers: {'content-type': 'application/json'}, body: '{}',
+export function generateProviderIsrc(trackId: string, input: {
+  controlsRecording: true
+  neverAssignedIsrc: true
+  authorizeAssignment: true
+}): Promise<{isrc: string}> {
+  return request(`/api/tracks/${encodeURIComponent(trackId)}/isrc/assign`, {
+    method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input),
   })
 }
 

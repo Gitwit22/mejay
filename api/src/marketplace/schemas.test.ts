@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {assetSchema, isrcAssignmentSchema, priceSchema, productSchema, revenueSplitsSchema, uploadInitSchema} from './schemas'
+import {assetSchema, generatedIsrcSchema, isrcAssignmentSchema, priceSchema, productSchema, revenueSplitsSchema, uploadInitSchema} from './schemas'
 
 describe('marketplace upload validation', () => {
   it('accepts square high-resolution artwork', () => {
@@ -32,6 +32,19 @@ describe('marketplace request schemas', () => {
       isrc: 'USABC2612345',
       source: 'provider',
     })
+  })
+
+  it('requires all three MEJay rights certifications before generation', () => {
+    expect(generatedIsrcSchema.safeParse({
+      controlsRecording: true,
+      neverAssignedIsrc: true,
+      authorizeAssignment: true,
+    }).success).toBe(true)
+    expect(generatedIsrcSchema.safeParse({
+      controlsRecording: true,
+      neverAssignedIsrc: false,
+      authorizeAssignment: true,
+    }).success).toBe(false)
   })
 
   it('requires exactly one valid product target', () => {
