@@ -16,6 +16,7 @@ type Database = {
 
 type Staff = {role: 'reviewer' | 'admin'; protected_owner: boolean}
 type Release = {id: string; provider_profile_id: string; status: string; version: number; scheduled_release_at: string | null}
+type IsrcRegistryFilters = {isrc?: string; track?: string; artist?: string; provider?: string; year?: number | null}
 
 const reviewActions = new Set<ReleaseAdminCommand['action']>(['start_review', 'approve', 'request_changes', 'reject'])
 const adminActions = new Set<ReleaseAdminCommand['action']>(['publish_now', 'schedule', 'publish_due', 'unpublish', 'takedown'])
@@ -57,14 +58,25 @@ async function insertAudit(db: Database, userId: string, release: Release, actio
   ).run()
 }
 
+async function requireStaff(database: Database, userId: string): Promise<{role: Staff['role']}> {
+  const staff = await database.prepare(
+    'SELECT role FROM marketplace_staff WHERE user_id = ?1',
+  ).bind(userId).first<{role: Staff['role']}>()
+  if (!staff) throw new MarketplaceError(403, 'marketplace_staff_required', 'Marketplace staff access is required')
+  return staff
+}
+
+function escapeCsvCell(value: unknown): string {
+  const text = value === null || value === undefined ? '' : String(value)
+  if (!/[",\n]/.test(text)) return text
+  return `"${text.replaceAll('"', '""')}"`
+}
+
 export class MarketplaceAdminService {
   constructor(private readonly database: Database) {}
 
   async getOverview(userId: string): Promise<unknown> {
-    const staff = await this.database.prepare(
-      'SELECT role FROM marketplace_staff WHERE user_id = ?1',
-    ).bind(userId).first<{role: Staff['role']}>()
-    if (!staff) throw new MarketplaceError(403, 'marketplace_staff_required', 'Marketplace staff access is required')
+    const staff = await requireStaff(this.database, userId)
 
     const pending = await this.database.prepare(
       `SELECT r.id, r.title, r.status, r.version, r.submitted_at, r.updated_at,
@@ -151,6 +163,113 @@ export class MarketplaceAdminService {
        ORDER BY LOWER(a.name)`,
     ).all()
     return {role: staff.role, counts, pending: pending.results, catalog: catalog.results, providers: providers.results, artists: artists.results, isrcs: isrcs.results, rights: rights.results, pricing: pricing.results, splits: splits.results, takedowns: takedowns.results, discovery: {featuredReleases: featuredReleases.results, featuredArtists: featuredArtists.results, eligibleReleases: catalog.results.filter((row) => (row as {status?: string}).status === 'LIVE'), eligibleArtists: eligibleArtists.results}}
+  }
+
+  async listIsrcRegistry(userId: string, filters: IsrcRegistryFilters = {}): Promise<Array<Record<string, unknown>>> {
+    await requireStaff(this.database, userId)
+    const year = Number.isInteger(filters.year) ? filters.year : null
+    const {results} = await this.database.prepare(
+      `SELECT
+        registry.id,
+        registry.isrc,
+        COALESCE(registry.track_title, track.title) AS track,
+        COALESCE(registry.artist_name, artist.name) AS artist,
+        COALESCE(registry.provider_name, provider.display_name) AS provider,
+        registry.assignment_type AS type,
+        registry.assigned_at AS assigned,
+        registry.status,
+        registry.assignment_year AS year
+       FROM isrc_registry registry
+       LEFT JOIN tracks track ON track.id = registry.track_id
+       LEFT JOIN artists artist ON artist.id = registry.artist_id
+       LEFT JOIN provider_profiles provider ON provider.id = registry.provider_profile_id
+       WHERE (?1 = '' OR registry.isrc ILIKE '%' || ?1 || '%')
+         AND (?2 = '' OR COALESCE(registry.track_title, track.title, '') ILIKE '%' || ?2 || '%')
+         AND (?3 = '' OR COALESCE(registry.artist_name, artist.name, '') ILIKE '%' || ?3 || '%')
+         AND (?4 = '' OR COALESCE(registry.provider_name, provider.display_name, '') ILIKE '%' || ?4 || '%')
+         AND (?5::integer IS NULL OR registry.assignment_year = ?5)
+       ORDER BY registry.assigned_at DESC, registry.isrc`,
+    ).bind(
+      filters.isrc?.trim() ?? '',
+      filters.track?.trim() ?? '',
+      filters.artist?.trim() ?? '',
+      filters.provider?.trim() ?? '',
+      year,
+    ).all<Record<string, unknown>>()
+    return results
+  }
+
+  async getIsrcRecord(userId: string, id: string): Promise<Record<string, unknown>> {
+    await requireStaff(this.database, userId)
+    const row = await this.database.prepare(
+      `SELECT
+        registry.id,
+        registry.isrc,
+        registry.track_id AS "trackId",
+        COALESCE(registry.track_title, track.title) AS track,
+        registry.artist_id AS "artistId",
+        COALESCE(registry.artist_name, artist.name) AS artist,
+        registry.provider_profile_id AS "providerId",
+        COALESCE(registry.provider_name, provider.display_name) AS provider,
+        registry.rights_owner_id AS "rightsOwnerId",
+        registry.rights_owner_name AS "rightsOwnerName",
+        registry.prefix,
+        registry.country_code AS "countryCode",
+        registry.registrant_code AS "registrantCode",
+        registry.assignment_year AS "assignmentYear",
+        LPAD(registry.designation::text, 5, '0') AS "designationCode",
+        registry.assignment_type AS "assignmentType",
+        registry.status,
+        registry.assigned_at AS "assignedAt",
+        registry.assigned_by_user_id AS "assignedByUserId",
+        registry.rights_certification_id AS "rightsCertificationId",
+        registry.created_at AS "createdAt",
+        registry.updated_at AS "updatedAt"
+       FROM isrc_registry registry
+       LEFT JOIN tracks track ON track.id = registry.track_id
+       LEFT JOIN artists artist ON artist.id = registry.artist_id
+       LEFT JOIN provider_profiles provider ON provider.id = registry.provider_profile_id
+       WHERE registry.id = ?1`,
+    ).bind(id).first<Record<string, unknown>>()
+    if (!row) throw new MarketplaceError(404, 'not_found', 'ISRC record was not found')
+    return row
+  }
+
+  async getIsrcSequence(userId: string, prefix = 'QTA3L', assignmentYear = new Date().getUTCFullYear() % 100): Promise<Record<string, unknown>> {
+    await requireStaff(this.database, userId)
+    const sequence = await this.database.prepare(
+      `SELECT prefix, assignment_year AS "assignmentYear", next_number AS "nextNumber"
+       FROM isrc_sequences
+       WHERE prefix = ?1 AND assignment_year = ?2`,
+    ).bind(prefix, assignmentYear).first<{prefix: string; assignmentYear: number; nextNumber: number}>()
+    return {
+      prefix,
+      assignmentYear,
+      nextNumber: sequence?.nextNumber ?? 1,
+      previewIsrc: `${prefix.slice(0, 2)}-${prefix.slice(2)}-${String(assignmentYear).padStart(2, '0')}-${String(sequence?.nextNumber ?? 1).padStart(5, '0')}`,
+    }
+  }
+
+  async exportIsrcRegistry(userId: string, filters: IsrcRegistryFilters = {}): Promise<{data: string; fileName: string}> {
+    const rows = await this.listIsrcRegistry(userId, filters)
+    const header = ['ISRC', 'Track', 'Artist', 'Provider', 'Type', 'Assigned', 'Status', 'Year']
+    const lines = [
+      header.join(','),
+      ...rows.map((row) => [
+        row.isrc,
+        row.track,
+        row.artist,
+        row.provider,
+        row.type,
+        row.assigned,
+        row.status,
+        row.year,
+      ].map(escapeCsvCell).join(',')),
+    ]
+    return {
+      data: `${lines.join('\n')}\n`,
+      fileName: `mejay-isrc-registry-${new Date().toISOString().slice(0, 10)}.csv`,
+    }
   }
 
   async replaceDiscoveryFeatures(userId: string, input: DiscoveryFeaturesInput): Promise<{releaseIds: string[]; artistIds: string[]}> {

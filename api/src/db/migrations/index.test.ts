@@ -25,6 +25,7 @@ describe('runMigrations', () => {
       {version: 9, name: 'marketplace_reporting'},
       {version: 10, name: 'industry_reporting'},
       {version: 11, name: 'production_hardening'},
+      {version: 12, name: 'isrc_registry'},
     ])
   })
 
@@ -44,6 +45,16 @@ describe('runMigrations', () => {
     expect(foundation?.sql).toContain('uq_isrc_assignments_active_isrc')
     expect(drafts?.sql).toContain('ON CONFLICT (prefix, assignment_year) DO UPDATE')
     expect(foundation?.sql).toContain('uq_revenue_split_sets_active_track')
+  })
+
+  it('adds the permanent ISRC registry sequence and rights certification tables', () => {
+    const migration = migrations.find(({version}) => version === 12)
+    expect(migration?.sql).toContain('CREATE TABLE IF NOT EXISTS isrc_rights_certifications')
+    expect(migration?.sql).toContain('ALTER TABLE isrc_registry ADD COLUMN IF NOT EXISTS rights_certification_id')
+    expect(migration?.sql).toContain("assignment_type IN ('MEJAY_ASSIGNED', 'EXTERNAL')")
+    expect(migration?.sql).toContain("status IN ('RESERVED', 'ASSIGNED', 'REGISTERED', 'VOIDED')")
+    expect(migration?.sql).toContain('CREATE TABLE IF NOT EXISTS isrc_sequences')
+    expect(migration?.sql).toContain('SET next_number = GREATEST')
   })
 
   it('adds nullable ISO territory data for provider reporting', () => {

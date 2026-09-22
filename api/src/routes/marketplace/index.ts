@@ -136,8 +136,8 @@ export const createRightsDeclaration = handler(rightsDeclarationSchema, (service
 export const assignIsrc = handler(isrcAssignmentSchema, (service, userId, input, params) =>
   service.assignIsrc(userId, requiredParam(params, 'trackId'), input),
 )
-export const assignGeneratedIsrc = handler(generatedIsrcSchema, (service, userId, _input, params, env) =>
-  service.assignGeneratedIsrc(userId, requiredParam(params, 'trackId'), readIsrcGenerationConfig(env)),
+export const assignGeneratedIsrc = handler(generatedIsrcSchema, (service, userId, input, params, env) =>
+  service.assignGeneratedIsrc(userId, requiredParam(params, 'trackId'), input, readIsrcGenerationConfig(env)),
 )
 export const createProduct = handler(productSchema, (service, userId, input) => service.createProduct(userId, input))
 export const createPrice = handler(priceSchema, (service, userId, input, params) =>

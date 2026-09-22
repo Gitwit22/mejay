@@ -3,13 +3,15 @@ import {fireEvent, render, screen} from '@testing-library/react'
 import {MemoryRouter} from 'react-router-dom'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {getIndustryReporting, getMarketplaceAdminOverview} from '@/lib/marketplaceAdminApi'
+import {getIndustryReporting, getIsrcRegistry, getIsrcSequence, getMarketplaceAdminOverview} from '@/lib/marketplaceAdminApi'
 import MarketplaceAdminPage from './MarketplaceAdminPage'
 
 vi.mock('@/lib/marketplaceAdminApi', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/marketplaceAdminApi')>(),
   getMarketplaceAdminOverview: vi.fn(),
   getIndustryReporting: vi.fn(),
+  getIsrcRegistry: vi.fn(),
+  getIsrcSequence: vi.fn(),
 }))
 
 describe('MarketplaceAdminPage industry reporting', () => {
@@ -29,6 +31,18 @@ describe('MarketplaceAdminPage industry reporting', () => {
       }],
       batches: [{id: 'batch-1', report_date: '2026-09-17', status: 'submitted', event_count: 131, export_format: 'csv', submitted_at: '2026-09-17T12:00:00.000Z', resolved_at: null, rejection_reason: null, created_at: '2026-09-17T11:00:00.000Z'}],
     })
+    vi.mocked(getIsrcSequence).mockResolvedValue({prefix: 'QTA3L', assignmentYear: 26, nextNumber: 2, previewIsrc: 'QT-A3L-26-00002'})
+    vi.mocked(getIsrcRegistry).mockResolvedValue([{
+      id: 'registry-1',
+      isrc: 'QTA3L2600001',
+      track: 'Getaway',
+      artist: 'Example Artist',
+      provider: 'Example Provider',
+      type: 'MEJAY_ASSIGNED',
+      assigned: '2026-09-22T10:00:00.000Z',
+      status: 'ASSIGNED',
+      year: 26,
+    }])
   })
 
   it('shows daily readiness and transaction-to-ledger traceability', async () => {
@@ -48,5 +62,19 @@ describe('MarketplaceAdminPage industry reporting', () => {
     expect(screen.getByText('123456789012')).toBeInTheDocument()
     expect(screen.getByRole('button', {name: /Create daily export/})).toBeInTheDocument()
     expect(screen.getByRole('button', {name: /Accept/})).toBeInTheDocument()
+  })
+
+  it('shows the ISRC registry columns and actions', async () => {
+    const queryClient = new QueryClient({defaultOptions: {queries: {retry: false}}})
+    render(<QueryClientProvider client={queryClient}><MemoryRouter><MarketplaceAdminPage /></MemoryRouter></QueryClientProvider>)
+
+    fireEvent.click(await screen.findByRole('button', {name: 'ISRC Registry'}))
+
+    expect(await screen.findByRole('heading', {name: 'ISRC Registry'})).toBeInTheDocument()
+    expect(screen.getByText('QT-A3L-26-00002')).toBeInTheDocument()
+    expect(screen.getByText('Getaway')).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'View Record'})).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: /Copy ISRC/})).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: /Export CSV/})).toBeInTheDocument()
   })
 })

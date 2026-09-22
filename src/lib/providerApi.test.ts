@@ -1,7 +1,7 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 
 import {apiFetch} from './api'
-import {createProviderArtist, getProviderDashboard, getProviderReporting, getRecipientEarnings} from './providerApi'
+import {createProviderArtist, generateProviderIsrc, getProviderDashboard, getProviderReporting, getRecipientEarnings} from './providerApi'
 
 vi.mock('./api', () => ({apiFetch: vi.fn()}))
 
@@ -38,5 +38,24 @@ describe('provider API', () => {
 
     expect(apiFetch).toHaveBeenNthCalledWith(1, '/api/marketplace/reporting?range=30d', undefined)
     expect(apiFetch).toHaveBeenNthCalledWith(2, '/api/marketplace/recipient-earnings?range=ytd', undefined)
+  })
+
+  it('sends rights certification when MEJay generates an ISRC', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(new Response(JSON.stringify({ok: true, data: {isrc: 'QTA3L2600001'}}), {status: 201}))
+
+    await expect(generateProviderIsrc('track-1', {
+      controlsRecording: true,
+      neverAssignedIsrc: true,
+      authorizeAssignment: true,
+    })).resolves.toEqual({isrc: 'QTA3L2600001'})
+
+    expect(apiFetch).toHaveBeenCalledWith('/api/tracks/track-1/isrc/assign', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({
+        controlsRecording: true,
+        neverAssignedIsrc: true,
+        authorizeAssignment: true,
+      }),
+    }))
   })
 })

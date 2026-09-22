@@ -1,4 +1,4 @@
-import {apiFetch} from './api'
+import {apiFetch, apiUrl} from './api'
 
 export type AdminRecord = Record<string, string | number | boolean | null>
 
@@ -22,6 +22,50 @@ export type MarketplaceAdminOverview = {
   }
 }
 
+export type IsrcRegistryRecord = {
+  id: string
+  isrc: string
+  track: string | null
+  artist: string | null
+  provider: string | null
+  type: 'MEJAY_ASSIGNED' | 'EXTERNAL'
+  assigned: string
+  status: 'RESERVED' | 'ASSIGNED' | 'REGISTERED' | 'VOIDED'
+  year: number
+}
+
+export type IsrcRegistryDetail = {
+  id: string
+  isrc: string
+  trackId: string | null
+  track: string | null
+  artistId: string | null
+  artist: string | null
+  providerId: string | null
+  provider: string | null
+  rightsOwnerId: string | null
+  rightsOwnerName: string | null
+  prefix: string
+  countryCode: string | null
+  registrantCode: string | null
+  assignmentYear: number
+  designationCode: string
+  assignmentType: 'MEJAY_ASSIGNED' | 'EXTERNAL'
+  status: 'RESERVED' | 'ASSIGNED' | 'REGISTERED' | 'VOIDED'
+  assignedAt: string
+  assignedByUserId: string | null
+  rightsCertificationId: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type IsrcSequence = {
+  prefix: string
+  assignmentYear: number
+  nextNumber: number
+  previewIsrc: string
+}
+
 type Envelope<T> = {ok: true; data: T} | {ok: false; error: string; message?: string}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -35,6 +79,64 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function getMarketplaceAdminOverview(): Promise<MarketplaceAdminOverview> {
   return request('/api/marketplace-admin/overview')
+}
+
+export function getIsrcRegistry(filters: {
+  isrc?: string
+  track?: string
+  artist?: string
+  provider?: string
+  year?: string
+} = {}): Promise<IsrcRegistryRecord[]> {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(filters)) {
+    if (value?.trim()) params.set(key, value.trim())
+  }
+  const query = params.toString()
+  return request(`/api/isrc${query ? `?${query}` : ''}`)
+}
+
+export function getIsrcRegistryRecord(id: string): Promise<IsrcRegistryDetail> {
+  return request(`/api/isrc/${encodeURIComponent(id)}`)
+}
+
+export function getIsrcSequence(): Promise<IsrcSequence> {
+  return request('/api/isrc/sequence')
+}
+
+export function getIsrcExportUrl(filters: {
+  isrc?: string
+  track?: string
+  artist?: string
+  provider?: string
+  year?: string
+} = {}): string {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(filters)) {
+    if (value?.trim()) params.set(key, value.trim())
+  }
+  const query = params.toString()
+  return apiUrl(`/api/isrc/export${query ? `?${query}` : ''}`)
+}
+
+export async function downloadIsrcRegistryExport(filters: {
+  isrc?: string
+  track?: string
+  artist?: string
+  provider?: string
+  year?: string
+} = {}): Promise<void> {
+  const response = await apiFetch(getIsrcExportUrl(filters), {cache: 'no-store'})
+  if (!response.ok) throw new Error(`Export failed (${response.status})`)
+  const blob = await response.blob()
+  const disposition = response.headers.get('content-disposition') || ''
+  const fileName = disposition.match(/filename="([^"]+)"/)?.[1] || 'mejay-isrc-registry.csv'
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = fileName
+  anchor.click()
+  URL.revokeObjectURL(url)
 }
 
 export type ReleaseAdminAction = 'start_review' | 'approve' | 'request_changes' | 'reject' | 'publish_now' | 'schedule' | 'publish_due' | 'unpublish' | 'takedown'

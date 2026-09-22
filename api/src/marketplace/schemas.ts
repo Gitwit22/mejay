@@ -131,7 +131,11 @@ export const isrcAssignmentSchema = z.object({
   source: z.enum(['provider', 'imported', 'agency']).default('provider'),
 })
 
-export const generatedIsrcSchema = z.object({}).strict()
+export const generatedIsrcSchema = z.object({
+  controlsRecording: z.literal(true),
+  neverAssignedIsrc: z.literal(true),
+  authorizeAssignment: z.literal(true),
+})
 
 const uploadBase = z.object({
   fileName: z.string().trim().min(1).max(255),
@@ -214,6 +218,7 @@ export type TrackDraftInput = z.infer<typeof trackDraftSchema>
 export type AssetInput = z.infer<typeof assetSchema>
 export type RightsDeclarationInput = z.infer<typeof rightsDeclarationSchema>
 export type IsrcAssignmentInput = z.infer<typeof isrcAssignmentSchema>
+export type GeneratedIsrcInput = z.infer<typeof generatedIsrcSchema>
 export type UploadInitInput = z.infer<typeof uploadInitSchema>
 export type ProductInput = z.infer<typeof productSchema>
 export type PriceInput = z.infer<typeof priceSchema>

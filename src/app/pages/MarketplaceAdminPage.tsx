@@ -1,12 +1,13 @@
 import {useState} from 'react'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
-import {ArrowDown, ArrowUp, BarChart3, BadgeDollarSign, CheckCircle2, Copyright, Disc3, Download, Fingerprint, Menu, Plus, RefreshCw, Scale, Scissors, Send, ShieldAlert, Sparkles, Trash2, Users, UserRound, X, XCircle} from 'lucide-react'
+import {ArrowDown, ArrowUp, BarChart3, BadgeDollarSign, CheckCircle2, Copy, Copyright, Disc3, Download, Fingerprint, Menu, Plus, RefreshCw, Scale, Scissors, Send, ShieldAlert, Sparkles, Trash2, Users, UserRound, X, XCircle} from 'lucide-react'
 
 import {Button} from '@/components/ui/button'
+import {Dialog, DialogContent, DialogHeader, DialogTitle} from '@/components/ui/dialog'
 import {Input} from '@/components/ui/input'
 import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
-import {commandMarketplaceRelease, createIndustryReportingBatch, downloadIndustryReportingBatch, getIndustryReporting, getMarketplaceAdminOverview, replaceMarketplaceDiscoveryFeatures, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting, type AdminRecord, type IndustryReportingDashboard, type MarketplaceAdminOverview, type ReleaseAdminAction} from '@/lib/marketplaceAdminApi'
+import {commandMarketplaceRelease, createIndustryReportingBatch, downloadIndustryReportingBatch, downloadIsrcRegistryExport, getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview, replaceMarketplaceDiscoveryFeatures, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting, type AdminRecord, type IndustryReportingDashboard, type IsrcRegistryRecord, type MarketplaceAdminOverview, type ReleaseAdminAction} from '@/lib/marketplaceAdminApi'
 
 type Section = 'pending' | 'catalog' | 'discovery' | 'providers' | 'artists' | 'isrcs' | 'rights' | 'pricing' | 'splits' | 'takedowns' | 'reporting'
 
@@ -38,6 +39,7 @@ function Navigation({active, onSelect}: {active: Section; onSelect: (section: Se
 function SectionView({section, data}: {section: Section; data: Awaited<ReturnType<typeof getMarketplaceAdminOverview>>}) {
   if (section === 'reporting') return <Reporting />
   if (section === 'discovery') return <DiscoveryCuration data={data} />
+  if (section === 'isrcs') return <IsrcRegistrySection />
   const rows = data[section]
   return <RecordTable title={navigation.find(([id]) => id === section)?.[1] || section} rows={rows} actionable={section === 'pending' || section === 'catalog'} role={data.role} />
 }
@@ -91,6 +93,82 @@ function ReleaseActions({row, role}: {row: AdminRecord; role: 'reviewer' | 'admi
   return <div className="flex gap-2">{actions.filter((item) => !item.admin || role === 'admin').map((item) => <Button key={item.action} size="sm" variant="outline" disabled={mutation.isPending} onClick={() => {const note = item.note ? window.prompt(`${item.label} reason`)?.trim() : undefined; if (item.note && !note) return; mutation.mutate({action: item.action, note})}}>{item.label}</Button>)}</div>
 }
 
+function IsrcRegistrySection() {
+  const [filters, setFilters] = useState({isrc: '', track: '', artist: '', provider: '', year: ''})
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const registry = useQuery({
+    queryKey: ['marketplace-admin', 'isrc-registry', filters],
+    queryFn: () => getIsrcRegistry(filters),
+  })
+  const sequence = useQuery({queryKey: ['marketplace-admin', 'isrc-sequence'], queryFn: getIsrcSequence})
+  const detail = useQuery({
+    queryKey: ['marketplace-admin', 'isrc-registry', selectedId],
+    queryFn: () => getIsrcRegistryRecord(selectedId || ''),
+    enabled: Boolean(selectedId),
+  })
+  const exportCsv = useMutation({
+    mutationFn: () => downloadIsrcRegistryExport(filters),
+    onError: (error) => toast({title: 'Export failed', description: error.message, variant: 'destructive'}),
+  })
+  const rows = registry.data ?? []
+  const copyIsrc = async (value: string) => {
+    await navigator.clipboard.writeText(value)
+    toast({title: 'ISRC copied'})
+  }
+  return <div className="space-y-6">
+    <div className="flex flex-wrap items-start justify-between gap-4">
+      <div>
+        <h1 className="text-2xl font-bold">ISRC Registry</h1>
+        <p className="mt-1 text-sm text-zinc-400">Permanent ISRC assignments for every recording MEJay registers.</p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" disabled={exportCsv.isPending} onClick={() => exportCsv.mutate()}><Download className="h-4 w-4" />Export CSV</Button>
+      </div>
+    </div>
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      <div className="border border-white/10 bg-[#141417] p-5">
+        <p className="text-xs uppercase text-zinc-500">Next MEJay code</p>
+        <p className="mt-3 font-mono text-lg">{sequence.data?.previewIsrc || 'QT-A3L-26-00001'}</p>
+      </div>
+      <div className="border border-white/10 bg-[#141417] p-5">
+        <p className="text-xs uppercase text-zinc-500">Assignments shown</p>
+        <p className="mt-3 text-3xl font-bold">{rows.length}</p>
+      </div>
+      <div className="border border-white/10 bg-[#141417] p-5">
+        <p className="text-xs uppercase text-zinc-500">Sequence state</p>
+        <p className="mt-3 text-sm text-zinc-300">{sequence.data ? `${sequence.data.prefix} / ${String(sequence.data.assignmentYear).padStart(2, '0')} → ${String(sequence.data.nextNumber).padStart(5, '0')}` : 'Loading...'}</p>
+      </div>
+    </div>
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+      <Input value={filters.isrc} onChange={(event) => setFilters({...filters, isrc: event.target.value})} placeholder="Search ISRC" />
+      <Input value={filters.track} onChange={(event) => setFilters({...filters, track: event.target.value})} placeholder="Search track" />
+      <Input value={filters.artist} onChange={(event) => setFilters({...filters, artist: event.target.value})} placeholder="Search artist" />
+      <Input value={filters.provider} onChange={(event) => setFilters({...filters, provider: event.target.value})} placeholder="Search provider" />
+      <Input value={filters.year} onChange={(event) => setFilters({...filters, year: event.target.value.replace(/[^0-9]/g, '').slice(0, 2)})} placeholder="Year" />
+    </div>
+    {registry.isLoading ? <Skeleton className="h-72 bg-white/5" /> : registry.isError ? <ErrorState message={registry.error.message} /> : rows.length === 0 ? <div className="border-y border-dashed border-white/10 py-16 text-center text-sm text-zinc-500">No registry records found.</div> : <div className="overflow-x-auto border-y border-white/10"><table className="w-full min-w-[920px] text-left text-sm"><thead className="text-xs uppercase text-zinc-500"><tr><th className="px-3 py-3 font-medium">ISRC</th><th className="px-3 py-3 font-medium">Track</th><th className="px-3 py-3 font-medium">Artist</th><th className="px-3 py-3 font-medium">Provider</th><th className="px-3 py-3 font-medium">Type</th><th className="px-3 py-3 font-medium">Assigned</th><th className="px-3 py-3 font-medium">Status</th><th className="px-3 py-3 font-medium">Actions</th></tr></thead><tbody className="divide-y divide-white/10">{rows.map((row) => <tr key={row.id}><td className="px-3 py-3 font-mono text-xs text-zinc-200">{formatRegistryIsrc(row.isrc)}</td><td className="px-3 py-3 text-zinc-300">{row.track || '-'}</td><td className="px-3 py-3 text-zinc-300">{row.artist || '-'}</td><td className="px-3 py-3 text-zinc-300">{row.provider || '-'}</td><td className="px-3 py-3 text-zinc-300">{row.type === 'MEJAY_ASSIGNED' ? 'MEJay' : 'External'}</td><td className="px-3 py-3 text-zinc-300">{formatDate(row.assigned)}</td><td className="px-3 py-3 text-zinc-300">{formatRegistryStatus(row.status)}</td><td className="px-3 py-3"><div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => setSelectedId(row.id)}>View Record</Button><Button size="sm" variant="outline" onClick={() => void copyIsrc(row.isrc)}><Copy className="h-4 w-4" />Copy ISRC</Button></div></td></tr>)}</tbody></table></div>}
+    <Dialog open={Boolean(selectedId)} onOpenChange={(open) => !open && setSelectedId(null)}>
+      <DialogContent className="border-white/10 bg-[#151518] text-zinc-100">
+        <DialogHeader><DialogTitle>ISRC Record</DialogTitle></DialogHeader>
+        {detail.isLoading ? <Skeleton className="h-48 bg-white/5" /> : detail.isError ? <ErrorState message={detail.error.message} /> : detail.data ? <dl className="grid gap-4 sm:grid-cols-2">{[
+          ['ISRC', formatRegistryIsrc(detail.data.isrc)],
+          ['Track', detail.data.track || '-'],
+          ['Artist', detail.data.artist || '-'],
+          ['Provider', detail.data.provider || '-'],
+          ['Type', detail.data.assignmentType === 'MEJAY_ASSIGNED' ? 'MEJay' : 'External'],
+          ['Status', formatRegistryStatus(detail.data.status)],
+          ['Prefix', detail.data.prefix],
+          ['Country', detail.data.countryCode || '-'],
+          ['Registrant', detail.data.registrantCode || '-'],
+          ['Year', String(detail.data.assignmentYear).padStart(2, '0')],
+          ['Designation', detail.data.designationCode],
+          ['Rights certification', detail.data.rightsCertificationId || '-'],
+        ].map(([label, value]) => <div key={label}><dt className="text-xs uppercase text-zinc-500">{label}</dt><dd className="mt-1 text-sm text-zinc-200">{value}</dd></div>)}</dl> : null}
+      </DialogContent>
+    </Dialog>
+  </div>
+}
+
 function Reporting() {
   const queryClient = useQueryClient()
   const [reportDate, setReportDate] = useState(() => new Date().toISOString().slice(0, 10))
@@ -132,4 +210,7 @@ function ReportingBatches({data, pending, run}: {data: IndustryReportingDashboar
 function money(amountMinor: number) { return new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD'}).format(amountMinor / 100) }
 function shortId(value: string) { return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value }
 function formatValue(value: unknown) { if (value === null || value === '') return '-'; if (typeof value === 'boolean') return value ? 'Yes' : 'No'; return String(value) }
+function formatRegistryIsrc(value: string) { return value.length === 12 ? `${value.slice(0, 2)}-${value.slice(2, 5)}-${value.slice(5, 7)}-${value.slice(7)}` : value }
+function formatRegistryStatus(value: IsrcRegistryRecord['status']) { return value.charAt(0) + value.slice(1).toLowerCase() }
+function formatDate(value: string) { return new Date(value).toLocaleDateString('en-US', {month: 'short', day: 'numeric'}) }
 function ErrorState({message}: {message: string}) { return <div role="alert" className="border border-red-400/30 bg-red-400/5 p-4 text-sm text-red-300">{message}</div> }

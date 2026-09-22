@@ -5,6 +5,7 @@ import type {PrivateBucket} from '../services/r2'
 import type {
   ArtistInput,
   AssetInput,
+  GeneratedIsrcInput,
   IsrcAssignmentInput,
   PriceInput,
   ProductInput,
@@ -37,6 +38,16 @@ type Database = {
 type ProviderContext = {
   providerId: string
   role: 'owner' | 'admin' | 'editor' | 'viewer'
+}
+
+type TrackIsrcContext = {
+  id: string
+  title: string
+  provider_profile_id: string
+  provider_name: string | null
+  artist_id: string | null
+  artist_name: string | null
+  status: ReleaseStatus
 }
 
 function normalizeReleasePart(value: string | null | undefined): string {
@@ -170,6 +181,37 @@ async function assertTrackMutable(db: Database, trackId: string, providerId: str
   ).bind(trackId, providerId).first<{status: ReleaseStatus}>()
   if (!release) throw new MarketplaceError(404, 'not_found', 'Marketplace resource was not found')
   assertMutableStatus(release.status)
+}
+
+async function loadTrackIsrcContext(db: Database, trackId: string, providerId: string): Promise<TrackIsrcContext> {
+  const track = await db.prepare(
+    `SELECT
+      t.id,
+      t.title,
+      t.provider_profile_id,
+      provider.display_name AS provider_name,
+      artist.id AS artist_id,
+      artist.name AS artist_name,
+      release.status
+     FROM tracks t
+     JOIN releases release ON release.id = t.release_id AND release.provider_profile_id = t.provider_profile_id
+     JOIN provider_profiles provider ON provider.id = t.provider_profile_id
+     LEFT JOIN track_artists track_artist
+       ON track_artist.track_id = t.id AND track_artist.provider_profile_id = t.provider_profile_id AND track_artist.is_primary = TRUE
+     LEFT JOIN artists artist
+       ON artist.id = track_artist.artist_id AND artist.provider_profile_id = t.provider_profile_id
+     WHERE t.id = ?1 AND t.provider_profile_id = ?2`,
+  ).bind(trackId, providerId).first<TrackIsrcContext>()
+  if (!track) throw new MarketplaceError(404, 'not_found', 'Marketplace resource was not found')
+  assertMutableStatus(track.status)
+  return track
+}
+
+async function assertTrackHasNoIsrc(db: Database, trackId: string): Promise<void> {
+  const existing = await db.prepare(
+    'SELECT id FROM isrc_assignments WHERE track_id = ?1 AND revoked_at IS NULL',
+  ).bind(trackId).first<{id: string}>()
+  if (existing) throw new MarketplaceError(409, 'isrc_already_assigned', 'This recording already has an ISRC assignment')
 }
 
 async function assertProductMutable(db: Database, productId: string, providerId: string): Promise<void> {
@@ -593,16 +635,35 @@ export class MarketplaceService {
   async assignIsrc(userId: string, trackId: string, input: IsrcAssignmentInput): Promise<unknown> {
     return this.database.transaction(async (db: Database) => {
       const context = await providerContext(db, userId)
-      await assertTrackMutable(db, trackId, context.providerId)
+      const track = await loadTrackIsrcContext(db, trackId, context.providerId)
+      await assertTrackHasNoIsrc(db, trackId)
       const id = crypto.randomUUID()
       const prefix = input.isrc.slice(0, 5)
       const assignmentYear = Number(input.isrc.slice(5, 7))
       const designation = Number(input.isrc.slice(7))
       await db.prepare(
         `INSERT INTO isrc_registry
-          (id, isrc, prefix, assignment_year, designation, source, provider_profile_id, original_track_id, assigned_by_user_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
-      ).bind(id, input.isrc, prefix, assignmentYear, designation, input.source, context.providerId, trackId, userId).run()
+          (id, isrc, track_id, provider_profile_id, artist_id, rights_owner_id, prefix, country_code, registrant_code,
+           assignment_year, designation, source, assignment_type, status, original_track_id, assigned_by_user_id,
+           track_title, artist_name, provider_name, rights_owner_name)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?4, ?6, ?7, ?8, ?9, ?10, ?11, 'EXTERNAL', 'REGISTERED', ?3, ?12, ?13, ?14, ?15, ?15)`,
+      ).bind(
+        id,
+        input.isrc,
+        trackId,
+        context.providerId,
+        track.artist_id,
+        prefix,
+        input.isrc.slice(0, 2),
+        input.isrc.slice(2, 5),
+        assignmentYear,
+        designation,
+        input.source,
+        userId,
+        track.title,
+        track.artist_name,
+        track.provider_name,
+      ).run()
       const row = await inserted<any>(db.prepare(
         `INSERT INTO isrc_assignments (id, provider_profile_id, track_id, isrc, source, assigned_by_user_id, registry_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?1) RETURNING *`,
@@ -612,29 +673,80 @@ export class MarketplaceService {
     })
   }
 
-  async assignGeneratedIsrc(userId: string, trackId: string, config: IsrcGenerationConfig | null): Promise<unknown> {
+  async assignGeneratedIsrc(userId: string, trackId: string, input: GeneratedIsrcInput, config: IsrcGenerationConfig | null): Promise<unknown> {
     if (!config) throw new MarketplaceError(503, 'isrc_generation_unavailable', 'MEJay ISRC generation is not configured')
     return this.database.transaction(async (db: Database) => {
       const context = await providerContext(db, userId)
-      await assertTrackMutable(db, trackId, context.providerId)
+      const track = await loadTrackIsrcContext(db, trackId, context.providerId)
+      await assertTrackHasNoIsrc(db, trackId)
       const assignmentYear = new Date().getUTCFullYear() % 100
-      const counter = await db.prepare(
-        `INSERT INTO isrc_counters (prefix, assignment_year, last_designation)
+      await db.prepare(
+        `INSERT INTO isrc_sequences (prefix, assignment_year, next_number)
          VALUES (?1, ?2, 1)
-         ON CONFLICT (prefix, assignment_year) DO UPDATE
-         SET last_designation = isrc_counters.last_designation + 1, updated_at = CURRENT_TIMESTAMP
-         WHERE isrc_counters.last_designation < 99999
-         RETURNING last_designation`,
-      ).bind(config.prefix, assignmentYear).first<{last_designation: number}>()
-      if (!counter) throw new MarketplaceError(409, 'isrc_range_exhausted', `The ${assignmentYear} ISRC range is exhausted`)
+         ON CONFLICT (prefix, assignment_year) DO NOTHING`,
+      ).bind(config.prefix, assignmentYear).run()
+      const counter = await db.prepare(
+        `SELECT next_number
+         FROM isrc_sequences
+         WHERE prefix = ?1 AND assignment_year = ?2
+         FOR UPDATE`,
+      ).bind(config.prefix, assignmentYear).first<{next_number: number}>()
+      if (!counter || counter.next_number > 99999) {
+        throw new MarketplaceError(409, 'isrc_range_exhausted', `The ${assignmentYear} ISRC range is exhausted`)
+      }
 
-      const isrc = buildGeneratedIsrc(config.prefix, assignmentYear, counter.last_designation)
+      const certificationId = crypto.randomUUID()
+      await db.prepare(
+        `INSERT INTO isrc_rights_certifications
+          (id, provider_profile_id, track_id, attested_by_user_id, controls_recording, never_assigned_isrc, authorize_assignment)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      ).bind(
+        certificationId,
+        context.providerId,
+        trackId,
+        userId,
+        input.controlsRecording,
+        input.neverAssignedIsrc,
+        input.authorizeAssignment,
+      ).run()
+
+      const isrc = buildGeneratedIsrc(config.prefix, assignmentYear, counter.next_number)
       const id = crypto.randomUUID()
       await db.prepare(
         `INSERT INTO isrc_registry
-          (id, isrc, prefix, assignment_year, designation, source, provider_profile_id, original_track_id, assigned_by_user_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'agency', ?6, ?7, ?8)`,
-      ).bind(id, isrc, config.prefix, assignmentYear, counter.last_designation, context.providerId, trackId, userId).run()
+          (id, isrc, track_id, provider_profile_id, artist_id, rights_owner_id, prefix, country_code, registrant_code,
+           assignment_year, designation, source, assignment_type, status, original_track_id, assigned_by_user_id,
+           rights_certification_id, track_title, artist_name, provider_name, rights_owner_name)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?4, ?6, ?7, ?8, ?9, ?10, 'agency', 'MEJAY_ASSIGNED', 'ASSIGNED', ?3, ?11, ?12, ?13, ?14, ?15, ?15)`,
+      ).bind(
+        id,
+        isrc,
+        trackId,
+        context.providerId,
+        track.artist_id,
+        config.prefix,
+        config.countryCode,
+        config.registrantCode,
+        assignmentYear,
+        counter.next_number,
+        userId,
+        certificationId,
+        track.title,
+        track.artist_name,
+        track.provider_name,
+      ).run()
+      await db.prepare(
+        `UPDATE isrc_sequences
+         SET next_number = ?3, updated_at = CURRENT_TIMESTAMP
+         WHERE prefix = ?1 AND assignment_year = ?2`,
+      ).bind(config.prefix, assignmentYear, counter.next_number + 1).run()
+      await db.prepare(
+        `INSERT INTO isrc_counters (prefix, assignment_year, last_designation)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT (prefix, assignment_year) DO UPDATE
+         SET last_designation = GREATEST(isrc_counters.last_designation, EXCLUDED.last_designation),
+             updated_at = CURRENT_TIMESTAMP`,
+      ).bind(config.prefix, assignmentYear, counter.next_number).run()
       const row = await inserted<any>(db.prepare(
         `INSERT INTO isrc_assignments (id, provider_profile_id, track_id, isrc, source, assigned_by_user_id, registry_id)
          VALUES (?1, ?2, ?3, ?4, 'agency', ?5, ?1) RETURNING *`,

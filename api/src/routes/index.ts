@@ -47,6 +47,7 @@ import {createConnectDashboard, createConnectOnboarding, getConnectStatus} from 
 import {getProviderReporting, getRecipientEarnings} from './marketplace/reporting'
 import {createStoreCheckout, downloadStorePurchase, getStoreOrderStatus, listStorePurchases} from './store/commerce'
 import {getMusicDiscovery} from './music'
+import {assignTrackIsrc, exportIsrcRecords, getIsrcRecord, getIsrcSequence, listIsrcRecords, registerExistingIsrc} from './isrc'
 
 export type RouteHandler = (context: any) => Promise<Response> | Response
 
@@ -103,6 +104,12 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'put', path: '/api/marketplace/tracks/:trackId/revenue-splits', handler: replaceRevenueSplits},
   {method: 'post', path: '/api/marketplace/releases/:releaseId/submit', handler: submitRelease},
   {method: 'post', path: '/api/marketplace/releases/:releaseId/transitions', handler: transitionRelease},
+  {method: 'get', path: '/api/isrc/sequence', handler: getIsrcSequence},
+  {method: 'get', path: '/api/isrc/export', handler: exportIsrcRecords},
+  {method: 'get', path: '/api/isrc/:id', handler: getIsrcRecord},
+  {method: 'get', path: '/api/isrc', handler: listIsrcRecords},
+  {method: 'post', path: '/api/tracks/:trackId/isrc/assign', handler: assignTrackIsrc},
+  {method: 'post', path: '/api/tracks/:trackId/isrc/existing', handler: registerExistingIsrc},
   {method: 'post', path: '/api/marketplace-admin/releases/:releaseId/commands', handler: marketplaceAdminCommandRelease},
   {method: 'post', path: '/api/marketplace-admin/providers/:providerId/commands', handler: marketplaceAdminCommandProvider},
   {method: 'post', path: '/api/marketplace-admin/split-disputes', handler: recordSplitDispute},
