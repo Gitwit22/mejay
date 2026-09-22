@@ -125,6 +125,7 @@ export function DownloadPacksModal(props: DownloadPacksModalProps) {
                   <img
                     src={pack.artworkUrl}
                     alt=""
+                    aria-hidden="true"
                     className="h-20 w-20 rounded-lg object-cover"
                   />
                   <div className="grid gap-1 leading-tight">

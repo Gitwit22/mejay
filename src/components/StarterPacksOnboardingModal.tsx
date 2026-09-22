@@ -55,7 +55,7 @@ export function StarterPacksOnboardingModal(props: StarterPacksOnboardingModalPr
     try {
       const seeded = await useDJStore.getState().seedStarterTracksIfEmpty(selectedPacks);
       if (!seeded) {
-        saveAndClose(selectedPacks);
+        saveAndClose([]);
         toast({
           title: 'Store music not added',
           description: 'You already have tracks in your library. Open Settings and choose Music Store to add bundled releases later.',
@@ -112,6 +112,7 @@ export function StarterPacksOnboardingModal(props: StarterPacksOnboardingModalPr
                   <img
                     src={pack.artworkUrl}
                     alt=""
+                    aria-hidden="true"
                     className="h-20 w-20 rounded-lg object-cover"
                   />
                   <div className="grid gap-1 leading-tight">
