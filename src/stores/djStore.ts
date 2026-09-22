@@ -229,6 +229,7 @@ export const useDJStore = create<DJState>()(
 
   // Guard against repeated seed attempts within a single document lifetime.
   let didAttemptStarterSeedThisSession = false;
+  let cleanupPlaylistsPromise: Promise<number> | null = null;
   
   // Grace period after restart - blocks all auto-mix triggers for 5 seconds
   let restartGraceUntilMs: number = 0;
@@ -1069,30 +1070,48 @@ export const useDJStore = create<DJState>()(
   };
 
   const cleanupUnavailablePlaylistReferences = async (opts?: { silent?: boolean }) => {
-    const state = get();
-    const availableTrackIds = new Set(state.tracks.map(t => t.id));
-    const playlistsToUpdate = state.playlists.filter(p => p.trackIds.some(id => !availableTrackIds.has(id)));
-    if (playlistsToUpdate.length === 0) return 0;
+    if (cleanupPlaylistsPromise) return cleanupPlaylistsPromise;
 
-    let removedRefs = 0;
-    await Promise.all(playlistsToUpdate.map(async (p) => {
-      const nextTrackIds = p.trackIds.filter(id => availableTrackIds.has(id));
-      removedRefs += p.trackIds.length - nextTrackIds.length;
-      await updatePlaylist(p.id, { trackIds: nextTrackIds });
-    }));
+    cleanupPlaylistsPromise = (async () => {
+      const state = get();
+      if (state.isLoadingTracks) return 0;
+      if (state.tracks.length === 0) return 0;
 
-    set(s => ({
-      playlists: s.playlists.map(p => ({
-        ...p,
-        trackIds: p.trackIds.filter(id => availableTrackIds.has(id)),
-      })),
-    }));
+      const unavailableTrackIds = new Set(state.tracks.filter(t => t.status !== 'ready').map(t => t.id));
+      const playlistsToUpdate = state.playlists
+        .map((playlist) => {
+          const nextTrackIds = playlist.trackIds.filter(id => !unavailableTrackIds.has(id));
+          const removedCount = playlist.trackIds.length - nextTrackIds.length;
+          return removedCount > 0 ? { playlist, nextTrackIds, removedCount } : null;
+        })
+        .filter((item): item is { playlist: Playlist; nextTrackIds: string[]; removedCount: number } => item !== null);
+      if (playlistsToUpdate.length === 0) return 0;
 
-    if (!opts?.silent && removedRefs > 0) {
-      toast({ title: 'Playlists cleaned up', description: `Removed ${removedRefs} unavailable track reference(s).` });
+      const removedRefs = playlistsToUpdate.reduce((sum, item) => sum + item.removedCount, 0);
+
+      await Promise.all(playlistsToUpdate.map(async (item) => {
+        await updatePlaylist(item.playlist.id, { trackIds: item.nextTrackIds });
+      }));
+
+      set(s => ({
+        playlists: s.playlists.map(p => ({
+          ...p,
+          trackIds: p.trackIds.filter(id => !unavailableTrackIds.has(id)),
+        })),
+      }));
+
+      if (!opts?.silent && removedRefs > 0) {
+        toast({ title: 'Playlists cleaned up', description: `Removed ${removedRefs} unavailable track reference(s).` });
+      }
+
+      return removedRefs;
+    })();
+
+    try {
+      return await cleanupPlaylistsPromise;
+    } finally {
+      cleanupPlaylistsPromise = null;
     }
-
-    return removedRefs;
   };
 
   // Set up audio engine callbacks
