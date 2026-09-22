@@ -49,7 +49,7 @@ function toArtwork(track?: Track): MediaImage[] | undefined {
   ]
 
   if (track?.artworkUrl) {
-    return [{ src: track.artworkUrl, sizes: '512x512', type: 'image/jpeg' }, ...base]
+    return [{ src: track.artworkUrl, sizes: '512x512' }, ...base]
   }
 
   return base

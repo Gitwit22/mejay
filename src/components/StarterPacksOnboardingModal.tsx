@@ -108,24 +108,26 @@ export function StarterPacksOnboardingModal(props: StarterPacksOnboardingModalPr
                   disabled={isWorking}
                   className="mt-1"
                 />
-                <img
-                  src={pack.artworkUrl}
-                  alt={`${pack.title} artwork`}
-                  className="h-20 w-20 rounded-lg object-cover"
-                />
-                <div className="grid gap-1 leading-tight">
-                  <Label htmlFor={`starter-pack-${pack.id}`}>{pack.title}</Label>
-                  <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                    {pack.tagline} • {pack.releaseYear}
+                <Label htmlFor={`starter-pack-${pack.id}`} className="flex flex-1 items-start gap-3 cursor-pointer">
+                  <img
+                    src={pack.artworkUrl}
+                    alt={`${pack.title} artwork`}
+                    className="h-20 w-20 rounded-lg object-cover"
+                  />
+                  <div className="grid gap-1 leading-tight">
+                    <span>{pack.title}</span>
+                    <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                      {pack.tagline} • {pack.releaseYear}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {pack.artist} • {pack.tracks.length} tracks • {pack.genres.join(' • ')}
+                    </div>
+                    <div className="text-xs text-muted-foreground">{pack.description}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {pack.tracks.map((track) => track.title).join(', ')}
+                    </div>
                   </div>
-                  <div className="text-xs text-muted-foreground">
-                    {pack.artist} • {pack.tracks.length} tracks • {pack.genres.join(' • ')}
-                  </div>
-                  <div className="text-xs text-muted-foreground">{pack.description}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {pack.tracks.map((track) => track.title).join(', ')}
-                  </div>
-                </div>
+                </Label>
               </div>
             );
           })}
