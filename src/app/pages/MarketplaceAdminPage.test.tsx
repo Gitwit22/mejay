@@ -71,8 +71,8 @@ describe('MarketplaceAdminPage industry reporting', () => {
     fireEvent.click(await screen.findByRole('button', {name: 'ISRC Registry'}))
 
     expect(await screen.findByRole('heading', {name: 'ISRC Registry'})).toBeInTheDocument()
-    expect(screen.getByText('QT-A3L-26-00002')).toBeInTheDocument()
-    expect(screen.getByText('Getaway')).toBeInTheDocument()
+    expect(await screen.findByText('QT-A3L-26-00002')).toBeInTheDocument()
+    expect(await screen.findByText('Getaway')).toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'View Record'})).toBeInTheDocument()
     expect(screen.getByRole('button', {name: /Copy ISRC/})).toBeInTheDocument()
     expect(screen.getByRole('button', {name: /Export CSV/})).toBeInTheDocument()
