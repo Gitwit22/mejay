@@ -176,6 +176,9 @@ function IsrcRow({track, releaseId}: {track: ProviderTrack; releaseId: string}) 
       : assignProviderIsrc(track.id, value),
     onSuccess: async () => {
       setValue('')
+      setControlsRecording(false)
+      setNeverAssignedIsrc(false)
+      setAuthorizeAssignment(false)
       await queryClient.invalidateQueries({queryKey: ['provider', 'release', releaseId]})
     },
   })

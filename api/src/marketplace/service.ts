@@ -743,13 +743,6 @@ export class MarketplaceService {
          SET next_number = ?3, updated_at = CURRENT_TIMESTAMP
          WHERE prefix = ?1 AND assignment_year = ?2`,
       ).bind(config.prefix, assignmentYear, counter.next_number + 1).run()
-      await db.prepare(
-        `INSERT INTO isrc_counters (prefix, assignment_year, last_designation)
-         VALUES (?1, ?2, ?3)
-         ON CONFLICT (prefix, assignment_year) DO UPDATE
-         SET last_designation = GREATEST(isrc_counters.last_designation, EXCLUDED.last_designation),
-             updated_at = CURRENT_TIMESTAMP`,
-      ).bind(config.prefix, assignmentYear, counter.next_number).run()
       const row = await inserted<any>(db.prepare(
         `INSERT INTO isrc_assignments (id, provider_profile_id, track_id, isrc, source, assigned_by_user_id, registry_id)
          VALUES (?1, ?2, ?3, ?4, 'agency', ?5, ?1) RETURNING *`,

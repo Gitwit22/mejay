@@ -34,10 +34,21 @@ ALTER TABLE isrc_registry ADD COLUMN IF NOT EXISTS provider_name TEXT;
 ALTER TABLE isrc_registry ADD COLUMN IF NOT EXISTS rights_owner_name TEXT;
 ALTER TABLE isrc_registry ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
 ALTER TABLE isrc_registry ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
-ALTER TABLE isrc_registry ADD CONSTRAINT isrc_registry_country_code_check CHECK (country_code IS NULL OR country_code ~ '^[A-Z]{2}$');
-ALTER TABLE isrc_registry ADD CONSTRAINT isrc_registry_registrant_code_check CHECK (registrant_code IS NULL OR registrant_code ~ '^[A-Z0-9]{3}$');
-ALTER TABLE isrc_registry ADD CONSTRAINT isrc_registry_assignment_type_check CHECK (assignment_type IS NULL OR assignment_type IN ('MEJAY_ASSIGNED', 'EXTERNAL'));
-ALTER TABLE isrc_registry ADD CONSTRAINT isrc_registry_status_check CHECK (status IS NULL OR status IN ('RESERVED', 'ASSIGNED', 'REGISTERED', 'VOIDED'));
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'isrc_registry_country_code_check') THEN
+    ALTER TABLE isrc_registry ADD CONSTRAINT isrc_registry_country_code_check CHECK (country_code IS NULL OR country_code ~ '^[A-Z]{2}$');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'isrc_registry_registrant_code_check') THEN
+    ALTER TABLE isrc_registry ADD CONSTRAINT isrc_registry_registrant_code_check CHECK (registrant_code IS NULL OR registrant_code ~ '^[A-Z0-9]{3}$');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'isrc_registry_assignment_type_check') THEN
+    ALTER TABLE isrc_registry ADD CONSTRAINT isrc_registry_assignment_type_check CHECK (assignment_type IS NULL OR assignment_type IN ('MEJAY_ASSIGNED', 'EXTERNAL'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'isrc_registry_status_check') THEN
+    ALTER TABLE isrc_registry ADD CONSTRAINT isrc_registry_status_check CHECK (status IS NULL OR status IN ('RESERVED', 'ASSIGNED', 'REGISTERED', 'VOIDED'));
+  END IF;
+END $$;
 
 UPDATE isrc_registry
 SET

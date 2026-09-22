@@ -3,7 +3,7 @@ import {fireEvent, render, screen} from '@testing-library/react'
 import {MemoryRouter} from 'react-router-dom'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {getIndustryReporting, getIsrcRegistry, getIsrcSequence, getMarketplaceAdminOverview} from '@/lib/marketplaceAdminApi'
+import {getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview} from '@/lib/marketplaceAdminApi'
 import MarketplaceAdminPage from './MarketplaceAdminPage'
 
 vi.mock('@/lib/marketplaceAdminApi', async (importOriginal) => ({
@@ -11,6 +11,7 @@ vi.mock('@/lib/marketplaceAdminApi', async (importOriginal) => ({
   getMarketplaceAdminOverview: vi.fn(),
   getIndustryReporting: vi.fn(),
   getIsrcRegistry: vi.fn(),
+  getIsrcRegistryRecord: vi.fn(),
   getIsrcSequence: vi.fn(),
 }))
 
@@ -43,6 +44,30 @@ describe('MarketplaceAdminPage industry reporting', () => {
       status: 'ASSIGNED',
       year: 26,
     }])
+    vi.mocked(getIsrcRegistryRecord).mockResolvedValue({
+      id: 'registry-1',
+      isrc: 'QTA3L2600001',
+      trackId: 'track-1',
+      track: 'Getaway',
+      artistId: 'artist-1',
+      artist: 'Example Artist',
+      providerId: 'provider-1',
+      provider: 'Example Provider',
+      rightsOwnerId: 'provider-1',
+      rightsOwnerName: 'Example Provider',
+      prefix: 'QTA3L',
+      countryCode: 'QT',
+      registrantCode: 'A3L',
+      assignmentYear: 26,
+      designationCode: '00001',
+      assignmentType: 'MEJAY_ASSIGNED',
+      status: 'ASSIGNED',
+      assignedAt: '2026-09-22T10:00:00.000Z',
+      assignedByUserId: 'user-1',
+      rightsCertificationId: 'cert-1',
+      createdAt: '2026-09-22T10:00:00.000Z',
+      updatedAt: '2026-09-22T10:00:00.000Z',
+    })
   })
 
   it('shows daily readiness and transaction-to-ledger traceability', async () => {
@@ -76,5 +101,17 @@ describe('MarketplaceAdminPage industry reporting', () => {
     expect(screen.getByRole('button', {name: 'View Record'})).toBeInTheDocument()
     expect(screen.getByRole('button', {name: /Copy ISRC/})).toBeInTheDocument()
     expect(screen.getByRole('button', {name: /Export CSV/})).toBeInTheDocument()
+  })
+
+  it('loads and renders the ISRC detail dialog', async () => {
+    const queryClient = new QueryClient({defaultOptions: {queries: {retry: false}}})
+    render(<QueryClientProvider client={queryClient}><MemoryRouter><MarketplaceAdminPage /></MemoryRouter></QueryClientProvider>)
+
+    fireEvent.click(await screen.findByRole('button', {name: 'ISRC Registry'}))
+    fireEvent.click(await screen.findByRole('button', {name: 'View Record'}))
+
+    expect(await screen.findByText('cert-1')).toBeInTheDocument()
+    expect(screen.getByText('00001')).toBeInTheDocument()
+    expect(screen.getAllByText('Example Provider').length).toBeGreaterThan(0)
   })
 })
