@@ -338,8 +338,12 @@ export function ImportRoomView() {
                     )}
                   </div>
                 )}
-                <div className="album-art w-12 h-12 !rounded-lg flex-shrink-0">
-                  <Music className="w-5 h-5 text-white/60" />
+                <div className="album-art w-12 h-12 !rounded-lg flex-shrink-0 overflow-hidden">
+                  {track.artworkUrl ? (
+                    <img src={track.artworkUrl} alt={`${track.displayName} artwork`} className="h-full w-full object-cover" />
+                  ) : (
+                    <Music className="w-5 h-5 text-white/60" />
+                  )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <h5 className="text-sm font-medium truncate">{track.displayName}</h5>

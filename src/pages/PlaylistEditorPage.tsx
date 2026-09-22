@@ -263,8 +263,12 @@ export default function PlaylistEditorPage() {
                     <span className="text-xs text-muted-foreground w-6 text-center flex-shrink-0">
                       {index + 1}
                     </span>
-                    <div className="album-art w-10 h-10 !rounded-lg flex-shrink-0">
-                      <Music className="w-4 h-4 text-white/60" />
+                    <div className="album-art w-10 h-10 !rounded-lg flex-shrink-0 overflow-hidden">
+                      {track.artworkUrl ? (
+                        <img src={track.artworkUrl} alt={`${track.displayName} artwork`} className="h-full w-full object-cover" />
+                      ) : (
+                        <Music className="w-4 h-4 text-white/60" />
+                      )}
                     </div>
                     <div className="flex-1 min-w-0">
                       <h5 className={cn('text-sm font-medium truncate', track.status !== 'ready' && 'text-muted-foreground')}>
@@ -366,8 +370,12 @@ export default function PlaylistEditorPage() {
                       )}
                       onDoubleClick={() => handleAddTrack(track.id)}
                     >
-                      <div className="album-art w-10 h-10 !rounded-lg flex-shrink-0">
-                        <Music className="w-4 h-4 text-white/60" />
+                      <div className="album-art w-10 h-10 !rounded-lg flex-shrink-0 overflow-hidden">
+                        {track.artworkUrl ? (
+                          <img src={track.artworkUrl} alt={`${track.displayName} artwork`} className="h-full w-full object-cover" />
+                        ) : (
+                          <Music className="w-4 h-4 text-white/60" />
+                        )}
                       </div>
                       <div className="flex-1 min-w-0">
                         <h5 className="text-sm font-medium truncate">{track.displayName}</h5>

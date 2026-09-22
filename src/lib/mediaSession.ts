@@ -31,8 +31,7 @@ function getActiveTrack(state: ReturnType<typeof useDJStore.getState>): Track | 
 }
 
 function toArtwork(track?: Track): MediaImage[] | undefined {
-  // ME Jay tracks currently don't have embedded artwork.
-  // Use stable app artwork so lock screen UI still looks good.
+  // Use track-level artwork when available, then fall back to stable app artwork.
   // (Relative URLs are fine; Media Session will resolve them.)
   const base: MediaImage[] = [
     // Prefer public icons if you add them (great for car head units / lock screens).
@@ -49,8 +48,9 @@ function toArtwork(track?: Track): MediaImage[] | undefined {
     { src: '/favicon.ico', sizes: '64x64', type: 'image/x-icon' },
   ]
 
-  // In case you later add track-level artwork (e.g. track.artworkUrl), append it here.
-  void track
+  if (track?.artworkUrl) {
+    return [{ src: track.artworkUrl, sizes: '512x512', type: 'image/jpeg' }, ...base]
+  }
 
   return base
 }
