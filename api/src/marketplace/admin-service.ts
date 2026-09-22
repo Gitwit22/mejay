@@ -67,7 +67,8 @@ async function requireStaff(database: Database, userId: string): Promise<{role: 
 }
 
 function escapeCsvCell(value: unknown): string {
-  const text = value === null || value === undefined ? '' : String(value)
+  const unsafe = value === null || value === undefined ? '' : String(value)
+  const text = /^[=+\-@]/.test(unsafe) ? `'${unsafe}` : unsafe
   if (!/[",\n]/.test(text)) return text
   return `"${text.replaceAll('"', '""')}"`
 }

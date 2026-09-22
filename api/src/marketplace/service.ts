@@ -686,16 +686,17 @@ export class MarketplaceService {
          ON CONFLICT (prefix, assignment_year) DO NOTHING`,
       ).bind(config.prefix, assignmentYear).run()
       const counter = await db.prepare(
-        `SELECT next_number
-         FROM isrc_sequences
-         WHERE prefix = ?1 AND assignment_year = ?2
-         FOR UPDATE`,
-      ).bind(config.prefix, assignmentYear).first<{next_number: number}>()
-      if (!counter || counter.next_number > 99999) {
+        `UPDATE isrc_sequences
+         SET next_number = next_number + 1, updated_at = CURRENT_TIMESTAMP
+         WHERE isrc_sequences.prefix = ?1 AND isrc_sequences.assignment_year = ?2
+           AND isrc_sequences.next_number <= 99999
+         RETURNING isrc_sequences.next_number - 1 AS reserved_number`,
+      ).bind(config.prefix, assignmentYear).first<{reserved_number: number}>()
+      if (!counter || counter.reserved_number < 1 || counter.reserved_number > 99999) {
         throw new MarketplaceError(409, 'isrc_range_exhausted', `The ${assignmentYear} ISRC range is exhausted`)
       }
 
-      const isrc = buildGeneratedIsrc(config.prefix, assignmentYear, counter.next_number)
+      const isrc = buildGeneratedIsrc(config.prefix, assignmentYear, counter.reserved_number)
       const id = crypto.randomUUID()
       await db.prepare(
         `INSERT INTO isrc_registry
@@ -713,7 +714,7 @@ export class MarketplaceService {
         config.countryCode,
         config.registrantCode,
         assignmentYear,
-        counter.next_number,
+        counter.reserved_number,
         userId,
         track.title,
         track.artist_name,
@@ -738,11 +739,6 @@ export class MarketplaceService {
          SET rights_certification_id = ?2, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?1`,
       ).bind(id, certificationId).run()
-      await db.prepare(
-        `UPDATE isrc_sequences
-         SET next_number = ?3, updated_at = CURRENT_TIMESTAMP
-         WHERE prefix = ?1 AND assignment_year = ?2`,
-      ).bind(config.prefix, assignmentYear, counter.next_number + 1).run()
       const row = await inserted<any>(db.prepare(
         `INSERT INTO isrc_assignments (id, provider_profile_id, track_id, isrc, source, assigned_by_user_id, registry_id)
          VALUES (?1, ?2, ?3, ?4, 'agency', ?5, ?1) RETURNING *`,

@@ -136,7 +136,7 @@ function IsrcRegistrySection() {
       </div>
       <div className="border border-white/10 bg-[#141417] p-5">
         <p className="text-xs uppercase text-zinc-500">Sequence state</p>
-        <p className="mt-3 text-sm text-zinc-300">{sequence.data ? `${sequence.data.prefix} / ${String(sequence.data.assignmentYear).padStart(2, '0')} → ${String(sequence.data.nextNumber).padStart(5, '0')}` : 'Loading...'}</p>
+        <p className="mt-3 text-sm text-zinc-300">{sequence.data ? `${sequence.data.prefix} / ${String(sequence.data.assignmentYear).slice(-2).padStart(2, '0')} → ${String(sequence.data.nextNumber).padStart(5, '0')}` : 'Loading...'}</p>
       </div>
     </div>
     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
