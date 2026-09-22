@@ -9,10 +9,9 @@ export const MEJAY_DB_NAME = 'me-jay-db';
  *            (e.g. after a refresh when the blob was not persisted, or the file
  *            was moved/deleted).  References in playlists are preserved so the
  *            user can re-link or clean up later.
- * - deleted: The track was explicitly removed from the library by the user.
  * - error:   The file exists but could not be decoded / analysed.
  */
-export type TrackStatus = 'ready' | 'missing' | 'deleted' | 'error';
+export type TrackStatus = 'ready' | 'missing' | 'error';
 
 export interface Track {
   id: string;
@@ -450,7 +449,19 @@ export async function updateSettings(updates: Partial<Settings>): Promise<void> 
 
 // Generate unique ID
 export function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  if (typeof globalThis.crypto?.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(bytes);
+    // RFC 4122 v4 shape for compatibility when randomUUID is unavailable.
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
 // --- Track registry helpers ---
@@ -479,7 +490,7 @@ export async function getPlaylistTracks(playlist: Playlist): Promise<Track[]> {
 
 /**
  * Returns only the "ready" tracks referenced by a playlist, in playlist order.
- * Missing/deleted/error tracks are excluded so callers can safely play them.
+ * Missing/error tracks are excluded so callers can safely play them.
  */
 export async function getPlayablePlaylistTracks(playlist: Playlist): Promise<Track[]> {
   const tracks = await getPlaylistTracks(playlist);

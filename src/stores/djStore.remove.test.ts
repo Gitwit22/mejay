@@ -117,7 +117,8 @@ vi.mock('@/lib/db', () => ({
 
 import { useDJStore } from './djStore'
 import { audioEngine } from '@/lib/audioEngine'
-import { deleteTrack, updatePlaylist } from '@/lib/db'
+import { deleteTrack, getAllPlaylists, getAllTracks, updatePlaylist } from '@/lib/db'
+import { toast } from '@/hooks/use-toast'
 
 const makeTrack = (id: string) => ({
   id,
@@ -276,5 +277,35 @@ describe('DJ Store removal semantics', () => {
     const after = useDJStore.getState()
     expect(after.isPartyMode).toBe(false)
     expect(after.partyTrackIds).toEqual([])
+  })
+
+  it('loadTracks silently cleans playlist references to unavailable tracks', async () => {
+    const missing = { ...makeTrack('t2'), status: 'missing' as const, fileBlob: undefined }
+    ;(getAllTracks as any).mockResolvedValue([makeTrack('t1'), missing])
+    useDJStore.setState({
+      playlists: [{ id: 'p1', name: 'P1', trackIds: ['t1', 't2'], createdAt: 0, updatedAt: 0 }],
+      isLoadingTracks: false,
+    })
+
+    await useDJStore.getState().loadTracks()
+
+    expect(updatePlaylist).toHaveBeenCalledWith('p1', expect.objectContaining({ trackIds: ['t1'] }))
+    expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: 'Playlists cleaned up' }))
+  })
+
+  it('loadPlaylists silently cleans playlist references to unavailable tracks', async () => {
+    ;(getAllPlaylists as any).mockResolvedValue([
+      { id: 'p1', name: 'P1', trackIds: ['t1', 't2'], createdAt: 0, updatedAt: 0 },
+    ])
+    useDJStore.setState({
+      tracks: [makeTrack('t1'), { ...makeTrack('t2'), status: 'missing' as const, fileBlob: undefined }],
+      isLoadingTracks: false,
+      playlists: [],
+    })
+
+    await useDJStore.getState().loadPlaylists()
+
+    expect(updatePlaylist).toHaveBeenCalledWith('p1', expect.objectContaining({ trackIds: ['t1'] }))
+    expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: 'Playlists cleaned up' }))
   })
 })
