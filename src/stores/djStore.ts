@@ -179,8 +179,8 @@ interface DJState {
   getPlaylistTracks: (playlistId: string) => Track[];
   /** Return only ready/playable Track objects for a playlist. */
   getPlayablePlaylistTracks: (playlistId: string) => Track[];
-  /** Remove playlist track references that point to missing or deleted tracks. */
-  cleanupMissingTracks: () => Promise<void>;
+  /** Remove playlist track references that point to unavailable tracks. */
+  cleanupMissingTracks: (opts?: { silent?: boolean }) => Promise<void>;
   
   // Helper to get current party tracks
   getPartyTracks: () => Track[];
@@ -524,7 +524,7 @@ export const useDJStore = create<DJState>()(
     const track = state.tracks.find(t => t.id === trackId);
     if (!track?.fileBlob || track.status !== 'ready') {
       // Track is missing – mark it and try to skip to the next available track.
-      if (track && track.status !== 'missing' && track.status !== 'deleted') {
+      if (track && track.status !== 'missing') {
         void dbMarkTrackMissing(track.id);
         set(s => ({
           tracks: s.tracks.map(t => t.id === track.id ? { ...t, status: 'missing' as TrackStatus } : t),
@@ -1048,7 +1048,7 @@ export const useDJStore = create<DJState>()(
 
   /**
    * Returns only the track IDs that are currently playable (status "ready" + fileBlob present).
-   * Missing/deleted/error tracks are excluded so Party Mode never stalls on an unresolvable file.
+   * Missing/error tracks are excluded so Party Mode never stalls on an unresolvable file.
    */
   const getTrackIdsForPartySource = (state: DJState, source: PartySource): string[] => {
     const isPlayable = (t: Track | undefined) => t && t.fileBlob && t.status === 'ready';
@@ -1066,6 +1066,33 @@ export const useDJStore = create<DJState>()(
     }
 
     return [];
+  };
+
+  const cleanupUnavailablePlaylistReferences = async (opts?: { silent?: boolean }) => {
+    const state = get();
+    const availableTrackIds = new Set(state.tracks.map(t => t.id));
+    const playlistsToUpdate = state.playlists.filter(p => p.trackIds.some(id => !availableTrackIds.has(id)));
+    if (playlistsToUpdate.length === 0) return 0;
+
+    let removedRefs = 0;
+    await Promise.all(playlistsToUpdate.map(async (p) => {
+      const nextTrackIds = p.trackIds.filter(id => availableTrackIds.has(id));
+      removedRefs += p.trackIds.length - nextTrackIds.length;
+      await updatePlaylist(p.id, { trackIds: nextTrackIds });
+    }));
+
+    set(s => ({
+      playlists: s.playlists.map(p => ({
+        ...p,
+        trackIds: p.trackIds.filter(id => availableTrackIds.has(id)),
+      })),
+    }));
+
+    if (!opts?.silent && removedRefs > 0) {
+      toast({ title: 'Playlists cleaned up', description: `Removed ${removedRefs} unavailable track reference(s).` });
+    }
+
+    return removedRefs;
   };
 
   // Set up audio engine callbacks
@@ -1210,6 +1237,7 @@ export const useDJStore = create<DJState>()(
         }
 
         set({ tracks, isLoadingTracks: false });
+        await cleanupUnavailablePlaylistReferences({ silent: true });
       } catch (error) {
         console.error('[DJ Store] Failed to load tracks:', error);
         set({ isLoadingTracks: false });
@@ -1420,6 +1448,7 @@ export const useDJStore = create<DJState>()(
     loadPlaylists: async () => {
       const playlists = await getAllPlaylists();
       set({ playlists });
+      await cleanupUnavailablePlaylistReferences({ silent: true });
     },
 
     loadSettings: async () => {
@@ -1638,8 +1667,7 @@ export const useDJStore = create<DJState>()(
         const isDuplicate = get().tracks.some(t =>
           t.fileName === file.name &&
           t.size === file.size &&
-          t.lastModified === file.lastModified &&
-          t.status !== 'deleted'
+          t.lastModified === file.lastModified
         );
         if (isDuplicate) {
           if (import.meta.env.DEV) {
@@ -1980,7 +2008,7 @@ export const useDJStore = create<DJState>()(
       const track = state.tracks.find(t => t.id === trackId);
       if (!track?.fileBlob) {
         // File is not available – mark the track missing so the UI can reflect this.
-        if (track && track.status !== 'missing' && track.status !== 'deleted') {
+        if (track && track.status !== 'missing') {
           void dbMarkTrackMissing(trackId);
           set(s => ({
             tracks: s.tracks.map(t => t.id === trackId ? { ...t, status: 'missing' as TrackStatus } : t),
@@ -3603,31 +3631,11 @@ export const useDJStore = create<DJState>()(
     },
 
     /**
-     * Removes playlist references pointing to tracks that are missing or deleted
-     * so that playlists stay clean over time.  Does NOT remove the track registry entry.
+     * Removes playlist references pointing to unavailable tracks
+     * so that playlists stay clean over time. Does NOT remove the track registry entry.
      */
-    cleanupMissingTracks: async () => {
-      const state = get();
-      const unavailableTrackIds = new Set(state.tracks.filter(t => t.status !== 'ready').map(t => t.id));
-      if (unavailableTrackIds.size === 0) return;
-
-      const playlistsToUpdate = state.playlists.filter(p =>
-        p.trackIds.some(id => unavailableTrackIds.has(id))
-      );
-
-      await Promise.all(playlistsToUpdate.map(async p => {
-        const newTrackIds = p.trackIds.filter(id => !unavailableTrackIds.has(id));
-        await updatePlaylist(p.id, { trackIds: newTrackIds });
-      }));
-
-      set(s => ({
-        playlists: s.playlists.map(p => ({
-          ...p,
-          trackIds: p.trackIds.filter(id => !unavailableTrackIds.has(id)),
-        })),
-      }));
-
-      toast({ title: 'Playlists cleaned up', description: `Removed ${unavailableTrackIds.size} unavailable track reference(s).` });
+    cleanupMissingTracks: async (opts?: { silent?: boolean }) => {
+      await cleanupUnavailablePlaylistReferences(opts);
     },
 
     // Helper methods
