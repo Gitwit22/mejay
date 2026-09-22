@@ -7,20 +7,20 @@ This guide covers the bundled Music Store release that ships with MEJay and how 
 - **Valentine 2026**
   - Pack ID: `valentine-2026`
   - Audio folder: `/public/starter-packs/valentine-2026/`
-  - Catalog metadata: `/home/runner/work/mejay/mejay/src/config/starterPacks.ts`
+  - Catalog metadata: `/src/config/starterPacks.ts`
 
 ## Files involved
 
-- `/home/runner/work/mejay/mejay/src/config/starterPacks.ts` — release catalog, artwork, artist, genres, track metadata
-- `/home/runner/work/mejay/mejay/src/lib/starterPacksPrefs.ts` — persisted release preferences
-- `/home/runner/work/mejay/mejay/src/stores/djStore.ts` — library seeding + Music Store download logic
-- `/home/runner/work/mejay/mejay/src/components/StarterPacksOnboardingModal.tsx` — first-run Music Store prompt
-- `/home/runner/work/mejay/mejay/src/components/DownloadPacksModal.tsx` — Settings → Music Store dialog
+- `/src/config/starterPacks.ts` — release catalog, artwork, artist, genres, track metadata
+- `/src/lib/starterPacksPrefs.ts` — persisted release preferences
+- `/src/stores/djStore.ts` — library seeding + Music Store download logic
+- `/src/components/StarterPacksOnboardingModal.tsx` — first-run Music Store prompt
+- `/src/components/DownloadPacksModal.tsx` — Settings → Music Store dialog
 
 ## Updating the bundled release
 
 1. Add or remove MP3 files in `/public/starter-packs/valentine-2026/`.
-2. Update the `valentine2026Pack` entries in `/home/runner/work/mejay/mejay/src/config/starterPacks.ts`.
+2. Update the `valentine2026Pack` entries in `/src/config/starterPacks.ts`.
 3. Keep each track entry in sync with the file system:
    - `id`
    - `title`
