@@ -9,7 +9,7 @@ import { TEMPO_PRESET_RATIOS, TEMPO_PRESET_MAX_STRETCH, computePresetTempo } fro
 import { usePlanStore } from '@/stores/planStore';
 import { toast } from '@/hooks/use-toast';
 import { detectTrueEndTime, detectTrueStartTime } from '@/lib/trueEndTime';
-import { valentine2026Pack, partyPack } from '@/config/starterPacks';
+import { getStarterPackTracks, isStarterPackId, type StarterPackId } from '@/config/starterPacks';
 
 interface DeckState {
   trackId: string | null;
@@ -111,7 +111,7 @@ interface DJState {
 
   // Starter packs
   seedStarterTracksIfEmpty: (packIds: string[]) => Promise<boolean>;
-  downloadStarterPacks: (packIds: string[]) => Promise<{added: number; skipped: number}>;
+  downloadStarterPacks: (packIds: string[]) => Promise<{added: number; skipped: number; failed: number}>;
   removeStarterTracks: () => Promise<number>;
 
   // Removal semantics (Library / Playlist / Current Source)
@@ -712,7 +712,7 @@ export const useDJStore = create<DJState>()(
     repeatMode: 'playlist',
   };
 
-  const seedValentine2026StarterTracksIfEmpty = async (): Promise<boolean> => {
+  const seedStarterTracksIfLibraryEmpty = async (packIds: StarterPackId[]): Promise<boolean> => {
     if (didAttemptStarterSeedThisSession) return false;
     didAttemptStarterSeedThisSession = true;
 
@@ -727,10 +727,13 @@ export const useDJStore = create<DJState>()(
       if (get().tracks.length > 0) return false;
     }
 
+    const tracksToSeed = getStarterPackTracks(packIds);
+    if (tracksToSeed.length === 0) return false;
+
     // Fetch starter MP3s from /public and store them as blobs like normal imports.
     const seeded: Track[] = [];
 
-    for (const starter of valentine2026Pack) {
+    for (const starter of tracksToSeed) {
       try {
         const response = await fetch(starter.url);
         if (!response.ok) {
@@ -823,6 +826,7 @@ export const useDJStore = create<DJState>()(
           status: 'ready',
           sourceType: 'starter',
           importedAt: Date.now(),
+          artworkUrl: starter.artworkUrl,
         };
 
         // Starter tracks should be available offline once fetched.
@@ -1220,38 +1224,29 @@ export const useDJStore = create<DJState>()(
       const ids = Array.isArray(packIds) ? packIds : [];
       if (ids.length === 0) return false;
 
-      // Only one pack is implemented right now; keep the API future-proof.
-      if (ids.includes('valentine-2026')) {
-        const seeded = await seedValentine2026StarterTracksIfEmpty();
-        if (seeded) {
-          // Refresh state from IndexedDB when available.
-          try {
-            const tracks = await getAllTracks();
-            set({ tracks });
-          } catch {
-            // ignore
-          }
-        }
-        return seeded;
-      }
+      const validIds = ids.filter((packId): packId is StarterPackId => isStarterPackId(packId));
+      if (validIds.length === 0) return false;
 
-      return false;
+      const seeded = await seedStarterTracksIfLibraryEmpty(validIds);
+      if (seeded) {
+        // Refresh state from IndexedDB when available.
+        try {
+          const tracks = await getAllTracks();
+          set({ tracks });
+        } catch {
+          // ignore
+        }
+      }
+      return seeded;
     },
 
     downloadStarterPacks: async (packIds: string[]) => {
-      if (!packIds.length) return { added: 0, skipped: 0 };
+      if (!packIds.length) return { added: 0, skipped: 0, failed: 0 };
 
-      // Get tracks for selected packs
-      const tracksToAdd: typeof valentine2026Pack = [];
-      for (const packId of packIds) {
-        if (packId === 'valentine-2026') {
-          tracksToAdd.push(...valentine2026Pack);
-        } else if (packId === 'party-pack') {
-          tracksToAdd.push(...partyPack);
-        }
-      }
+      const validIds = packIds.filter((packId): packId is StarterPackId => isStarterPackId(packId));
+      const tracksToAdd = getStarterPackTracks(validIds);
 
-      if (tracksToAdd.length === 0) return { added: 0, skipped: 0 };
+      if (tracksToAdd.length === 0) return { added: 0, skipped: 0, failed: 0 };
 
       // Get existing tracks to dedupe
       let existing: Track[] = [];
@@ -1265,7 +1260,7 @@ export const useDJStore = create<DJState>()(
       const newOnes = tracksToAdd.filter(t => !existingKeys.has(t.url));
 
       if (newOnes.length === 0) {
-        return { added: 0, skipped: tracksToAdd.length };
+        return { added: 0, skipped: tracksToAdd.length, failed: 0 };
       }
 
       // Download and process new tracks
@@ -1360,6 +1355,7 @@ export const useDJStore = create<DJState>()(
             status: 'ready',
             sourceType: 'starter',
             importedAt: Date.now(),
+            artworkUrl: starter.artworkUrl,
           };
 
           try {
@@ -1387,7 +1383,7 @@ export const useDJStore = create<DJState>()(
         }
       }
 
-      return { added: seeded.length, skipped: tracksToAdd.length - newOnes.length };
+      return { added: seeded.length, skipped: tracksToAdd.length - newOnes.length, failed: newOnes.length - seeded.length };
     },
 
     removeStarterTracks: async () => {

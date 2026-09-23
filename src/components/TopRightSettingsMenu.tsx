@@ -381,7 +381,7 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                         className="w-full"
                         onClick={() => setDownloadPacksModalOpen(true)}
                       >
-                        Download Starter Packs
+                        Open Music Store
                       </Button>
 
                       <div className="h-4" />

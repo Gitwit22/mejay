@@ -19,6 +19,8 @@ export interface Track {
   localPath: string;
   displayName: string;
   artist?: string;
+  /** Optional artwork URL for bundled store music or future uploaded cover art. */
+  artworkUrl?: string;
   /** True for bundled starter-pack tracks (not user imports). */
   isStarter?: boolean;
   duration: number;
