@@ -3,6 +3,7 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { Track, TrackStatus, Settings, getAllTracks, getSettings, addTrack, updateTrack, deleteTrack, updateSettings, generateId, getAllPlaylists, Playlist, addPlaylist, updatePlaylist, deletePlaylist, PartySource, resetLocalDatabase, clearTracksAndPlaylists, markTrackMissing as dbMarkTrackMissing } from '@/lib/db';
 import { audioEngine, isStaleLoadError, DeckId } from '@/lib/audioEngine';
 import { isSupportedAudioFile, SUPPORTED_FORMATS_LABEL } from '@/lib/audioFormats';
+import { autoAdvanceCutoffSec, effectiveStartTimeSec } from '@/lib/playbackWindow';
 import { detectBPM } from '@/lib/bpmDetector';
 import { computeClampedTempoRatio, computeRequiredTempoShiftPercent, isOverTempoCap, resolveMaxTempoPercent } from '@/lib/tempoMatch';
 import { computePresetTempo } from '@/lib/tempoPresets';
@@ -623,36 +624,13 @@ export const useDJStore = create<DJState>()(
     armAutoMixTriggerForState(after);
   };
 
-  const getEffectiveStartTimeSec = (track: Track | undefined, settings: Settings | undefined) => {
-    const userOffset = (settings?.nextSongStartOffset ?? 0);
-    // If the track has a detected leading-silence boundary, use it as a floor so
-    // playback always skips past silence even when the user offset is lower.
-    const silenceSkip = (typeof track?.trueStartTime === 'number' && Number.isFinite(track.trueStartTime) && track.trueStartTime > 0)
-      ? track.trueStartTime
-      : 0;
-    const duration = track?.duration;
-    if (!duration || !Number.isFinite(duration)) return Math.max(0, Math.max(userOffset, silenceSkip));
-    // Never skip more than half of a (short) track via the user offset, otherwise the start
-    // lands past the auto-advance cutoff and the track is skipped the moment it starts.
-    const base = Math.max(Math.min(userOffset, duration * 0.5), silenceSkip);
-    return clamp(base, 0, Math.max(0, duration - 0.25));
-  };
+  const getEffectiveStartTimeSec = (track: Track | undefined, settings: Settings | undefined) =>
+    effectiveStartTimeSec(track, settings);
 
   /** Compute the hard cutoff time (track-seconds) at which the deck should auto-advance.
    *  Stacks trueEndTime (silence trim) and endEarlySeconds (user setting). */
-  const computeAutoAdvanceCutoff = (track: Track | undefined, settings: Settings | undefined): number => {
-    if (!track) return 0;
-    const duration = track.duration ?? 0;
-    if (!duration || !Number.isFinite(duration) || duration <= 0) return 0;
-    const musicalEnd = (typeof track.trueEndTime === 'number' && Number.isFinite(track.trueEndTime) && track.trueEndTime > 0)
-      ? track.trueEndTime
-      : duration;
-    // End-early trims at most a quarter of the track so short tracks still play.
-    const endEarly = Math.min(clamp(settings?.endEarlySeconds ?? 0, 0, 60), musicalEnd * 0.25);
-    const cutoff = musicalEnd - endEarly;
-    // Ensure at least 1 second of playback
-    return Math.max(1, cutoff);
-  };
+  const computeAutoAdvanceCutoff = (track: Track | undefined, settings: Settings | undefined): number =>
+    track ? autoAdvanceCutoffSec(track, settings) : 0;
 
   /** Set the autoAdvanceCutoff on the engine for a given deck based on its track + settings. */
   const applyAutoAdvanceCutoff = (deck: DeckId, track: Track | undefined, settings: Settings | undefined) => {
