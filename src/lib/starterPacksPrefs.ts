@@ -1,9 +1,11 @@
+import { isStarterPackId, type StarterPackId } from '@/config/starterPacks';
+
+export { type StarterPackId };
+
 export const STARTER_PACKS_CHOICE_MADE_KEY = 'mejay:starterPacksChoiceMade';
 export const STARTER_PACKS_ENABLED_KEY = 'mejay:starterPacksEnabled';
 export const STARTER_PROMPT_PENDING_KEY = 'mejay:starterPromptPending';
 export const ONBOARDED_KEY = 'mejay:onboarded';
-
-export type StarterPackId = 'valentine-2026' | 'party-pack';
 
 export type StarterPacksPrefs = {
   choiceMade: boolean;
@@ -68,7 +70,7 @@ export const readStarterPacksPrefs = (): StarterPacksPrefs => {
     const rawEnabled = window.localStorage.getItem(STARTER_PACKS_ENABLED_KEY);
     const parsed = safeParseJson(rawEnabled);
     if (Array.isArray(parsed)) {
-      enabledPackIds = parsed.filter((x): x is StarterPackId => x === 'valentine-2026');
+      enabledPackIds = parsed.filter((x): x is StarterPackId => typeof x === 'string' && isStarterPackId(x));
     }
   } catch {
     // ignore

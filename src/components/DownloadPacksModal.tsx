@@ -5,6 +5,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { toast } from '@/hooks/use-toast';
 import { useDJStore } from '@/stores/djStore';
+import { getStarterPackName, starterPacksCatalog } from '@/config/starterPacks';
 import type { StarterPackId } from '@/lib/starterPacksPrefs';
 
 export type DownloadPacksModalProps = {
@@ -12,16 +13,13 @@ export type DownloadPacksModalProps = {
   onOpenChange: (open: boolean) => void;
 };
 
-const VALENTINE_PACK_ID: StarterPackId = 'valentine-2026';
-const PARTY_PACK_ID: StarterPackId = 'party-pack';
-
 export function DownloadPacksModal(props: DownloadPacksModalProps) {
   const { open, onOpenChange } = props;
 
-  const [selectedPacks, setSelectedPacks] = useState<string[]>([]);
+  const [selectedPacks, setSelectedPacks] = useState<StarterPackId[]>([]);
   const [isDownloading, setIsDownloading] = useState(false);
 
-  function togglePack(packId: string) {
+  function togglePack(packId: StarterPackId) {
     setSelectedPacks((prev) =>
       prev.includes(packId)
         ? prev.filter((id) => id !== packId)
@@ -37,8 +35,8 @@ export function DownloadPacksModal(props: DownloadPacksModalProps) {
   const handleDownload = async () => {
     if (selectedPacks.length === 0) {
       toast({
-        title: 'No packs selected',
-        description: 'Please select at least one pack to download.',
+        title: 'No releases selected',
+        description: 'Select at least one Music Store release to add to your library.',
         variant: 'destructive',
       });
       return;
@@ -46,31 +44,30 @@ export function DownloadPacksModal(props: DownloadPacksModalProps) {
 
     setIsDownloading(true);
     try {
-      const result = await useDJStore.getState().downloadStarterPacks(selectedPacks as StarterPackId[]);
-      
-      if (result.added === 0 && result.skipped > 0) {
+      const result = await useDJStore.getState().downloadStarterPacks(selectedPacks);
+      const packNames = selectedPacks.map((id) => getStarterPackName(id)).join(', ');
+
+      if (result.added === 0 && result.skipped > 0 && result.failed === 0) {
         toast({
-          title: 'No new tracks',
-          description: 'All selected tracks are already in your library.',
+          title: 'Already in your library',
+          description: `Everything from ${packNames} is already available on this device.`,
+        });
+      } else if (result.added === 0 && result.failed > 0) {
+        toast({
+          title: 'Music Store download failed',
+          description: `${result.failed} track${result.failed === 1 ? '' : 's'} could not be downloaded from ${packNames}.`,
+          variant: 'destructive',
         });
       } else if (result.added > 0) {
-        const packNames = selectedPacks
-          .map((id) => {
-            if (id === VALENTINE_PACK_ID) return 'Valentine 2026';
-            if (id === PARTY_PACK_ID) return 'Party Pack';
-            return id;
-          })
-          .join(', ');
-
         toast({
-          title: 'Packs downloaded',
-          description: `Added ${result.added} track${result.added === 1 ? '' : 's'} from ${packNames}${result.skipped > 0 ? ` (${result.skipped} already in library)` : ''}.`,
+          title: 'Music added to your library',
+          description: `Added ${result.added} track${result.added === 1 ? '' : 's'} from ${packNames}${result.skipped > 0 ? ` • ${result.skipped} already owned` : ''}${result.failed > 0 ? ` • ${result.failed} unavailable` : ''}.`,
         });
         close();
       }
     } catch (e) {
       toast({
-        title: 'Download failed',
+        title: 'Music Store download failed',
         description: e instanceof Error ? e.message : 'Please try again.',
         variant: 'destructive',
       });
@@ -84,8 +81,8 @@ export function DownloadPacksModal(props: DownloadPacksModalProps) {
     try {
       const removed = await useDJStore.getState().removeStarterTracks();
       toast({
-        title: 'Starter tracks removed',
-        description: `Removed ${removed} starter track${removed === 1 ? '' : 's'} from your library.`,
+        title: 'Store music removed',
+        description: `Removed ${removed} bundled track${removed === 1 ? '' : 's'} from your library.`,
       });
       close();
     } catch (e) {
@@ -103,56 +100,69 @@ export function DownloadPacksModal(props: DownloadPacksModalProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Download Starter Packs</DialogTitle>
+          <DialogTitle>Music Store</DialogTitle>
           <DialogDescription>
-            Download starter tracks to your library. Duplicates will be skipped.
+            Browse bundled releases for this device. Artwork, artist info, and track details are shown before you add anything.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="flex items-start gap-3">
-            <Checkbox
-              id="download-pack-valentine-2026"
-              checked={selectedPacks.includes(VALENTINE_PACK_ID)}
-              onCheckedChange={() => togglePack(VALENTINE_PACK_ID)}
-              disabled={isDownloading}
-            />
-            <div className="grid gap-1 leading-tight">
-              <Label htmlFor="download-pack-valentine-2026">Valentine 2026 (5 tracks)</Label>
-              <div className="text-xs text-muted-foreground">John Blaze — Believe It, I Do, SAYLESS, Sundress, Turnstyle</div>
-            </div>
-          </div>
-
-          <div className="flex items-start gap-3">
-            <Checkbox
-              id="download-pack-party"
-              checked={selectedPacks.includes(PARTY_PACK_ID)}
-              onCheckedChange={() => togglePack(PARTY_PACK_ID)}
-              disabled={isDownloading}
-            />
-            <div className="grid gap-1 leading-tight">
-              <Label htmlFor="download-pack-party">Party Pack (6 tracks)</Label>
-              <div className="text-xs text-muted-foreground">John Blaze — Im So Lit, Its a Celebration, Money Right, No Friends, On Tha Move, Strawberry and Lime Liquor</div>
-            </div>
-          </div>
+          {starterPacksCatalog.map((pack) => {
+            const isSelected = selectedPacks.includes(pack.id);
+            return (
+              <div
+                key={pack.id}
+                className="flex items-start gap-3 rounded-xl border border-border bg-background/60 p-3"
+              >
+                <Checkbox
+                  id={`download-pack-${pack.id}`}
+                  checked={isSelected}
+                  onCheckedChange={() => togglePack(pack.id)}
+                  disabled={isDownloading}
+                  className="mt-1"
+                />
+                <Label htmlFor={`download-pack-${pack.id}`} className="flex flex-1 items-start gap-3 cursor-pointer">
+                  <img
+                    src={pack.artworkUrl}
+                    alt=""
+                    aria-hidden="true"
+                    className="h-20 w-20 rounded-lg object-cover"
+                  />
+                  <div className="grid gap-1 leading-tight">
+                    <span>{pack.title}</span>
+                    <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                      {pack.tagline} • {pack.releaseYear}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {pack.artist} • {pack.tracks.length} tracks • {pack.genres.join(' • ')}
+                    </div>
+                    <div className="text-xs text-muted-foreground">{pack.description}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {pack.tracks.map((track) => track.title).join(', ')}
+                    </div>
+                  </div>
+                </Label>
+              </div>
+            );
+          })}
         </div>
 
         <DialogFooter className="flex-col gap-2 sm:flex-row">
-          <Button 
-            type="button" 
-            variant="outline" 
-            onClick={handleRemoveStarters} 
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleRemoveStarters}
             disabled={isDownloading}
             className="text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
           >
-            Remove Starter Tracks
+            Remove Store Music
           </Button>
           <div className="flex gap-2">
             <Button variant="secondary" type="button" onClick={close} disabled={isDownloading}>
               Cancel
             </Button>
             <Button type="button" onClick={handleDownload} disabled={isDownloading}>
-              {isDownloading ? 'Downloading…' : 'Download'}
+              {isDownloading ? 'Adding…' : 'Add to Library'}
             </Button>
           </div>
         </DialogFooter>

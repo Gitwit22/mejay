@@ -1,35 +1,29 @@
 import { describe, it, expect } from 'vitest';
-import { valentine2026Pack, partyPack, type StarterTrack } from './starterPacks';
+import { getStarterPackById, isStarterPackId, starterPacksCatalog, valentine2026Pack } from './starterPacks';
 
 describe('starterPacks', () => {
-  it('should have Valentine 2026 pack tracks', () => {
-    expect(Array.isArray(valentine2026Pack)).toBe(true);
-    expect(valentine2026Pack.length).toBeGreaterThan(0);
-    expect(valentine2026Pack[0].isStarter).toBe(true);
+  it('should expose a music store catalog', () => {
+    expect(Array.isArray(starterPacksCatalog)).toBe(true);
+    expect(starterPacksCatalog.length).toBeGreaterThan(0);
+    expect(starterPacksCatalog[0].tracks.length).toBeGreaterThan(0);
   });
 
-  it('should have Party Pack tracks', () => {
-    expect(Array.isArray(partyPack)).toBe(true);
-    expect(partyPack.length).toBeGreaterThan(0);
-    expect(partyPack[0].isStarter).toBe(true);
+  it('should only accept supported starter pack ids', () => {
+    expect(isStarterPackId('valentine-2026')).toBe(true);
+    expect(isStarterPackId('party-pack')).toBe(false);
+  });
+
+  it('should resolve the featured release by id', () => {
+    expect(getStarterPackById('valentine-2026')?.title).toBe('Valentine 2026');
   });
 
   it('should have valid track structure in valentine pack', () => {
-    valentine2026Pack.forEach(track => {
+    valentine2026Pack.forEach((track) => {
       expect(track.id).toBeDefined();
       expect(track.title).toBeDefined();
       expect(track.artist).toBeDefined();
       expect(track.url).toBeDefined();
-      expect(track.isStarter).toBe(true);
-    });
-  });
-
-  it('should have valid track structure in party pack', () => {
-    partyPack.forEach(track => {
-      expect(track.id).toBeDefined();
-      expect(track.title).toBeDefined();
-      expect(track.artist).toBeDefined();
-      expect(track.url).toBeDefined();
+      expect(track.artworkUrl).toBeDefined();
       expect(track.isStarter).toBe(true);
     });
   });

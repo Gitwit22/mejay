@@ -5,6 +5,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { toast } from '@/hooks/use-toast';
 import { useDJStore } from '@/stores/djStore';
+import { getStarterPackName, starterPacksCatalog } from '@/config/starterPacks';
 import type { StarterPackId } from '@/lib/starterPacksPrefs';
 import { readStarterPacksPrefs, writeStarterPacksPrefs } from '@/lib/starterPacksPrefs';
 
@@ -13,22 +14,19 @@ export type StarterPacksOnboardingModalProps = {
   onOpenChange: (open: boolean) => void;
 };
 
-const VALENTINE_PACK_ID: StarterPackId = 'valentine-2026';
-const PARTY_PACK_ID: StarterPackId = 'party-pack';
-
 export function StarterPacksOnboardingModal(props: StarterPacksOnboardingModalProps) {
   const { open, onOpenChange } = props;
 
-  const initialSelectedPacks = useMemo(() => {
+  const initialSelectedPacks = useMemo<StarterPackId[]>(() => {
     const prefs = readStarterPacksPrefs();
-    if (!prefs.choiceMade) return [VALENTINE_PACK_ID];
+    if (!prefs.choiceMade) return starterPacksCatalog.map((pack) => pack.id);
     return prefs.enabledPackIds;
   }, []);
 
-  const [selectedPacks, setSelectedPacks] = useState<string[]>(initialSelectedPacks);
+  const [selectedPacks, setSelectedPacks] = useState<StarterPackId[]>(initialSelectedPacks);
   const [isWorking, setIsWorking] = useState(false);
 
-  function togglePack(packId: string) {
+  function togglePack(packId: StarterPackId) {
     setSelectedPacks((prev) =>
       prev.includes(packId)
         ? prev.filter((id) => id !== packId)
@@ -48,7 +46,6 @@ export function StarterPacksOnboardingModal(props: StarterPacksOnboardingModalPr
   };
 
   const handleConfirm = async () => {
-    // Persist "disabled" immediately if nothing selected.
     if (selectedPacks.length === 0) {
       saveAndClose([]);
       return;
@@ -56,33 +53,28 @@ export function StarterPacksOnboardingModal(props: StarterPacksOnboardingModalPr
 
     setIsWorking(true);
     try {
-      const seeded = await useDJStore.getState().seedStarterTracksIfEmpty(selectedPacks as StarterPackId[]);
+      const seeded = await useDJStore.getState().seedStarterTracksIfEmpty(selectedPacks);
       if (!seeded) {
+        saveAndClose([]);
         toast({
-          title: 'Starter packs not added',
-          description: 'You already have tracks in your library.\nTo download starter packs, go to Settings and click Download Starter Packs.',
+          title: 'Store music not added',
+          description: 'You already have tracks in your library. Open Settings and choose Music Store to add bundled releases later.',
           variant: 'destructive',
         });
         return;
       }
 
-      const packNames = selectedPacks
-        .map((id) => {
-          if (id === VALENTINE_PACK_ID) return 'Valentine 2026';
-          if (id === PARTY_PACK_ID) return 'Party Pack';
-          return id;
-        })
-        .join(', ');
+      const packNames = selectedPacks.map((id) => getStarterPackName(id)).join(', ');
 
       toast({
-        title: 'Starter packs added',
-        description: `${packNames} tracks are now in your Library.`,
+        title: 'Music Store release added',
+        description: `${packNames} is now ready in your library.`,
       });
 
-      saveAndClose(selectedPacks as StarterPackId[]);
+      saveAndClose(selectedPacks);
     } catch (e) {
       toast({
-        title: 'Could not add starter packs',
+        title: 'Could not add store music',
         description: e instanceof Error ? e.message : 'Please try again.',
         variant: 'destructive',
       });
@@ -95,42 +87,51 @@ export function StarterPacksOnboardingModal(props: StarterPacksOnboardingModalPr
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Add a starter pack?</DialogTitle>
+          <DialogTitle>Add music from the Music Store?</DialogTitle>
           <DialogDescription>
-            Start with a few tracks so you can try Play Mode right away.
+            Start with a featured release so you can try Play Mode right away. You can still import your own music any time.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="flex items-start gap-3">
-            <Checkbox
-              id="starter-pack-valentine-2026"
-              checked={selectedPacks.includes(VALENTINE_PACK_ID)}
-              onCheckedChange={() => togglePack(VALENTINE_PACK_ID)}
-              disabled={isWorking}
-            />
-            <div className="grid gap-1 leading-tight">
-              <Label htmlFor="starter-pack-valentine-2026">Valentine 2026 (5 tracks)</Label>
-              <div className="text-xs text-muted-foreground">John Blaze — Believe It, I Do, SAYLESS, Sundress, Turnstyle</div>
-            </div>
-          </div>
-
-          <div className="flex items-start gap-3">
-            <Checkbox
-              id="starter-pack-party"
-              checked={selectedPacks.includes(PARTY_PACK_ID)}
-              onCheckedChange={() => togglePack(PARTY_PACK_ID)}
-              disabled={isWorking}
-            />
-            <div className="grid gap-1 leading-tight">
-              <Label htmlFor="starter-pack-party">Party Pack (6 tracks)</Label>
-              <div className="text-xs text-muted-foreground">John Blaze — Im So Lit, Its a Celebration, Money Right, No Friends, On Tha Move, Strawberry and Lime Liquor</div>
-            </div>
-          </div>
-
-          <div className="text-xs text-muted-foreground">
-            You can still import your own music any time.
-          </div>
+          {starterPacksCatalog.map((pack) => {
+            const isSelected = selectedPacks.includes(pack.id);
+            return (
+              <div
+                key={pack.id}
+                className="flex items-start gap-3 rounded-xl border border-border bg-background/60 p-3"
+              >
+                <Checkbox
+                  id={`starter-pack-${pack.id}`}
+                  checked={isSelected}
+                  onCheckedChange={() => togglePack(pack.id)}
+                  disabled={isWorking}
+                  className="mt-1"
+                />
+                <Label htmlFor={`starter-pack-${pack.id}`} className="flex flex-1 items-start gap-3 cursor-pointer">
+                  <img
+                    src={pack.artworkUrl}
+                    alt=""
+                    aria-hidden="true"
+                    className="h-20 w-20 rounded-lg object-cover"
+                  />
+                  <div className="grid gap-1 leading-tight">
+                    <span>{pack.title}</span>
+                    <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                      {pack.tagline} • {pack.releaseYear}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {pack.artist} • {pack.tracks.length} tracks • {pack.genres.join(' • ')}
+                    </div>
+                    <div className="text-xs text-muted-foreground">{pack.description}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {pack.tracks.map((track) => track.title).join(', ')}
+                    </div>
+                  </div>
+                </Label>
+              </div>
+            );
+          })}
         </div>
 
         <DialogFooter>

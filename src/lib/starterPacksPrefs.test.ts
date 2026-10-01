@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 
 // Mock localStorage
 const localStorageMock = (() => {
@@ -27,9 +27,14 @@ import {
   readStarterPacksPrefs,
   writeStarterPacksPrefs,
   type StarterPacksPrefs,
+  STARTER_PACKS_ENABLED_KEY,
 } from './starterPacksPrefs';
 
 describe('starterPacksPrefs', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
   describe('starter prompt pending', () => {
     it('should set and consume starter prompt pending', () => {
       setStarterPromptPending(true);
@@ -81,7 +86,13 @@ describe('starterPacksPrefs', () => {
       };
       writeStarterPacksPrefs(prefs);
       const read = readStarterPacksPrefs();
-      expect(read.choiceMade).toBe(true);
+      expect(read).toEqual(prefs);
+    });
+
+    it('should drop retired or invalid pack ids from storage', () => {
+      localStorage.setItem(STARTER_PACKS_ENABLED_KEY, JSON.stringify(['valentine-2026', 'party-pack', 'bad-id']));
+      const read = readStarterPacksPrefs();
+      expect(read.enabledPackIds).toEqual(['valentine-2026']);
     });
   });
 });
