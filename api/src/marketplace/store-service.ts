@@ -61,7 +61,7 @@ export class StoreService {
         (provider.suspended_at IS NULL AND provider.stripe_details_submitted AND provider.stripe_payouts_enabled
           AND provider.stripe_transfers_status = 'active') AS purchase_available,
         COUNT(DISTINCT track.id)::integer AS track_count,
-        MIN(preview.id) AS preview_asset_id
+        (ARRAY_AGG(preview.id ORDER BY track.disc_number, track.track_number, preview.created_at DESC) FILTER (WHERE preview.id IS NOT NULL))[1] AS preview_asset_id
        FROM releases r
       JOIN provider_profiles provider ON provider.id = r.provider_profile_id
        JOIN release_artists credit ON credit.release_id = r.id AND credit.is_primary = TRUE

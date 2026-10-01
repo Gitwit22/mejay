@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { Track, TrackStatus, Settings, getAllTracks, getSettings, addTrack, updateTrack, deleteTrack, updateSettings, generateId, getAllPlaylists, Playlist, addPlaylist, updatePlaylist, deletePlaylist, PartySource, resetLocalDatabase, clearTracksAndPlaylists, markTrackMissing as dbMarkTrackMissing } from '@/lib/db';
 import { audioEngine, isStaleLoadError, DeckId } from '@/lib/audioEngine';
+import { isSupportedAudioFile, SUPPORTED_FORMATS_LABEL } from '@/lib/audioFormats';
 import { detectBPM } from '@/lib/bpmDetector';
 import { computeClampedTempoRatio, computeRequiredTempoShiftPercent, isOverTempoCap, resolveMaxTempoPercent } from '@/lib/tempoMatch';
 import { computePresetTempo } from '@/lib/tempoPresets';
@@ -108,7 +109,8 @@ interface DJState {
   loadTracks: () => Promise<void>;
   loadPlaylists: () => Promise<void>;
   loadSettings: () => Promise<void>;
-  importTracks: (files: FileList) => Promise<void>;
+  /** skipQuota: for music bought in the MEJay store, which never counts toward the Free import limit. */
+  importTracks: (files: FileList | File[], opts?: { skipQuota?: boolean }) => Promise<void>;
   clearAllImports: () => Promise<void>;
   deleteTrackById: (id: string) => Promise<void>;
 
@@ -1621,58 +1623,9 @@ export const useDJStore = create<DJState>()(
       });
     },
 
-    importTracks: async (files: FileList) => {
-      const supportedMimeTypes = new Set([
-        'audio/mpeg',
-        'audio/mp4',
-        'audio/aac',
-        'audio/wav',
-        'audio/x-m4a',
-        // Non-standard but seen in the wild (especially mobile browsers)
-        'audio/mp3',
-        'audio/x-mp3',
-        'audio/x-mpeg',
-        'audio/m4a',
-      ]);
-
-      const supportedExtensions = new Set(['mp3', 'm4a', 'aac', 'wav', 'mp4']);
-
-      const isSupportedAudioFile = (file: File) => {
-        const mime = (file.type || '').toLowerCase().trim();
-
-        const name = (file.name || '').toLowerCase();
-        const ext = name.includes('.') ? name.split('.').pop() : '';
-        const hasSupportedExt = !!ext && supportedExtensions.has(ext);
-
-        // Prefer extension checks first. On iOS, MIME can be empty or wrong.
-        // Gmail attachments are often `application/octet-stream` even for MP3.
-        if (hasSupportedExt) {
-          if (!mime) return true;
-          if (mime === 'application/octet-stream') return true;
-          if (supportedMimeTypes.has(mime)) return true;
-          if (mime.startsWith('audio/')) return true;
-          // Some providers incorrectly label audio files as video/*.
-          // Only allow video/* when the extension clearly indicates audio.
-          if (mime.startsWith('video/')) return true;
-          return false;
-        }
-
-        if (mime) {
-          if (supportedMimeTypes.has(mime)) return true;
-          // If browser reports a generic audio/* but not one of our exact types, still allow.
-          if (mime.startsWith('audio/')) return true;
-          // Some providers incorrectly label audio as octet-stream.
-          if (mime === 'application/octet-stream') return true;
-          return false;
-        }
-
-        // iOS Safari / Files can return an empty MIME type; fall back to extension.
-        if (!ext) return false;
-        return supportedExtensions.has(ext);
-      };
-
+    importTracks: async (files: FileList | File[], opts?: { skipQuota?: boolean }) => {
       const planState = usePlanStore.getState();
-      const isFree = planState.plan === 'free';
+      const isFree = planState.plan === 'free' && !opts?.skipQuota;
 
       if (!files || files.length === 0) return;
 
@@ -1963,7 +1916,7 @@ export const useDJStore = create<DJState>()(
         if (skippedUnsupportedCount > 0) {
           toast({
             title: 'No supported audio files',
-            description: 'Those files were skipped. Try .mp3, .m4a, .aac, .wav, or .mp4 (audio).',
+            description: `Those files were skipped. Try ${SUPPORTED_FORMATS_LABEL}.`,
             variant: 'destructive',
           });
         }

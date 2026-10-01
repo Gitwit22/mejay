@@ -17,12 +17,14 @@ export async function getReleaseSaleReadiness(database: Database, releaseId: str
     `SELECT
       EXISTS (
         SELECT 1 FROM products product JOIN prices price ON price.product_id = product.id
-        WHERE product.release_id = release.id AND product.active = TRUE AND price.active = TRUE
+        -- product.active is not required: unpublish/takedown deactivate products and publishing
+        -- re-activates them, so requiring it would block re-publishing forever.
+        WHERE product.release_id = release.id AND price.active = TRUE
           AND price.currency = 'USD' AND price.amount_minor >= 100
           AND price.effective_from <= CURRENT_TIMESTAMP
           AND (price.effective_until IS NULL OR price.effective_until > CURRENT_TIMESTAMP)
       ) AS has_minimum_price,
-      (provider.stripe_details_submitted AND provider.stripe_payouts_enabled
+      (provider.suspended_at IS NULL AND provider.stripe_details_submitted AND provider.stripe_payouts_enabled
         AND provider.stripe_transfers_status = 'active') AS stripe_ready
      FROM releases release
      JOIN provider_profiles provider ON provider.id = release.provider_profile_id

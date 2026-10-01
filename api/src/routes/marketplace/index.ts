@@ -10,6 +10,7 @@ import {
   providerSchema,
   releaseSchema,
   releaseDraftSchema,
+  releasePriceSchema,
   revenueSplitsSchema,
   rightsDeclarationSchema,
   submitReleaseSchema,
@@ -140,6 +141,9 @@ export const assignGeneratedIsrc = handler(generatedIsrcSchema, (service, userId
 export const createProduct = handler(productSchema, (service, userId, input) => service.createProduct(userId, input))
 export const createPrice = handler(priceSchema, (service, userId, input, params) =>
   service.createPrice(userId, requiredParam(params, 'productId'), input),
+)
+export const setReleasePrice = handler(releasePriceSchema, (service, userId, input, params) =>
+  service.setReleasePrice(userId, requiredParam(params, 'releaseId'), input),
 )
 export const replaceRevenueSplits = handler(revenueSplitsSchema, (service, userId, input, params) =>
   service.replaceRevenueSplits(userId, requiredParam(params, 'trackId'), input),

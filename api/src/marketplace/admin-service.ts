@@ -26,11 +26,12 @@ const reviewDecision = {
   request_changes: 'changes_requested',
   reject: 'rejected',
 } as const
-const adminActions = new Set<ReleaseAdminCommand['action']>(['publish_now', 'schedule', 'publish_due', 'unpublish', 'takedown'])
+const adminActions = new Set<ReleaseAdminCommand['action']>(['publish_now', 'schedule', 'publish_due', 'unpublish', 'takedown', 'restore'])
 
 export function releaseCommandTarget(action: ReleaseAdminCommand['action']): string {
   if (action === 'start_review') return 'UNDER_REVIEW'
-  if (action === 'approve' || action === 'unpublish') return 'APPROVED'
+  // A restored takedown goes back to APPROVED so an admin re-publishes it deliberately.
+  if (action === 'approve' || action === 'unpublish' || action === 'restore') return 'APPROVED'
   if (action === 'request_changes') return 'CHANGES_REQUESTED'
   if (action === 'reject') return 'REJECTED'
   if (action === 'schedule') return 'SCHEDULED'
@@ -49,11 +50,12 @@ export function releaseCommandAllowed(action: ReleaseAdminCommand['action'], sta
     publish_due: ['SCHEDULED'],
     unpublish: ['LIVE'],
     takedown: ['LIVE', 'SCHEDULED'],
+    restore: ['TAKEN_DOWN'],
   }
   return expected[action].includes(status)
 }
 
-async function insertAudit(db: Database, userId: string, release: Release, action: string, target: string): Promise<void> {
+async function insertAudit(db: Database, userId: string | null, release: Release, action: string, target: string): Promise<void> {
   await db.prepare(
     `INSERT INTO marketplace_audit_events
       (id, provider_profile_id, actor_user_id, entity_type, entity_id, action, before_data, after_data, metadata)
@@ -132,7 +134,7 @@ export class MarketplaceAdminService {
        ORDER BY pr.created_at DESC`,
     ).all()
     const splits = await this.database.prepare(
-      `SELECT s.id, s.version, s.active, t.title AS track_title, p.display_name AS provider_name,
+      `SELECT s.id, s.version, s.active, t.title AS track_title, p.display_name AS provider_name, s.provider_profile_id AS provider_id,
         COALESCE(SUM(e.share_bps), 0)::integer AS total_bps, COUNT(e.id)::integer AS payee_count
        FROM revenue_split_sets s JOIN tracks t ON t.id = s.track_id
        JOIN provider_profiles p ON p.id = s.provider_profile_id
@@ -141,7 +143,8 @@ export class MarketplaceAdminService {
     ).all()
     const takedowns = await this.database.prepare(
       `SELECT td.id, td.reason, td.prior_status, td.created_at, td.restored_at,
-        r.title AS release_title, p.display_name AS provider_name
+        r.title AS release_title, p.display_name AS provider_name,
+        r.id AS release_id, r.version AS release_version, r.status AS release_status
        FROM release_takedowns td JOIN releases r ON r.id = td.release_id
        JOIN provider_profiles p ON p.id = td.provider_profile_id ORDER BY td.created_at DESC`,
     ).all()
@@ -389,6 +392,39 @@ export class MarketplaceAdminService {
     })
   }
 
+  /**
+   * System job: publish SCHEDULED releases whose time has come. Releases that are no longer
+   * sale-ready (price or payouts) stay scheduled and are reported back so staff can follow up.
+   */
+  async publishDueReleases(limit = 50): Promise<{published: string[]; notReady: string[]}> {
+    const {results: due} = await this.database.prepare(
+      `SELECT id FROM releases WHERE status = 'SCHEDULED' AND scheduled_release_at <= CURRENT_TIMESTAMP
+       ORDER BY scheduled_release_at LIMIT ?1`,
+    ).bind(limit).all<{id: string}>()
+    const published: string[] = []
+    const notReady: string[] = []
+    for (const {id} of due) {
+      const outcome = await this.database.transaction(async (db) => {
+        const release = await db.prepare('SELECT * FROM releases WHERE id = ?1 FOR UPDATE').bind(id).first<Release>()
+        if (!release || release.status !== 'SCHEDULED' || !release.scheduled_release_at
+          || new Date(release.scheduled_release_at).getTime() > Date.now()) return 'skipped' as const
+        const sale = await getReleaseSaleReadiness(db, release.id)
+        if (!sale.hasMinimumPrice || !sale.stripeReady) return 'not_ready' as const
+        const now = new Date().toISOString()
+        await db.prepare(
+          `UPDATE releases SET status = 'LIVE', version = version + 1, updated_at = ?1, published_at = ?1
+           WHERE id = ?2`,
+        ).bind(now, release.id).run()
+        await db.prepare('UPDATE products SET active = TRUE, updated_at = ?1 WHERE release_id = ?2').bind(now, release.id).run()
+        await insertAudit(db, null, release, 'publish_due', 'LIVE')
+        return 'published' as const
+      })
+      if (outcome === 'published') published.push(id)
+      if (outcome === 'not_ready') notReady.push(id)
+    }
+    return {published, notReady}
+  }
+
   async commandRelease(userId: string, releaseId: string, command: ReleaseAdminCommand): Promise<unknown> {
     return this.database.transaction(async (db) => {
       const staff = await db.prepare(
@@ -437,6 +473,17 @@ export class MarketplaceAdminService {
       }
 
       const target = releaseCommandTarget(command.action)
+      if (command.action === 'restore') {
+        const duplicate = await db.prepare(
+          `SELECT other.id FROM releases other JOIN releases target ON target.id = ?1
+           WHERE other.provider_profile_id = target.provider_profile_id AND other.id <> target.id
+             AND other.duplicate_fingerprint = target.duplicate_fingerprint AND other.status <> 'TAKEN_DOWN'
+           LIMIT 1`,
+        ).bind(release.id).first()
+        if (duplicate) {
+          throw new MarketplaceError(409, 'duplicate_release', 'The provider already has an active copy of this release')
+        }
+      }
       const scheduledAt = command.action === 'schedule' ? command.scheduledReleaseAt : null
       const row = await db.prepare(
         `UPDATE releases SET status = ?1, version = version + 1, updated_at = ?2,
@@ -457,6 +504,12 @@ export class MarketplaceAdminService {
           reviewDecision[command.action as keyof typeof reviewDecision],
           'note' in command ? command.note : null, release.status, target,
         ).run()
+      }
+      if (command.action === 'restore') {
+        await db.prepare(
+          `UPDATE release_takedowns SET restored_at = ?1, restored_by_user_id = ?2
+           WHERE release_id = ?3 AND restored_at IS NULL`,
+        ).bind(now, userId, release.id).run()
       }
       if (command.action === 'takedown') {
         await db.prepare(

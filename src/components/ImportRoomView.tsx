@@ -1,4 +1,5 @@
 import { Upload, Music, Trash2, CheckCircle2, Play, ListPlus, Check, Plus, X, Search, CheckSquare, Square } from 'lucide-react';
+import { AUDIO_FILE_ACCEPT } from '@/lib/audioFormats';
 import { useState, useRef } from 'react';
 import { useDJStore } from '@/stores/djStore';
 import { cn, formatDuration } from '@/lib/utils';
@@ -42,23 +43,7 @@ export function ImportRoomView() {
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files && files.length > 0) {
-      // Hard-block non-audio (100% in code).
-      const audioExtRe = /\.(mp3|wav|m4a|aac|flac|ogg)$/i;
-      const invalid = Array.from(files).find((f) => {
-        const type = (f.type || '').toLowerCase();
-        return !(type.startsWith('audio/') || audioExtRe.test(f.name));
-      });
-
-      if (invalid) {
-        toast({
-          title: 'Audio files only',
-          description: 'Please select an audio file (mp3, wav, m4a, etc.).',
-          variant: 'destructive',
-        });
-        e.target.value = '';
-        return;
-      }
-
+      // Unsupported files are skipped (and counted) by importTracks; valid ones still import.
       const beforeIds = new Set(useDJStore.getState().tracks.map(t => t.id));
 
       try {
@@ -206,7 +191,7 @@ export function ImportRoomView() {
         ref={fileInputRef}
         id={fileInputId}
         type="file"
-        accept="audio/*,application/octet-stream,.mp3,.wav,.m4a,.aac,.flac,.ogg"
+        accept={AUDIO_FILE_ACCEPT}
         multiple
         onChange={handleFileSelect}
         className="sr-only"

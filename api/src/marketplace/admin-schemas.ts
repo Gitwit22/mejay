@@ -13,6 +13,7 @@ export const releaseAdminCommandSchema = z.discriminatedUnion('action', [
   z.object({action: z.literal('publish_due'), expectedVersion}),
   z.object({action: z.literal('unpublish'), expectedVersion}),
   z.object({action: z.literal('takedown'), expectedVersion, note}),
+  z.object({action: z.literal('restore'), expectedVersion, note}),
 ])
 
 export type ReleaseAdminCommand = z.infer<typeof releaseAdminCommandSchema>

@@ -193,6 +193,24 @@ export class CommerceService {
     ).bind(userId, productId).first()
     if (existing) throw new MarketplaceError(409, 'already_owned', 'This release is already in Purchased Music')
 
+    // Reuse a still-open Checkout Session for the same buyer+product (double clicks, second tab)
+    // instead of creating a second session that could be paid twice.
+    const openAttempt = await this.database.prepare(
+      `SELECT stripe_checkout_session_id FROM marketplace_checkout_attempts
+       WHERE buyer_user_id = ?1 AND product_id = ?2 AND status = 'checkout_created'
+         AND stripe_checkout_session_id IS NOT NULL AND expires_at > CURRENT_TIMESTAMP
+       ORDER BY created_at DESC LIMIT 1`,
+    ).bind(userId, productId).first<{stripe_checkout_session_id: string}>()
+    if (openAttempt?.stripe_checkout_session_id) {
+      const session = await stripeRequest<{id?: string; url?: string | null; status?: string}>({
+        secretKey: this.secretKey,
+        path: `/v1/checkout/sessions/${encodeURIComponent(openAttempt.stripe_checkout_session_id)}`,
+      }).catch(() => null)
+      if (session?.id && session.url && session.status === 'open') {
+        return {url: session.url, sessionId: session.id}
+      }
+    }
+
     const product = await this.database.prepare(
       `SELECT product.id AS product_id, product.name AS product_name, price.id AS price_id,
         price.amount_minor, price.currency, release.id AS release_id, release.title AS release_title,
@@ -856,6 +874,20 @@ export class CommerceService {
        ORDER BY purchase_order.paid_at DESC`,
     ).bind(userId).all()
     return results
+  }
+
+  /** Artwork for a purchase the buyer owns; works after the release is unpublished or taken down. */
+  async getPurchaseArtwork(userId: string, entitlementId: string): Promise<{storageKey: string; mimeType: string}> {
+    const asset = await this.database.prepare(
+      `SELECT asset.storage_key, asset.mime_type
+       FROM download_entitlements entitlement
+       JOIN marketplace_order_items item ON item.id = entitlement.order_item_id
+       JOIN marketplace_assets asset ON asset.id = item.artwork_asset_id
+       WHERE entitlement.id = ?1 AND entitlement.buyer_user_id = ?2
+         AND entitlement.status <> 'revoked' AND asset.kind = 'artwork'`,
+    ).bind(entitlementId, userId).first<{storage_key: string; mime_type: string}>()
+    if (!asset) throw new MarketplaceError(404, 'artwork_not_found', 'Artwork is unavailable')
+    return {storageKey: asset.storage_key, mimeType: asset.mime_type}
   }
 
   async getDownload(userId: string, entitlementId: string, fileId: string): Promise<{

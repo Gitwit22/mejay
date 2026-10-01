@@ -222,6 +222,12 @@ export type TrackInput = z.infer<typeof trackSchema>
 export type TrackDraftInput = z.infer<typeof trackDraftSchema>
 export type AssetInput = z.infer<typeof assetSchema>
 export type RightsDeclarationInput = z.infer<typeof rightsDeclarationSchema>
+export const releasePriceSchema = z.object({
+  name: nonEmpty,
+  amountMinor: z.number().int().min(100).max(100_000_00),
+}).strict()
+
+export type ReleasePriceInput = z.infer<typeof releasePriceSchema>
 export type IsrcAssignmentInput = z.infer<typeof isrcAssignmentSchema>
 export type GeneratedIsrcInput = z.infer<typeof generatedIsrcSchema>
 export type UploadInitInput = z.infer<typeof uploadInitSchema>

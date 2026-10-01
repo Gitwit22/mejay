@@ -2,6 +2,7 @@ import {MarketplaceError} from '../../marketplace/service'
 import {previewByteLimit, resolvePreviewRange, StoreService} from '../../marketplace/store-service'
 import type {PrivateBucket} from '../../services/r2'
 import {getSessionUserId, readJson} from '../_auth'
+import {applyRateLimit, getClientIp} from '../_security'
 
 type Context = {
   request: Request
@@ -96,6 +97,14 @@ export async function recordCatalogPreview(context: Context): Promise<Response> 
   const assetId = typeof body.assetId === 'string' ? body.assetId.trim() : ''
   if (!assetId) return json({ok: false, error: 'invalid_request'}, 400)
   try {
+    // Count at most one preview per caller per asset per 30 minutes, and cap total preview
+    // events per caller, so the "Most Previewed" ranking can't be inflated by replaying requests.
+    const ip = getClientIp(context.request)
+    const perAsset = await applyRateLimit({db: context.env.DB, key: ip, purpose: 'store_preview', kind: assetId.slice(0, 128), maxPerWindow: 1, windowSeconds: 30 * 60, lockoutMs: 30 * 60 * 1000})
+    const overall = perAsset.ok
+      ? await applyRateLimit({db: context.env.DB, key: ip, purpose: 'store_preview', kind: '*', maxPerWindow: 120, windowSeconds: 60 * 60})
+      : {ok: false}
+    if (!perAsset.ok || !overall.ok) return json({ok: true, data: {recorded: false}}, 200)
     const userId = await getSessionUserId(context.request, context.env as never)
     await new StoreService(context.env.DB).recordPreview(assetId, userId)
     return json({ok: true, data: {recorded: true}}, 201)

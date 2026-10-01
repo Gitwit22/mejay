@@ -1,6 +1,7 @@
 type Statement = {
   bind: (...values: unknown[]) => Statement
   first: <T = Record<string, unknown>>() => Promise<T | null>
+  all: <T = Record<string, unknown>>() => Promise<{results: T[]}>
   run: () => Promise<unknown>
 }
 
@@ -43,7 +44,11 @@ export function accountDeletionEligibility(
 export class AccountDeletionService {
   constructor(private readonly database: Database) {}
 
-  async deleteCurrentUser(args: {userId: string; email: string; forfeitFullProgram: boolean}): Promise<void> {
+  /**
+   * Deletes the account. Returns the storage keys of provider uploads that were removed from the
+   * database so the caller can delete the objects from R2 after the transaction commits.
+   */
+  async deleteCurrentUser(args: {userId: string; email: string; forfeitFullProgram: boolean}): Promise<{storageKeys: string[]}> {
     return this.database.transaction(async (db) => {
       const user = await db.prepare('SELECT id, email FROM users WHERE id = ?1 FOR UPDATE')
         .bind(args.userId)
@@ -71,6 +76,7 @@ export class AccountDeletionService {
         throw new AccountDeletionError(eligibility.code === 'subscription_active' ? 409 : 400, eligibility.code, message)
       }
 
+      let storageKeys: string[] = []
       const membership = await db.prepare(
         `SELECT pm.provider_profile_id, pm.role, p.owner_user_id
          FROM provider_members pm JOIN provider_profiles p ON p.id = pm.provider_profile_id
@@ -93,6 +99,20 @@ export class AccountDeletionService {
         }
 
         await this.anonymizeAudits(db, user.id, membership.provider_profile_id)
+        const {results: assets} = await db.prepare(
+          'SELECT storage_key FROM marketplace_assets WHERE provider_profile_id = ?1',
+        ).bind(membership.provider_profile_id).all<{storage_key: string}>()
+        storageKeys = assets.map((asset) => asset.storage_key).filter((key) => key.startsWith('marketplace/'))
+        // Abandoned (unpaid) checkouts and operational incidents reference the provider's catalog
+        // with RESTRICT foreign keys; detach them so the catalog can be removed.
+        await db.prepare(
+          `UPDATE marketplace_checkout_attempts SET product_id = NULL, release_id = NULL, updated_at = CURRENT_TIMESTAMP
+           WHERE release_id IN (SELECT id FROM releases WHERE provider_profile_id = ?1)
+              OR product_id IN (SELECT id FROM products WHERE provider_profile_id = ?1)`,
+        ).bind(membership.provider_profile_id).run()
+        await db.prepare(
+          'UPDATE marketplace_operational_incidents SET provider_profile_id = NULL WHERE provider_profile_id = ?1',
+        ).bind(membership.provider_profile_id).run()
         await db.prepare('DELETE FROM releases WHERE provider_profile_id = ?1').bind(membership.provider_profile_id).run()
         await db.prepare('DELETE FROM artists WHERE provider_profile_id = ?1').bind(membership.provider_profile_id).run()
         await db.prepare('DELETE FROM provider_members WHERE provider_profile_id = ?1').bind(membership.provider_profile_id).run()
@@ -116,6 +136,7 @@ export class AccountDeletionService {
       await db.prepare('DELETE FROM email_codes WHERE email = ?1').bind(user.email).run()
       await db.prepare('DELETE FROM auth_codes WHERE email = ?1').bind(user.email).run()
       await db.prepare('DELETE FROM users WHERE id = ?1').bind(user.id).run()
+      return {storageKeys}
     })
   }
 

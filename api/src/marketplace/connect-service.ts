@@ -97,6 +97,11 @@ export class ConnectService {
       params.set('capabilities[transfers][requested]', 'true')
       params.set('metadata[providerId]', provider.id)
       if (provider.country_code) params.set('country', provider.country_code)
+      // Cross-border payouts: providers outside the platform's country can only receive
+      // transfers under the recipient service agreement (Stripe rejects the default one).
+      if (provider.country_code && provider.country_code.toUpperCase() !== 'US') {
+        params.set('tos_acceptance[service_agreement]', 'recipient')
+      }
       if (provider.contact_email) params.set('email', provider.contact_email)
       const account = await stripeRequest<StripeAccount>({
         secretKey: this.secretKey,

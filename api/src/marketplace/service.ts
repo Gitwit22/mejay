@@ -12,6 +12,7 @@ import type {
   ProviderInput,
   ReleaseDraftInput,
   ReleaseInput,
+  ReleasePriceInput,
   RevenueSplitsInput,
   RightsDeclarationInput,
   SubmitReleaseInput,
@@ -21,7 +22,7 @@ import type {
   UploadInitInput,
 } from './schemas'
 import {getReleaseSaleReadiness} from './sale-policy'
-import {inspectUpload, validateInspectedUpload} from './upload-validation'
+import {inspectUpload, validateInspectedUpload, isTruncatedJpegHeader} from './upload-validation'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -172,6 +173,8 @@ async function assertProviderCanSubmit(db: Database, providerId: string): Promis
     throw new MarketplaceError(409, 'provider_not_approved', 'The provider must be approved before submitting releases')
   }
 }
+
+const JPEG_HEADER_SCAN_BYTES = 4 * 1024 * 1024
 
 export function isReleaseMutable(status: ReleaseStatus): boolean {
   return !lockedReleaseStatuses.includes(status)
@@ -604,7 +607,13 @@ export class MarketplaceService {
       }
       const objectBytes = await bucket.getExact(asset.storage_key, 'bytes=0-65535')
       if (!objectBytes) throw new MarketplaceError(422, 'upload_missing', 'The uploaded object was not found')
-      const bytes = new Uint8Array(await new Response(objectBytes.body).arrayBuffer())
+      let bytes = new Uint8Array(await new Response(objectBytes.body).arrayBuffer())
+      if (isTruncatedJpegHeader(bytes) && Number(asset.byte_size) > bytes.length) {
+        // EXIF/ICC segments can push the JPEG frame header past 64 KB; read further (bounded).
+        const end = Math.min(Number(asset.byte_size), JPEG_HEADER_SCAN_BYTES) - 1
+        const larger = await bucket.getExact(asset.storage_key, `bytes=0-${end}`)
+        if (larger) bytes = new Uint8Array(await new Response(larger.body).arrayBuffer())
+      }
       const metadata = typeof asset.metadata === 'string' ? JSON.parse(asset.metadata) : asset.metadata ?? {}
       const validationErrors = validateInspectedUpload({
         declaredMimeType: asset.mime_type,
@@ -803,6 +812,40 @@ export class MarketplaceService {
       ).bind(id, productId, input.amountMinor, input.currency, input.effectiveFrom ?? null, input.effectiveUntil ?? null))
       await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'price', entityId: id, action: 'price.created', after: row})
       return row
+    })
+  }
+
+  /**
+   * Create or replace the release's download price in one transaction: reuses the release
+   * product if it exists (so a half-finished earlier save can't lock the step) and retires
+   * any previous active price.
+   */
+  async setReleasePrice(userId: string, releaseId: string, input: ReleasePriceInput): Promise<unknown> {
+    return this.database.transaction(async (db: Database) => {
+      const context = await providerContext(db, userId)
+      await assertReleaseMutable(db, releaseId, context.providerId)
+      let product = await db.prepare(
+        `SELECT id FROM products WHERE release_id = ?1 AND provider_profile_id = ?2
+         ORDER BY created_at LIMIT 1 FOR UPDATE`,
+      ).bind(releaseId, context.providerId).first<{id: string}>()
+      if (!product) {
+        product = await inserted<{id: string}>(db.prepare(
+          `INSERT INTO products (id, provider_profile_id, release_id, name)
+           VALUES (?1, ?2, ?3, ?4) RETURNING id`,
+        ).bind(crypto.randomUUID(), context.providerId, releaseId, input.name))
+        await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'product', entityId: product.id, action: 'product.created', after: product})
+      }
+      await db.prepare(
+        `UPDATE prices SET active = FALSE,
+          effective_until = CASE WHEN effective_from < CURRENT_TIMESTAMP THEN CURRENT_TIMESTAMP ELSE effective_until END
+         WHERE product_id = ?1 AND active = TRUE`,
+      ).bind(product.id).run()
+      const id = crypto.randomUUID()
+      const price = await inserted<{id: string; amount_minor: number; currency: string}>(db.prepare(
+        `INSERT INTO prices (id, product_id, amount_minor, currency) VALUES (?1, ?2, ?3, 'USD') RETURNING *`,
+      ).bind(id, product.id, input.amountMinor))
+      await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'price', entityId: id, action: 'price.set', after: price})
+      return {productId: product.id, price}
     })
   }
 

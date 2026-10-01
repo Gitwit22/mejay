@@ -488,4 +488,97 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       expect(updated.rows[0].transfer_status).toBe('transferred')
     })
   })
+
+  describe('follow-up store flows', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('sets and replaces a release price atomically', async () => {
+      const {userId, release} = await createProviderFixture('Pricing')
+      await service.setReleasePrice(userId, release.id, {name: 'Pricing Download', amountMinor: 199})
+      await service.setReleasePrice(userId, release.id, {name: 'Pricing Download', amountMinor: 299})
+      const rows = await pool.query<{products: number; active_prices: number; amount: number}>(
+        `SELECT COUNT(DISTINCT product.id)::integer AS products,
+          COUNT(price.id) FILTER (WHERE price.active)::integer AS active_prices,
+          MAX(price.amount_minor) FILTER (WHERE price.active) AS amount
+         FROM products product LEFT JOIN prices price ON price.product_id = product.id
+         WHERE product.release_id = $1`,
+        [release.id],
+      )
+      expect(rows.rows[0]).toEqual({products: 1, active_prices: 1, amount: 299})
+    })
+
+    it('publishes due scheduled releases and restores takedowns to approved', async () => {
+      await resetIsrcState()
+      const fixture = await prepareLiveRelease('Schedule')
+      const admin = adminService()
+      const unpublished = await admin.commandRelease(adminUserId, fixture.release.id, {action: 'unpublish', expectedVersion: fixture.version}) as {version: number}
+      const scheduled = await admin.commandRelease(adminUserId, fixture.release.id, {
+        action: 'schedule', expectedVersion: unpublished.version, scheduledReleaseAt: new Date(Date.now() + 60_000).toISOString(),
+      }) as {version: number}
+      await pool.query(`UPDATE releases SET scheduled_release_at = CURRENT_TIMESTAMP - INTERVAL '1 minute' WHERE id = $1`, [fixture.release.id])
+      const result = await admin.publishDueReleases()
+      expect(result.published).toContain(fixture.release.id)
+      const live = await pool.query<{status: string; version: number}>('SELECT status, version FROM releases WHERE id = $1', [fixture.release.id])
+      expect(live.rows[0].status).toBe('LIVE')
+      expect(live.rows[0].version).toBeGreaterThan(scheduled.version)
+
+      const takenDown = await admin.commandRelease(adminUserId, fixture.release.id, {action: 'takedown', expectedVersion: live.rows[0].version, note: 'Rights claim'}) as {version: number}
+      const restored = await admin.commandRelease(adminUserId, fixture.release.id, {action: 'restore', expectedVersion: takenDown.version, note: 'Claim withdrawn'}) as {status: string}
+      expect(restored.status).toBe('APPROVED')
+      const takedown = await pool.query<{restored_at: string | null}>('SELECT restored_at FROM release_takedowns WHERE release_id = $1', [fixture.release.id])
+      expect(takedown.rows[0].restored_at).not.toBeNull()
+    })
+
+    it('reuses an open checkout session instead of creating a second one', async () => {
+      await resetIsrcState()
+      const fixture = await prepareLiveRelease('Reuse')
+      const product = await pool.query<{id: string}>('SELECT id FROM products WHERE release_id = $1', [fixture.release.id])
+      const buyerId = crypto.randomUUID()
+      await pool.query(`INSERT INTO users (id, email, account_intent) VALUES ($1, $2, 'consumer')`, [buyerId, `reuse-${buyerId.slice(0, 8)}@example.test`])
+      let created = 0
+      vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+        const url = String(input)
+        if (url.includes('/v1/checkout/sessions') && init?.method === 'POST') {
+          created += 1
+          return new Response(JSON.stringify({id: `cs_reuse_${created}`, url: 'https://checkout.stripe.test/1'}), {status: 200})
+        }
+        if (url.includes('/v1/checkout/sessions/')) {
+          return new Response(JSON.stringify({id: 'cs_reuse_1', url: 'https://checkout.stripe.test/1', status: 'open'}), {status: 200})
+        }
+        throw new Error(`Unexpected Stripe call ${url}`)
+      }))
+      const commerce = new CommerceService(new Database(connectionString!, pool) as never, 'sk_test', 1000)
+      const first = await commerce.createCheckout(buyerId, product.rows[0].id, 'https://app.test')
+      const second = await commerce.createCheckout(buyerId, product.rows[0].id, 'https://app.test')
+      expect(second.sessionId).toBe(first.sessionId)
+      expect(created).toBe(1)
+    })
+
+    it('deletes a provider that only has abandoned checkouts', async () => {
+      await resetIsrcState()
+      const fixture = await prepareLiveRelease('Leaver')
+      const product = await pool.query<{id: string}>('SELECT id FROM products WHERE release_id = $1', [fixture.release.id])
+      await pool.query(
+        `INSERT INTO marketplace_checkout_attempts
+          (id, buyer_user_id, provider_profile_id, product_id, release_id, amount_minor, currency, platform_fee_bps,
+           stripe_idempotency_key, transfer_group, snapshot, expires_at)
+         VALUES ($1, NULL, $2, $3, $4, 999, 'USD', 1000, $5, $6, '{}'::jsonb, CURRENT_TIMESTAMP)`,
+        [crypto.randomUUID(), fixture.provider.id, product.rows[0].id, fixture.release.id, `idem-${crypto.randomUUID()}`, `tg-${crypto.randomUUID()}`],
+      )
+      await pool.query(
+        `UPDATE entitlements SET access_type = 'free', has_full_access = 0, stripe_subscription_id = NULL, subscription_status = 'canceled' WHERE user_id = $1`,
+        [fixture.userId],
+      )
+      const {storageKeys} = await new AccountDeletionService(new Database(connectionString!, pool) as never).deleteCurrentUser({
+        userId: fixture.userId,
+        email: `leaver-${fixture.userId.slice(0, 8)}@example.test`,
+        forfeitFullProgram: false,
+      })
+      expect(Array.isArray(storageKeys)).toBe(true)
+      const remaining = await pool.query<{count: number}>('SELECT COUNT(*)::integer AS count FROM provider_profiles WHERE id = $1', [fixture.provider.id])
+      expect(remaining.rows[0].count).toBe(0)
+    })
+  })
 })

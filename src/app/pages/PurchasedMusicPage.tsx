@@ -1,12 +1,13 @@
-import {useEffect} from 'react'
+import {useEffect, useState} from 'react'
 import {useQuery, useQueryClient} from '@tanstack/react-query'
-import {ArrowLeft, Disc3, Download, LoaderCircle, RefreshCw} from 'lucide-react'
+import {ArrowLeft, Disc3, Download, ListPlus, LoaderCircle, RefreshCw} from 'lucide-react'
 import {Link, useSearchParams} from 'react-router-dom'
 
 import {Button} from '@/components/ui/button'
 import {Skeleton} from '@/components/ui/skeleton'
-import {getStoreOrderStatus, listStorePurchases, purchaseDownloadUrl, type Purchase} from '@/lib/marketplaceCommerceApi'
-import {storeAssetUrl} from '@/lib/musicStoreApi'
+import {fetchPurchaseFiles, getStoreOrderStatus, listStorePurchases, purchaseArtworkUrl, purchaseDownloadUrl, type Purchase} from '@/lib/marketplaceCommerceApi'
+import {toast} from '@/hooks/use-toast'
+import {useDJStore} from '@/stores/djStore'
 import {usePlanStore} from '@/stores/planStore'
 
 export default function PurchasedMusicPage() {
@@ -57,11 +58,29 @@ function CheckoutState({complete, failed}: {complete: boolean; failed: boolean})
 }
 
 function PurchaseCard({purchase}: {purchase: Purchase}) {
-  const artwork = storeAssetUrl(purchase.artwork_asset_id)
+  const artwork = purchaseArtworkUrl(purchase)
   const active = purchase.entitlement_status === 'active'
+  const importTracks = useDJStore((state) => state.importTracks)
+  const [adding, setAdding] = useState(false)
+  const addToLibrary = async () => {
+    setAdding(true)
+    try {
+      const files = await fetchPurchaseFiles(purchase)
+      // This page can be opened directly; make sure the local library and settings are loaded so
+      // duplicates are detected and the user's import settings apply.
+      const dj = useDJStore.getState()
+      if (dj.tracks.length === 0) await Promise.all([dj.loadTracks(), dj.loadSettings()])
+      // Purchased music never counts toward the Free import limit.
+      await importTracks(files, {skipQuota: true})
+    } catch (error) {
+      toast({title: "Couldn't add to My Music", description: error instanceof Error ? error.message : 'Please try again.', variant: 'destructive'})
+    } finally {
+      setAdding(false)
+    }
+  }
   return <article className="grid gap-5 border-b border-white/10 pb-6 sm:grid-cols-[8rem_1fr]">
     <div className="aspect-square overflow-hidden rounded-md bg-[#19191c]">{artwork ? <img src={artwork} alt={`${purchase.release_title} cover`} className="h-full w-full object-cover" /> : <div className="grid h-full place-items-center"><Disc3 className="h-10 w-10 text-zinc-700" /></div>}</div>
-    <div className="min-w-0"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-xl font-bold">{purchase.release_title}</h2><p className="mt-1 text-sm text-zinc-400">{purchase.artist_name}</p><p className="mt-2 text-xs text-zinc-600">Purchased {formatDate(purchase.paid_at)} · {formatPrice(purchase.unit_amount_minor, purchase.currency)}</p></div><span className={`rounded-full border px-2.5 py-1 text-xs ${active ? 'border-emerald-400/30 text-emerald-300' : 'border-amber-400/30 text-amber-300'}`}>{active ? 'Owned' : purchase.entitlement_status}</span></div>
+    <div className="min-w-0"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-xl font-bold">{purchase.release_title}</h2><p className="mt-1 text-sm text-zinc-400">{purchase.artist_name}</p><p className="mt-2 text-xs text-zinc-600">Purchased {formatDate(purchase.paid_at)} · {formatPrice(purchase.unit_amount_minor, purchase.currency)}</p></div><div className="flex items-center gap-2">{active && <Button size="sm" className="gap-2" disabled={adding} onClick={() => void addToLibrary()}>{adding ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ListPlus className="h-4 w-4" />}{adding ? 'Adding…' : 'Add to My Music'}</Button>}<span className={`rounded-full border px-2.5 py-1 text-xs ${active ? 'border-emerald-400/30 text-emerald-300' : 'border-amber-400/30 text-amber-300'}`}>{active ? 'Owned' : purchase.entitlement_status}</span></div></div>
       <div className="mt-5 divide-y divide-white/10 border-y border-white/10">{purchase.files.map((file) => <div key={file.id} className="flex items-center gap-3 py-3"><span className="w-6 text-xs text-zinc-600">{file.trackNumber}</span><p className="min-w-0 flex-1 truncate text-sm">{file.title}</p><span className="hidden text-xs text-zinc-600 sm:inline">{formatBytes(file.byteSize)}</span>{active ? <Button asChild size="sm" variant="outline" className="gap-2"><a href={purchaseDownloadUrl(purchase.entitlement_id, file.id)}><Download className="h-4 w-4" />Download</a></Button> : <Button size="sm" variant="outline" disabled>Unavailable</Button>}</div>)}</div>
     </div>
   </article>

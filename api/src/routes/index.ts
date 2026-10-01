@@ -21,6 +21,7 @@ import {
   assignGeneratedIsrc,
   createArtist,
   createPrice,
+  setReleasePrice,
   createProduct,
   createProvider,
   createRelease,
@@ -44,7 +45,7 @@ import {onRequest as stripeWebhook} from './stripe-webhook'
 import {getCatalogAsset, getCatalogRelease, listCatalog, recordCatalogPreview} from './store'
 import {createConnectDashboard, createConnectOnboarding, getConnectStatus} from './marketplace/connect'
 import {getProviderReporting, getRecipientEarnings} from './marketplace/reporting'
-import {createStoreCheckout, downloadStorePurchase, getStoreOrderStatus, listStorePurchases} from './store/commerce'
+import {createStoreCheckout, downloadStorePurchase, getStoreOrderStatus, getStorePurchaseArtwork, listStorePurchases} from './store/commerce'
 import {getMusicDiscovery} from './music'
 import {CLIENT_IP_HEADER} from './_security'
 import {assignTrackIsrc, exportIsrcRecords, getIsrcRecord, getIsrcSequence, listIsrcRecords, registerExistingIsrc} from './isrc'
@@ -78,6 +79,7 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'get', path: '/api/store/orders/by-session/:sessionId', handler: getStoreOrderStatus},
   {method: 'get', path: '/api/store/purchases', handler: listStorePurchases},
   {method: 'get', path: '/api/store/purchases/:entitlementId/files/:fileId/download', handler: downloadStorePurchase},
+  {method: 'get', path: '/api/store/purchases/:entitlementId/artwork', handler: getStorePurchaseArtwork},
   {method: 'get', path: '/api/marketplace/connect', handler: getConnectStatus},
   {method: 'post', path: '/api/marketplace/connect/onboarding', handler: createConnectOnboarding},
   {method: 'post', path: '/api/marketplace/connect/dashboard', handler: createConnectDashboard},
@@ -100,6 +102,7 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'post', path: '/api/marketplace/tracks/:trackId/isrc-assignments/generated', handler: assignGeneratedIsrc},
   {method: 'post', path: '/api/marketplace/products', handler: createProduct},
   {method: 'post', path: '/api/marketplace/products/:productId/prices', handler: createPrice},
+  {method: 'put', path: '/api/marketplace/releases/:releaseId/price', handler: setReleasePrice},
   {method: 'put', path: '/api/marketplace/tracks/:trackId/revenue-splits', handler: replaceRevenueSplits},
   {method: 'post', path: '/api/marketplace/releases/:releaseId/submit', handler: submitRelease},
   {method: 'post', path: '/api/marketplace/releases/:releaseId/transitions', handler: transitionRelease},

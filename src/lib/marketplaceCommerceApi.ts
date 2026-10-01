@@ -92,6 +92,26 @@ export function listStorePurchases(): Promise<Purchase[]> {
   return request('/api/store/purchases')
 }
 
+/** Buyer-only artwork for a purchase; keeps working after the release leaves the store. */
+export function purchaseArtworkUrl(purchase: {entitlement_id: string; artwork_asset_id?: string | null}): string | null {
+  return purchase.artwork_asset_id ? apiUrl(`/api/store/purchases/${encodeURIComponent(purchase.entitlement_id)}/artwork`) : null
+}
+
 export function purchaseDownloadUrl(entitlementId: string, fileId: string): string {
   return apiUrl(`/api/store/purchases/${encodeURIComponent(entitlementId)}/files/${encodeURIComponent(fileId)}/download`)
+}
+/**
+ * Download a purchase's files with the buyer's session and return them as Files ready for the
+ * DJ library. lastModified is pinned to the purchase time so re-adding is detected as a duplicate.
+ */
+export async function fetchPurchaseFiles(purchase: Purchase): Promise<File[]> {
+  const lastModified = Date.parse(purchase.paid_at) || 0
+  const files: File[] = []
+  for (const file of purchase.files) {
+    const response = await apiFetch(`/api/store/purchases/${encodeURIComponent(purchase.entitlement_id)}/files/${encodeURIComponent(file.id)}/download`)
+    if (!response.ok) throw new Error(`Couldn't download "${file.title}" (${response.status})`)
+    const blob = await response.blob()
+    files.push(new File([blob], file.fileName, {type: file.mimeType || blob.type, lastModified}))
+  }
+  return files
 }

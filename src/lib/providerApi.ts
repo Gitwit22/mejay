@@ -271,9 +271,9 @@ export function createProviderRights(input: {releaseId?: string; trackId?: strin
   return request('/api/marketplace/rights-declarations', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
 }
 
+/** Create or update the release's price in one atomic request. */
 export async function createProviderPricing(releaseId: string, title: string, amountMinor: number): Promise<void> {
-  const product = await request<{id: string}>('/api/marketplace/products', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({releaseId, name: title})})
-  await request(`/api/marketplace/products/${encodeURIComponent(product.id)}/prices`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({amountMinor, currency: 'USD'})})
+  await request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}/price`, {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({name: title, amountMinor})})
 }
 
 export function replaceProviderSplits(trackId: string, entries: Array<{payeeName: string; payeeEmail?: string; role?: string; shareBps: number}>): Promise<unknown> {

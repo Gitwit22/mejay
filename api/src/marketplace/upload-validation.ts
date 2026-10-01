@@ -44,6 +44,11 @@ export function inspectUpload(bytes: Uint8Array): InspectedUpload | null {
   return null
 }
 
+/** True for a JPEG whose frame header lies beyond the inspected bytes (large EXIF/ICC blocks). */
+export function isTruncatedJpegHeader(bytes: Uint8Array): boolean {
+  return bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8 && inspectUpload(bytes) === null
+}
+
 export function validateInspectedUpload(args: {
   declaredMimeType: string
   kind: 'artwork' | 'audio'

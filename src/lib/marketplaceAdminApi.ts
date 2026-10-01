@@ -139,12 +139,18 @@ export async function downloadIsrcRegistryExport(filters: {
   URL.revokeObjectURL(url)
 }
 
-export type ReleaseAdminAction = 'start_review' | 'approve' | 'request_changes' | 'reject' | 'publish_now' | 'schedule' | 'publish_due' | 'unpublish' | 'takedown'
+export type ReleaseAdminAction = 'start_review' | 'approve' | 'request_changes' | 'reject' | 'publish_now' | 'schedule' | 'publish_due' | 'unpublish' | 'takedown' | 'restore'
 
 export type ProviderAdminAction = 'approve' | 'reject' | 'suspend' | 'reinstate'
 
 export function commandMarketplaceProvider(providerId: string, input: {action: ProviderAdminAction; reason?: string}): Promise<AdminRecord> {
   return request(`/api/marketplace-admin/providers/${encodeURIComponent(providerId)}/commands`, {
+    method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input),
+  })
+}
+
+export function recordSplitDispute(input: {providerId: string; splitSetId: string; orderId?: string; reason: string}): Promise<{id: string}> {
+  return request('/api/marketplace-admin/split-disputes', {
     method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input),
   })
 }

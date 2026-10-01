@@ -7,7 +7,7 @@ import {Dialog, DialogContent, DialogHeader, DialogTitle} from '@/components/ui/
 import {Input} from '@/components/ui/input'
 import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
-import {commandMarketplaceProvider, commandMarketplaceRelease, retryMarketplacePayouts, type ProviderAdminAction, createIndustryReportingBatch, downloadIndustryReportingBatch, downloadIsrcRegistryExport, getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview, replaceMarketplaceDiscoveryFeatures, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting, type AdminRecord, type IndustryReportingDashboard, type IsrcRegistryRecord, type MarketplaceAdminOverview, type ReleaseAdminAction} from '@/lib/marketplaceAdminApi'
+import {commandMarketplaceProvider, commandMarketplaceRelease, recordSplitDispute, retryMarketplacePayouts, type ProviderAdminAction, createIndustryReportingBatch, downloadIndustryReportingBatch, downloadIsrcRegistryExport, getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview, replaceMarketplaceDiscoveryFeatures, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting, type AdminRecord, type IndustryReportingDashboard, type IsrcRegistryRecord, type MarketplaceAdminOverview, type ReleaseAdminAction} from '@/lib/marketplaceAdminApi'
 
 type Section = 'pending' | 'catalog' | 'discovery' | 'providers' | 'artists' | 'isrcs' | 'rights' | 'pricing' | 'splits' | 'takedowns' | 'reporting'
 
@@ -41,6 +41,8 @@ function SectionView({section, data}: {section: Section; data: Awaited<ReturnTyp
   if (section === 'discovery') return <DiscoveryCuration data={data} />
   if (section === 'isrcs') return <IsrcRegistrySection />
   if (section === 'providers') return <ProvidersSection rows={data.providers} role={data.role} />
+  if (section === 'takedowns') return <RecordTable title="Takedowns" rows={data.takedowns} actionable role={data.role} renderActions={(row) => <TakedownActions row={row} role={data.role} />} />
+  if (section === 'splits') return <RecordTable title="Splits" rows={data.splits} actionable={data.role === 'admin'} role={data.role} renderActions={(row) => <SplitDisputeAction row={row} />} />
   const rows = data[section]
   return <RecordTable title={navigation.find(([id]) => id === section)?.[1] || section} rows={rows} actionable={section === 'pending' || section === 'catalog'} role={data.role} />
 }
@@ -113,24 +115,59 @@ function FeaturePicker({title, ids, onChange, candidates, labelKey, readOnly}: {
   </section>
 }
 
-function RecordTable({title, rows, actionable, role}: {title: string; rows: AdminRecord[]; actionable: boolean; role: 'reviewer' | 'admin'}) {
+function RecordTable({title, rows, actionable, role, renderActions}: {title: string; rows: AdminRecord[]; actionable: boolean; role: 'reviewer' | 'admin'; renderActions?: (row: AdminRecord) => React.ReactNode}) {
   const [search, setSearch] = useState('')
   const filtered = rows.filter((row) => JSON.stringify(row).toLowerCase().includes(search.toLowerCase()))
   return <div className="space-y-5"><div><h1 className="text-2xl font-bold">{title}</h1><p className="mt-1 text-sm text-zinc-400">{filtered.length} operational records</p></div><Input className="max-w-md" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Search ${title.toLowerCase()}`} />
-    {filtered.length === 0 ? <div className="border-y border-dashed border-white/10 py-16 text-center text-sm text-zinc-500">No records found.</div> : <div className="overflow-x-auto border-y border-white/10"><table className="w-full min-w-[720px] text-left text-sm"><thead className="text-xs uppercase text-zinc-500"><tr>{Object.keys(filtered[0]).slice(0, 6).map((key) => <th key={key} className="px-3 py-3 font-medium">{key.replace(/_/g, ' ')}</th>)}{actionable && <th className="px-3 py-3">Actions</th>}</tr></thead><tbody className="divide-y divide-white/10">{filtered.map((row, index) => <tr key={String(row.id ?? row.isrc ?? index)}>{Object.keys(filtered[0]).slice(0, 6).map((key) => <td key={key} className="max-w-64 truncate px-3 py-3 text-zinc-300">{formatValue(row[key])}</td>)}{actionable && <td className="px-3 py-3"><ReleaseActions row={row} role={role} /></td>}</tr>)}</tbody></table></div>}
+    {filtered.length === 0 ? <div className="border-y border-dashed border-white/10 py-16 text-center text-sm text-zinc-500">No records found.</div> : <div className="overflow-x-auto border-y border-white/10"><table className="w-full min-w-[720px] text-left text-sm"><thead className="text-xs uppercase text-zinc-500"><tr>{Object.keys(filtered[0]).slice(0, 6).map((key) => <th key={key} className="px-3 py-3 font-medium">{key.replace(/_/g, ' ')}</th>)}{actionable && <th className="px-3 py-3">Actions</th>}</tr></thead><tbody className="divide-y divide-white/10">{filtered.map((row, index) => <tr key={String(row.id ?? row.isrc ?? index)}>{Object.keys(filtered[0]).slice(0, 6).map((key) => <td key={key} className="max-w-64 truncate px-3 py-3 text-zinc-300">{formatValue(row[key])}</td>)}{actionable && <td className="px-3 py-3">{renderActions ? renderActions(row) : <ReleaseActions row={row} role={role} />}</td>}</tr>)}</tbody></table></div>}
   </div>
 }
 
 function ReleaseActions({row, role}: {row: AdminRecord; role: 'reviewer' | 'admin'}) {
   const queryClient = useQueryClient()
-  const mutation = useMutation({mutationFn: (input: {action: ReleaseAdminAction; note?: string}) => commandMarketplaceRelease(String(row.id), {expectedVersion: Number(row.version), ...input}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['marketplace-admin']}); toast({title: 'Release updated'})}, onError: (error) => toast({title: 'Action failed', description: error.message, variant: 'destructive'})})
+  const mutation = useMutation({mutationFn: (input: {action: ReleaseAdminAction; note?: string; scheduledReleaseAt?: string}) => commandMarketplaceRelease(String(row.id), {expectedVersion: Number(row.version), ...input}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['marketplace-admin']}); toast({title: 'Release updated'})}, onError: (error) => toast({title: 'Action failed', description: error.message, variant: 'destructive'})})
   const status = String(row.status)
   const actions: Array<{action: ReleaseAdminAction; label: string; admin?: boolean; note?: boolean}> = status === 'SUBMITTED' ? [{action: 'start_review', label: 'Start review'}]
     : status === 'UNDER_REVIEW' ? [{action: 'approve', label: 'Approve'}, {action: 'request_changes', label: 'Request changes', note: true}, {action: 'reject', label: 'Reject', note: true}]
-      : status === 'APPROVED' ? [{action: 'publish_now', label: 'Publish now', admin: true}]
+      : status === 'APPROVED' ? [{action: 'publish_now', label: 'Publish now', admin: true}, {action: 'schedule', label: 'Schedule', admin: true}]
         : status === 'SCHEDULED' ? [{action: 'publish_due', label: 'Publish due', admin: true}, {action: 'takedown', label: 'Takedown', admin: true, note: true}]
           : status === 'LIVE' ? [{action: 'unpublish', label: 'Unpublish', admin: true}, {action: 'takedown', label: 'Takedown', admin: true, note: true}] : []
-  return <div className="flex gap-2">{actions.filter((item) => !item.admin || role === 'admin').map((item) => <Button key={item.action} size="sm" variant="outline" disabled={mutation.isPending} onClick={() => {const note = item.note ? window.prompt(`${item.label} reason`)?.trim() : undefined; if (item.note && !note) return; mutation.mutate({action: item.action, note})}}>{item.label}</Button>)}</div>
+  return <div className="flex gap-2">{actions.filter((item) => !item.admin || role === 'admin').map((item) => <Button key={item.action} size="sm" variant="outline" disabled={mutation.isPending} onClick={() => {
+      if (item.action === 'schedule') {
+        const raw = window.prompt('Release date and time (local), e.g. 2026-12-01 09:00')?.trim()
+        if (!raw) return
+        const when = new Date(raw.replace(' ', 'T'))
+        if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now()) {toast({title: 'Enter a future date and time', variant: 'destructive'}); return}
+        mutation.mutate({action: 'schedule', scheduledReleaseAt: when.toISOString()})
+        return
+      }
+      const note = item.note ? window.prompt(`${item.label} reason`)?.trim() : undefined; if (item.note && !note) return; mutation.mutate({action: item.action, note})
+    }}>{item.label}</Button>)}</div>
+}
+
+function TakedownActions({row, role}: {row: AdminRecord; role: 'reviewer' | 'admin'}) {
+  const queryClient = useQueryClient()
+  const mutation = useMutation({
+    mutationFn: (note: string) => commandMarketplaceRelease(String(row.release_id), {action: 'restore', expectedVersion: Number(row.release_version), note}),
+    onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['marketplace-admin']}); toast({title: 'Release restored', description: 'It is back in Approved; publish or schedule it from Live Catalog.'})},
+    onError: (error) => toast({title: 'Restore failed', description: error.message, variant: 'destructive'}),
+  })
+  if (role !== 'admin' || row.restored_at || row.release_status !== 'TAKEN_DOWN') return <span className="text-xs text-zinc-500">{row.restored_at ? 'Restored' : '-'}</span>
+  return <Button size="sm" variant="outline" disabled={mutation.isPending} onClick={() => {const note = window.prompt('Restore reason')?.trim(); if (note) mutation.mutate(note)}}>Restore</Button>
+}
+
+function SplitDisputeAction({row}: {row: AdminRecord}) {
+  const mutation = useMutation({
+    mutationFn: (input: {reason: string; orderId?: string}) => recordSplitDispute({providerId: String(row.provider_id), splitSetId: String(row.id), ...input}),
+    onSuccess: () => toast({title: 'Split dispute recorded'}),
+    onError: (error) => toast({title: 'Could not record dispute', description: error.message, variant: 'destructive'}),
+  })
+  return <Button size="sm" variant="outline" disabled={mutation.isPending} onClick={() => {
+    const reason = window.prompt('Dispute details')?.trim()
+    if (!reason) return
+    const orderId = window.prompt('Related order ID (optional)')?.trim() || undefined
+    mutation.mutate({reason, orderId})
+  }}>Record dispute</Button>
 }
 
 function IsrcRegistrySection() {
