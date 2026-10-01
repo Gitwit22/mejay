@@ -10,8 +10,6 @@ import { useDJStore } from "@/stores/djStore";
 import { usePlanStore } from "@/stores/planStore";
 import { CheckoutStatusError, getCheckoutStatus } from "@/lib/checkout";
 import { toast } from "@/hooks/use-toast";
-import { handleBecameOnline, periodicPolicyTick, startupCheck } from "@/licensing/licenseService";
-import { useLicenseStore } from "@/licensing/licenseStore";
 import { initMediaSession } from "@/lib/mediaSession";
 import {apiFetch} from "@/lib/api";
 import {convertToArtistAccount} from "@/lib/artistAccount";
@@ -230,34 +228,6 @@ const STRIPE_SESSION_ID_KEY = 'mejay:stripeSessionId';
 
 const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
-const AppLicenseBootstrap = () => {
-  useEffect(() => {
-    void startupCheck();
-
-    const onOnline = () => {
-      void handleBecameOnline();
-    };
-    const onVisibility = () => {
-      if (!document.hidden) void startupCheck();
-    };
-
-    window.addEventListener('online', onOnline);
-    document.addEventListener('visibilitychange', onVisibility);
-
-    const intervalId = window.setInterval(() => {
-      periodicPolicyTick();
-    }, 60_000);
-
-    return () => {
-      window.removeEventListener('online', onOnline);
-      document.removeEventListener('visibilitychange', onVisibility);
-      window.clearInterval(intervalId);
-    };
-  }, []);
-
-  return null;
-};
-
 const AppBillingBootstrap = () => {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -266,9 +236,6 @@ const AppBillingBootstrap = () => {
   useEffect(() => {
     const run = async () => {
       try {
-        // If a license token exists, licensing is the source of truth.
-        if (useLicenseStore.getState().token) return;
-
         const planState = usePlanStore.getState();
         if (!planState.billingEnabled) return;
 
@@ -595,7 +562,6 @@ const App = () => (
       <Sonner />
       <AppLifetimeAudioCleanup />
       <AppMediaSessionBootstrap />
-      <AppLicenseBootstrap />
       <BrowserRouter>
         <AppBillingBootstrap />
         <AnimatedRoutes />

@@ -271,3 +271,10 @@ export async function ensureUserIdForEmail(args: {db: D1Database; userId: string
 
   return userId
 }
+
+/** Secure-cookie decision: an explicit COOKIE_SECURE wins; otherwise follow the request scheme. */
+export function shouldUseSecureCookie(request: Request, env: {COOKIE_SECURE?: string}): boolean {
+  if (env.COOKIE_SECURE === 'true') return true
+  if (env.COOKIE_SECURE === 'false') return false
+  return new URL(request.url).protocol === 'https:'
+}

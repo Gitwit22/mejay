@@ -1,5 +1,5 @@
 import {AccountDeletionError, AccountDeletionService} from '../../account/deletion'
-import {cookieHeaderForLogout, getSessionUserId, readJson} from '../_auth'
+import {cookieHeaderForLogout, getSessionUserId, readJson, shouldUseSecureCookie} from '../_auth'
 
 type Env = {
   DB: any
@@ -27,7 +27,7 @@ export const onRequest = async ({request, env}: {request: Request; env: Env}): P
       email,
       forfeitFullProgram: body.forfeitFullProgram === true,
     })
-    const secure = new URL(request.url).protocol === 'https:'
+    const secure = shouldUseSecureCookie(request, env as {COOKIE_SECURE?: string})
     return json({ok: true}, {headers: {'set-cookie': cookieHeaderForLogout({secure, sameSite: env.COOKIE_SAME_SITE})}})
   } catch (error) {
     if (error instanceof AccountDeletionError) {

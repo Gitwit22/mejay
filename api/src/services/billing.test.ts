@@ -2,10 +2,10 @@ import {describe, expect, it, vi} from 'vitest'
 import {cadenceFromPrice, persistSubscriptionState, stripeTimestampToIso, subscriptionGrantsPro} from './billing'
 
 describe('subscription billing policy', () => {
-  it('grants Pro only for active and trialing subscriptions', () => {
+  it('grants Pro for active, trialing and dunning (past_due) subscriptions', () => {
     expect(subscriptionGrantsPro('active')).toBe(true)
     expect(subscriptionGrantsPro('trialing')).toBe(true)
-    expect(subscriptionGrantsPro('past_due')).toBe(false)
+    expect(subscriptionGrantsPro('past_due')).toBe(true)
     expect(subscriptionGrantsPro('unpaid')).toBe(false)
     expect(subscriptionGrantsPro('canceled')).toBe(false)
   })
@@ -36,7 +36,7 @@ describe('subscription billing policy', () => {
       customerId: 'cus_1',
       subscriptionId: 'sub_1',
       state: {
-        status: 'past_due',
+        status: 'unpaid',
         cancelAtPeriodEnd: false,
         currentPeriodEnd: '2026-10-01T00:00:00.000Z',
         cadence: 'monthly',
@@ -45,7 +45,7 @@ describe('subscription billing policy', () => {
     })
 
     expect(bind).toHaveBeenCalledWith(
-      'user-1', 'free', 0, 'cus_1', 'sub_1', 'past_due', 'monthly', false,
+      'user-1', 'free', 0, 'cus_1', 'sub_1', 'unpaid', 'monthly', false,
       '2026-10-01T00:00:00.000Z', '2026-09-13T12:00:00.000Z',
     )
     const sql = prepare.mock.calls[0][0] as string

@@ -32,8 +32,6 @@ import {useDJStore} from '@/stores/djStore'
 import {appStatus} from '@/appStatus'
 import {toast} from '@/hooks/use-toast'
 import {usePlanStore} from '@/stores/planStore'
-import {useLicenseStore} from '@/licensing/licenseStore'
-import {getNextRequiredCheckBy} from '@/licensing/licensePolicy'
 import {openBillingPortal} from '@/lib/checkout'
 import {getSettingsEntryNavigateOptions} from '@/app/navigation/settingsReturnTo'
 import {DownloadPacksModal} from '@/components/DownloadPacksModal'
@@ -49,8 +47,6 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   const location = useLocation()
   const [open, setOpen] = useState(false)
   const [panelMaxHeightPx, setPanelMaxHeightPx] = useState<number | null>(null)
-  const [licenseKey, setLicenseKey] = useState('')
-  const [resetAlsoClearLicense, setResetAlsoClearLicense] = useState(false)
   const [downloadPacksModalOpen, setDownloadPacksModalOpen] = useState(false)
   const [logoutPending, setLogoutPending] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
@@ -63,26 +59,6 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   const updateUserSettings = useDJStore((s) => s.updateUserSettings)
 
   const {plan, authStatus, authBypassEnabled, stripeCustomerId, user, currentPeriodEnd, artistPortalAccess, providerProfile, marketplaceRole} = usePlanStore()
-
-  const {
-    token,
-    plan: licensePlan,
-    deviceId,
-    derivedStatus,
-    derivedReason,
-    activatedAt,
-    expiresAt,
-    lastSuccessfulCheckAt,
-    lastAttemptAt,
-    activateWithKey,
-    forceRefresh,
-    clearLicense,
-  } = useLicenseStore()
-
-  const nextRequiredCheckBy = useMemo(
-    () => getNextRequiredCheckBy(lastSuccessfulCheckAt),
-    [lastSuccessfulCheckAt],
-  )
 
   const planLabel = useMemo(() => {
     if (plan === 'full_program') return 'Full Program'
@@ -160,7 +136,6 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
       } catch (error) {
         console.error('Local data cleanup failed after account deletion:', error)
       }
-      clearLicense()
       clearMejayBrowserStorage()
       usePlanStore.getState().clearAccountSession()
       setDeleteDialogOpen(false)
@@ -208,16 +183,10 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   const handleResetLocalData = async () => {
     setOpen(false)
 
-    if (resetAlsoClearLicense) {
-      clearLicense()
-    }
-
     await useDJStore.getState().resetLocalData()
     toast({
       title: 'Local data reset',
-      description: resetAlsoClearLicense
-        ? 'Your local library, playlists, settings, and license were cleared.'
-        : 'Your local library, playlists, and settings were cleared. Your license was kept.',
+      description: 'Your local library, playlists, and settings were cleared.',
     })
     navigate('/', {replace: true})
     window.location.reload()
@@ -388,7 +357,7 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                                 {subscriptionBlocksDeletion
                                   ? `Your paid subscription must end before this account can be deleted.${currentPeriodEnd ? ` Access is currently available through ${new Date(currentPeriodEnd).toLocaleDateString()}.` : ''}`
                                   : plan === 'full_program'
-                                    ? 'This permanently deletes your profile and device data and forfeits your Full Program purchase and license.'
+                                    ? 'This permanently deletes your profile and device data and forfeits your Full Program purchase.'
                                     : 'This permanently deletes your profile and all MEJay data stored on this device. This cannot be undone.'}
                               </AlertDialogDescription>
                             </AlertDialogHeader>
@@ -415,7 +384,7 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                                       disabled={deletePending}
                                     />
                                     <Label htmlFor="forfeit-full-program" className="font-normal leading-tight text-muted-foreground">
-                                      I understand that my Full Program purchase and license will be permanently forfeited.
+                                      I understand that my Full Program purchase will be permanently forfeited.
                                     </Label>
                                   </div>
                                 )}
@@ -571,7 +540,7 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                           <AlertDialogHeader>
                             <AlertDialogTitle>Clear library?</AlertDialogTitle>
                             <AlertDialogDescription>
-                              This permanently removes all imported tracks and clears all playlists on this device. Your settings and license are kept.
+                              This permanently removes all imported tracks and clears all playlists on this device. Your settings are kept.
                             </AlertDialogDescription>
                           </AlertDialogHeader>
                           <AlertDialogFooter>
@@ -602,21 +571,11 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                           <AlertDialogHeader>
                             <AlertDialogTitle>Reset local data?</AlertDialogTitle>
                             <AlertDialogDescription>
-                              This clears your local library, playlists, and settings on this device. Your license stays unless you choose to remove it.
+                              This clears your local library, playlists, and settings on this device.
                             </AlertDialogDescription>
                           </AlertDialogHeader>
 
-                          <div className="flex items-start gap-3 py-2">
-                            <Checkbox
-                              id="reset-also-clear-license"
-                              checked={resetAlsoClearLicense}
-                              onCheckedChange={(v) => setResetAlsoClearLicense(Boolean(v))}
-                            />
-                            <label htmlFor="reset-also-clear-license" className="text-sm leading-tight text-muted-foreground">
-                              Also remove license & activation info
-                            </label>
-                          </div>
-                          <AlertDialogFooter>
+<AlertDialogFooter>
                             <AlertDialogCancel>Cancel</AlertDialogCancel>
                             <AlertDialogAction
                               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"

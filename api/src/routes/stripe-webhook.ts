@@ -1,4 +1,4 @@
-import {cadenceFromPrice, persistSubscriptionState, revokeFullProgramAccess, stripeTimestampToIso, type SubscriptionState} from '../services/billing'
+import {cadenceFromPrice, persistSubscriptionState, revokeFullProgramAccess, stripeTimestampToIso, type SubscriptionState, upsertPurchasedEntitlement} from '../services/billing'
 import {CommerceService} from '../marketplace/commerce-service'
 import {ConnectService} from '../marketplace/connect-service'
 import {claimStripeWebhookEvent, finalizeStripeWebhookEvent} from '../marketplace/webhook-events'
@@ -35,11 +35,6 @@ function getRequiredEnv(env: Partial<Env>, key: keyof Env): string {
   return String(value)
 }
 
-function mapToDbAccessType(accessType: AccessType): 'free' | 'pro' | 'full' {
-  if (accessType === 'pro') return 'pro'
-  if (accessType === 'full_program') return 'full'
-  return 'free'
-}
 
 async function stripeGet(secretKey: string, path: string): Promise<any> {
   const res = await fetch(`https://api.stripe.com${path}`, {
@@ -62,58 +57,7 @@ async function stripeGet(secretKey: string, path: string): Promise<any> {
   return JSON.parse(text)
 }
 
-async function upsertEntitlementsInD1(args: {
-  db: D1Database
-  userId: string
-  customerId: string | null
-  email?: string | null
-  subscriptionId?: string | null
-  accessType: AccessType
-  hasFullAccess: boolean
-}): Promise<void> {
-  const {db, userId, customerId, email, subscriptionId, accessType, hasFullAccess} = args
-
-  // Never persist "free" from Stripe events.
-  if (!hasFullAccess) return
-  if (accessType !== 'pro' && accessType !== 'full_program') return
-
-  const effectiveUserId = await (async () => {
-    const byId = (await db.prepare('SELECT id FROM users WHERE id = ?1').bind(userId).first()) as {id: string} | null
-    if (byId?.id) return userId
-
-    if (email) {
-      const byEmail = (await db.prepare('SELECT id FROM users WHERE email = ?1').bind(email).first()) as {id: string} | null
-      if (byEmail?.id) return byEmail.id
-    }
-
-    await db
-      .prepare('INSERT INTO users (id, email) VALUES (?1, ?2)')
-      .bind(userId, email ?? `unknown+${userId}@example.invalid`)
-      .run()
-    return userId
-  })()
-
-  const dbAccessType = mapToDbAccessType(accessType)
-  const hasFull = hasFullAccess ? 1 : 0
-
-  const stmt = db
-    .prepare(
-      [
-        'INSERT INTO entitlements (user_id, access_type, has_full_access, stripe_customer_id, stripe_subscription_id, updated_at)',
-        'VALUES (?1, ?2, ?3, ?4, ?5, (strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\')))',
-        'ON CONFLICT(user_id) DO UPDATE SET',
-        'access_type=excluded.access_type,',
-        'has_full_access=excluded.has_full_access,',
-        'stripe_customer_id=COALESCE(excluded.stripe_customer_id, entitlements.stripe_customer_id),',
-        // Don't orphan an existing Pro subscription when Full Program is bought on top of it.
-        'stripe_subscription_id=COALESCE(excluded.stripe_subscription_id, entitlements.stripe_subscription_id),',
-        'updated_at=excluded.updated_at',
-      ].join(' '),
-    )
-    .bind(effectiveUserId, dbAccessType, hasFull, customerId, subscriptionId ?? null)
-
-  await db.batch([stmt])
-}
+const upsertEntitlementsInD1 = upsertPurchasedEntitlement
 
 /**
  * Resolve the MEJay user behind a one-time Full Program charge via its Checkout Session.

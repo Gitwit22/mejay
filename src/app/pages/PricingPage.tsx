@@ -112,7 +112,7 @@ export default function PricingPage({ mode = 'app' }: PricingPageProps) {
           <h1>{artistUpgrade ? 'Unlock Your Artist Account' : 'Choose Your Plan'}</h1>
           <p className="hero-subtitle">{artistUpgrade
             ? 'An active Pro subscription includes access to the Artist Portal and publishing tools.'
-            : "Start free, upgrade when you're ready. Pro is monthly. Full Program is coming soon."}</p>
+            : "Start free, upgrade when you're ready. Pro is $5/month or $50/year. Full Program is coming soon."}</p>
         </section>
 
         <div style={{display: 'flex', justifyContent: 'center', marginBottom: '2rem'}}>

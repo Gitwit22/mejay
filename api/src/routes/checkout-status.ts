@@ -1,4 +1,4 @@
-import {cadenceFromPrice, persistSubscriptionState, stripeTimestampToIso, subscriptionGrantsPro} from '../services/billing'
+import {cadenceFromPrice, persistSubscriptionState, stripeTimestampToIso, subscriptionGrantsPro, upsertPurchasedEntitlement} from '../services/billing'
 
 type D1Database = any
 
@@ -128,11 +128,6 @@ async function getSessionUserId(req: Request, env: Partial<Env>): Promise<string
   return row.user_id
 }
 
-function mapToDbAccessType(accessType: AccessType): 'free' | 'pro' | 'full' {
-  if (accessType === 'pro') return 'pro'
-  if (accessType === 'full_program') return 'full'
-  return 'free'
-}
 
 async function sendFullProgramEmail(args: {env: Partial<Env>; to: string; downloadUrl: string; origin: string}) {
   const {env, to, downloadUrl, origin} = args
@@ -183,56 +178,7 @@ async function wasAlreadyFullProgram(db: D1Database, userId: string): Promise<bo
   return hasFull && (access === 'full' || access === 'full_program')
 }
 
-async function upsertEntitlementsInD1(args: {
-  db: D1Database
-  userId: string
-  customerId: string | null
-  email?: string | null
-  subscriptionId?: string | null
-  accessType: AccessType
-  hasFullAccess: boolean
-}): Promise<void> {
-  const {db, userId, customerId, email, subscriptionId, accessType, hasFullAccess} = args
-
-  // Never persist "free" as a result of a verification call.
-  // (Avoid accidentally downgrading users if a session is incomplete or temporary.)
-  if (!hasFullAccess) return
-  if (accessType !== 'pro' && accessType !== 'full_program') return
-
-  const effectiveUserId = await (async () => {
-    // Ensure a user row exists for FK(user_id) even if email uniqueness collides.
-    const byId = (await db.prepare('SELECT id FROM users WHERE id = ?1').bind(userId).first()) as {id: string} | null
-    if (byId?.id) return userId
-
-    if (email) {
-      const byEmail = (await db.prepare('SELECT id FROM users WHERE email = ?1').bind(email).first()) as {id: string} | null
-      if (byEmail?.id) return byEmail.id
-    }
-
-    await db.prepare('INSERT INTO users (id, email) VALUES (?1, ?2)').bind(userId, email ?? `unknown+${userId}@example.invalid`).run()
-    return userId
-  })()
-  const dbAccessType = mapToDbAccessType(accessType)
-  const hasFull = hasFullAccess ? 1 : 0
-
-  const statements = [
-    db.prepare(
-      [
-        'INSERT INTO entitlements (user_id, access_type, has_full_access, stripe_customer_id, stripe_subscription_id, updated_at)',
-        'VALUES (?1, ?2, ?3, ?4, ?5, (strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\')))',
-        'ON CONFLICT(user_id) DO UPDATE SET',
-        // Never downgrade a Full Program owner, and never orphan an existing subscription id.
-        "access_type=CASE WHEN entitlements.access_type IN ('full', 'full_program') THEN entitlements.access_type ELSE excluded.access_type END,",
-        "has_full_access=CASE WHEN entitlements.access_type IN ('full', 'full_program') THEN entitlements.has_full_access ELSE excluded.has_full_access END,",
-        'stripe_customer_id=COALESCE(excluded.stripe_customer_id, entitlements.stripe_customer_id),',
-        'stripe_subscription_id=COALESCE(excluded.stripe_subscription_id, entitlements.stripe_subscription_id),',
-        'updated_at=excluded.updated_at',
-      ].join(' '),
-    ).bind(effectiveUserId, dbAccessType, hasFull, customerId, subscriptionId ?? null),
-  ]
-
-  await db.batch(statements)
-}
+const upsertEntitlementsInD1 = upsertPurchasedEntitlement
 
 export const onRequest = async (context: {request: Request; env: Env}): Promise<Response> => {
   const {request, env} = context
@@ -296,8 +242,10 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     const tokenOk = hasMetaToken && !!checkoutTokenHeader && checkoutTokenHeader === metaToken
     const sessionOk = userId ? (await getSessionUserId(request, env).catch(() => null)) === userId : false
 
-    if (hasMetaToken && !tokenOk && !sessionOk) {
-      return json({error: 'Session token mismatch'}, {status: 403})
+    // Every verification must be bound to the initiating browser (token) or to the buyer's own
+    // login session; a bare cs_ id is not enough to read or apply a checkout.
+    if (!tokenOk && !sessionOk) {
+      return json({error: hasMetaToken ? 'Session token mismatch' : 'Login required to verify this checkout'}, {status: 403})
     }
 
     // Safety: expire ability to verify old sessions.

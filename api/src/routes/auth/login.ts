@@ -1,7 +1,7 @@
 import {verifyPassword} from '../_password'
 import {claimMarketplaceAccess} from '../../marketplace/staff-access'
 
-import {SESSION_TTL_MS, SHORT_SESSION_TTL_MS, addMsIso, makeSessionCookie, normalizeEmail, readJson, sha256Hex} from '../_auth'
+import {SESSION_TTL_MS, SHORT_SESSION_TTL_MS, addMsIso, makeSessionCookie, normalizeEmail, readJson, sha256Hex, shouldUseSecureCookie} from '../_auth'
 import {applyRateLimit, getClientIp} from '../_security'
 
 /** Failed password attempts allowed per account before a temporary lockout. */
@@ -94,7 +94,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
       .bind(tokenHash, user.id, expiresAt)
       .run()
 
-    const secure = new URL(request.url).protocol === 'https:'
+    const secure = shouldUseSecureCookie(request, env as {COOKIE_SECURE?: string})
     const cookie = makeSessionCookie(sessionToken, {
       secure,
       sameSite: env.COOKIE_SAME_SITE,

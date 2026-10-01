@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { usePlanStore } from './planStore';
 
 describe('planStore authentication transitions', () => {
@@ -105,3 +105,24 @@ describe.skip('planStore - basic functionality', () => {
     expect(state.user?.email).toBe('test@example.com');
   });
 });
+
+describe('planStore cached plan', () => {
+  it('ignores a cached paid plan that the server has not confirmed recently', async () => {
+    localStorage.setItem('mejay:accessPlan', 'pro')
+    localStorage.removeItem('mejay:accessPlanAt')
+    vi.resetModules()
+    const fresh = await import('./planStore')
+    expect(fresh.usePlanStore.getState().plan).toBe('free')
+
+    localStorage.setItem('mejay:accessPlanAt', String(Date.now() - 8 * 24 * 60 * 60 * 1000))
+    vi.resetModules()
+    const stale = await import('./planStore')
+    expect(stale.usePlanStore.getState().plan).toBe('free')
+
+    localStorage.setItem('mejay:accessPlanAt', String(Date.now()))
+    vi.resetModules()
+    const recent = await import('./planStore')
+    expect(recent.usePlanStore.getState().plan).toBe('pro')
+    localStorage.clear()
+  })
+})

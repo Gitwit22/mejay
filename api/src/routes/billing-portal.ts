@@ -138,6 +138,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
 
     return json({url: redirectUrl}, 200)
   } catch (err: any) {
-    return json({error: err?.message ?? 'Stripe error'}, 500)
+    console.error('/api/billing-portal Stripe error', err?.message ?? err)
+    return json({error: 'Unable to open the billing portal. Please try again.'}, 502)
   }
 }

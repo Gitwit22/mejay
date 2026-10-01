@@ -125,6 +125,10 @@ interface PlanState {
 }
 
 const ACCESS_PLAN_KEY = 'mejay:accessPlan';
+// When the cached plan was last confirmed by the server. A paid plan cached longer than
+// PLAN_CACHE_MAX_AGE_MS ago is ignored until the server confirms it again.
+const ACCESS_PLAN_AT_KEY = 'mejay:accessPlanAt';
+const PLAN_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const BILLING_ENABLED_KEY = 'mejay:billingEnabled';
 const STRIPE_CUSTOMER_ID_KEY = 'mejay:stripeCustomerId';
 const AUTH_BYPASS_KEY = 'mejay:authBypassEnabled';
@@ -163,9 +167,17 @@ function safeRemoveLocalStorage(key: string): void {
 }
 
 function readInitialBillingEnabled(): boolean {
+  // Billing can only be switched off locally (dev convenience). A stored 'false' is ignored
+  // on real deployments so it can't be used to unlock paid features.
+  if (!import.meta.env.DEV && !isLocalHostRuntime()) return true;
   const raw = safeReadLocalStorage(BILLING_ENABLED_KEY);
   if (raw === null) return true;
   return raw !== 'false';
+}
+
+function writeCachedAccessPlan(plan: Plan): void {
+  safeWriteLocalStorage(ACCESS_PLAN_KEY, plan);
+  safeWriteLocalStorage(ACCESS_PLAN_AT_KEY, String(Date.now()));
 }
 
 function isLocalHostRuntime(): boolean {
@@ -208,8 +220,12 @@ const INITIAL_CAN_TOGGLE_AUTH_BYPASS = canToggleAuthBypassRuntime()
 
 function readInitialAccessPlan(): Plan {
   const raw = safeReadLocalStorage(ACCESS_PLAN_KEY);
-  if (raw === 'pro' || raw === 'full_program') return raw;
-  return 'free';
+  if (raw !== 'pro' && raw !== 'full_program') return 'free';
+  // The cache is only a hint for offline starts; the server is the source of truth.
+  const confirmedAt = Number(safeReadLocalStorage(ACCESS_PLAN_AT_KEY));
+  if (!Number.isFinite(confirmedAt) || confirmedAt <= 0) return 'free';
+  if (Date.now() - confirmedAt > PLAN_CACHE_MAX_AGE_MS) return 'free';
+  return raw;
 }
 
 function readInitialStripeCustomerId(): string | null {
@@ -403,10 +419,12 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     })
 
     const prev = get()
+    // Server- and Stripe-verified plans refresh the cache timestamp; storage echoes don't.
+    if (payload.source !== 'storage') writeCachedAccessPlan(nextPlan)
     if (prev.plan === nextPlan && prev.planSource === 'runtime') return
 
     set({plan: nextPlan, planSource: 'runtime'})
-    safeWriteLocalStorage(ACCESS_PLAN_KEY, nextPlan)
+    if (payload.source === 'storage') safeWriteLocalStorage(ACCESS_PLAN_KEY, nextPlan)
     get().notifyEntitlementsChanged(payload.reason ?? `applyEntitlements:${payload.source}`)
   },
 
@@ -613,6 +631,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
 
   clearAccountSession: () => {
     safeRemoveLocalStorage(ACCESS_PLAN_KEY)
+    safeRemoveLocalStorage(ACCESS_PLAN_AT_KEY)
     safeRemoveLocalStorage(STRIPE_CUSTOMER_ID_KEY)
     safeRemoveLocalStorage(AUTH_BYPASS_KEY)
     safeRemoveLocalStorage(GUEST_ID_KEY)

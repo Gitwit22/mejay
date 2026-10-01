@@ -27,12 +27,15 @@ export function accountDeletionEligibility(
 ): {allowed: true} | {allowed: false; code: 'subscription_active' | 'full_program_forfeiture_required'} {
   if (!entitlement) return {allowed: true}
   const accessType = entitlement.access_type
+  const paidStatus = ['active', 'trialing', 'past_due', 'unpaid'].includes(entitlement.subscription_status ?? '')
+  // A live Pro subscription keeps billing after the account is gone, so it must be cancelled
+  // first, even for Full Program owners.
+  if (paidStatus) return {allowed: false, code: 'subscription_active'}
   const fullProgram = accessType === 'full' || accessType === 'full_program'
   if (fullProgram) {
     return forfeitFullProgram ? {allowed: true} : {allowed: false, code: 'full_program_forfeiture_required'}
   }
 
-  const paidStatus = ['active', 'trialing', 'past_due', 'unpaid'].includes(entitlement.subscription_status ?? '')
   const free = accessType === 'free' && !Boolean(entitlement.has_full_access) && !paidStatus
   return free ? {allowed: true} : {allowed: false, code: 'subscription_active'}
 }

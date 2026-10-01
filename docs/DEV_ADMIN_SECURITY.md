@@ -291,7 +291,7 @@ Before deploying any dev-admin changes:
 
 ### Configuration
 - `wrangler.toml` - D1 database binding
-- `migrations/d1/` - Database schema migrations
+- `api/src/db/migrations/` - Database schema migrations (PostgreSQL)
 
 ---
 
