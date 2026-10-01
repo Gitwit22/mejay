@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeRequiredTempoShiftPercent, computeTempoMatchZone, computeTempoShiftInfo, getTempoCapDecision } from './tempoMatch'
+import { computeRequiredTempoShiftPercent, computeTempoMatchZone, computeTempoShiftInfo, getTempoCapDecision, resolveMaxTempoPercent } from './tempoMatch'
 
 describe('tempoMatch', () => {
   it('treats half/double tempo as valid interpretation', () => {
@@ -53,5 +53,14 @@ describe('tempoMatch', () => {
       rawMaxTempoPercent: 8,
     })
     expect(disabled.variant).toBe('disabled')
+  })
+})
+
+describe('resolveMaxTempoPercent', () => {
+  it('reads legacy fractions as percentages and whole numbers as percent', () => {
+    expect(resolveMaxTempoPercent(0.08)).toBeCloseTo(8)
+    expect(resolveMaxTempoPercent(1)).toBe(1)
+    expect(resolveMaxTempoPercent(12)).toBe(12)
+    expect(resolveMaxTempoPercent(0, 8)).toBe(8)
   })
 })

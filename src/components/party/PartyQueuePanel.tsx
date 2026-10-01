@@ -87,9 +87,10 @@ export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLDivElement>(null);
 
-  // Get all party tracks with their indices
+  // Get all party tracks with their indices (map lookup: the queue can hold hundreds of tracks)
+  const trackById = new Map(tracks.map(t => [t.id, t] as const));
   const partyTracks = partyTrackIds.map((id, index) => ({
-    track: tracks.find(t => t.id === id),
+    track: trackById.get(id),
     index,
     state: index < nowPlayingIndex ? 'played' : index === nowPlayingIndex ? 'playing' : 'upcoming',
     isPendingNext: pendingNextIndex === index,
@@ -288,10 +289,15 @@ export function PartyQueuePanel({ className }: PartyQueuePanelProps) {
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    removeFromCurrentSource(track!.id);
+                    // On the My Music source, "remove" deletes the track from the library itself.
+                    const deletesFromLibrary = partySource?.type !== 'playlist';
+                    if (deletesFromLibrary && !window.confirm(`Delete "${track!.displayName}" from My Music? This removes it from this device and all playlists.`)) return;
+                    void removeFromCurrentSource(track!.id).catch((error: unknown) => {
+                      console.error('[PartyQueue] remove failed', error);
+                    });
                   }}
                   className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
-                  title="Remove"
+                  title={partySource?.type === 'playlist' ? 'Remove from playlist' : 'Delete from My Music'}
                 >
                   <Trash2 className="w-3 h-3" />
                 </button>

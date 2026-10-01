@@ -17,7 +17,9 @@ export const DEFAULT_MAX_TEMPO_PERCENT = 8
 export function resolveMaxTempoPercent(raw?: number, fallbackPct: number = DEFAULT_MAX_TEMPO_PERCENT): number {
   const n = typeof raw === 'number' ? raw : Number(raw)
   if (!Number.isFinite(n) || n <= 0) return fallbackPct
-  if (n > 0 && n <= 1) return n * 100
+  // Legacy settings stored a fraction (0.08 = 8%). Values >= 1 are already percentages, so a
+  // stored 1 means 1%, not 100%.
+  if (n < 1) return n * 100
   return n
 }
 

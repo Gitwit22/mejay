@@ -31,6 +31,7 @@ vi.mock('@/lib/audioEngine', () => {
     destroy: vi.fn(),
 
     isPlaying: vi.fn(() => false),
+    hasLoadedTrack: vi.fn(() => true),
     getAudioContextTime: vi.fn(() => 0),
     getDuration: vi.fn(() => 180),
     getEffectiveEndTime: vi.fn(() => 180),
@@ -307,5 +308,43 @@ describe('DJ Store removal semantics', () => {
 
     expect(updatePlaylist).toHaveBeenCalledWith('p1', expect.objectContaining({ trackIds: ['t1'] }))
     expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: 'Playlists cleaned up' }))
+  })
+})
+
+describe('DJ Store queue maintenance', () => {
+  it('keeps "Play Next" on the same track when the queue is reordered', () => {
+    useDJStore.setState({ partyTrackIds: ['t1', 't2', 't3'], nowPlayingIndex: 0, pendingNextIndex: 2 })
+    useDJStore.getState().moveTrackInParty(2, 1)
+    const after = useDJStore.getState()
+    expect(after.partyTrackIds).toEqual(['t1', 't3', 't2'])
+    expect(after.partyTrackIds[after.pendingNextIndex as number]).toBe('t3')
+  })
+
+  it('shuffles safely and keeps "Play Next" pointing at the same track', () => {
+    useDJStore.setState({ partyTrackIds: [], nowPlayingIndex: 0, pendingNextIndex: null })
+    useDJStore.getState().shufflePartyTracks()
+    expect(useDJStore.getState().partyTrackIds).toEqual([])
+
+    useDJStore.setState({ partyTrackIds: ['t1', 't2', 't3'], nowPlayingIndex: 0, pendingNextIndex: 2 })
+    useDJStore.getState().shufflePartyTracks()
+    const after = useDJStore.getState()
+    expect(after.partyTrackIds[0]).toBe('t1')
+    expect(after.partyTrackIds[after.pendingNextIndex as number]).toBe('t3')
+  })
+
+  it('adds a track to the running queue when it is added to the playing playlist', async () => {
+    useDJStore.setState({
+      partySource: { type: 'playlist', playlistId: 'p1' },
+      partyTrackIds: ['t1', 't2'],
+      nowPlayingIndex: 0,
+    })
+    await useDJStore.getState().addTrackToPlaylist('p1', 't3')
+    expect(useDJStore.getState().partyTrackIds).toEqual(['t1', 't2', 't3'])
+  })
+
+  it('returns the id of a newly created playlist', async () => {
+    const id = await useDJStore.getState().createPlaylist('Dupe')
+    await useDJStore.getState().createPlaylist('Dupe')
+    expect(useDJStore.getState().playlists.find(p => p.id === id)?.name).toBe('Dupe')
   })
 })

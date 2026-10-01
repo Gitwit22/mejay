@@ -514,6 +514,10 @@ class AudioEngine {
     }
   }
 
+  hasLoadedTrack(deck: DeckId): boolean {
+    return this.decks[deck].audioBuffer !== null;
+  }
+
   isUnlocked(): boolean {
     return this.unlocked;
   }

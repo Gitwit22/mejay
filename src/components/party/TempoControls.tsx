@@ -2,7 +2,6 @@ import { Gauge, Sparkles } from 'lucide-react';
 import { useDJStore } from '@/stores/djStore';
 import { cn } from '@/lib/utils';
 import { GatedSection } from '@/components/ui/GatedControl';
-import { audioEngine } from '@/lib/audioEngine';
 import { TEMPO_PRESET_OPTIONS, getTempoPresetLabel, normalizeTempoPreset } from '@/lib/tempoPresets';
 
 export function TempoControls() {

@@ -140,8 +140,8 @@ export function ImportRoomView() {
 
   const handleCreateAndAddSelected = async () => {
     if (!newPlaylistName.trim()) return;
-    await createPlaylist(newPlaylistName.trim());
-    const newPlaylist = useDJStore.getState().playlists.find(p => p.name === newPlaylistName.trim());
+    const newPlaylistId = await createPlaylist(newPlaylistName.trim());
+    const newPlaylist = useDJStore.getState().playlists.find(p => p.id === newPlaylistId);
     if (newPlaylist) {
       let addedCount = 0;
       for (const trackId of selectedTrackIds) {

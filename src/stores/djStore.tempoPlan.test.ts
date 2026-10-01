@@ -28,6 +28,7 @@ vi.mock('@/lib/audioEngine', () => {
     destroy: vi.fn(),
 
     isPlaying: vi.fn(() => false),
+    hasLoadedTrack: vi.fn(() => true),
     getAudioContextTime: vi.fn(() => 0),
     getDuration: vi.fn(() => 180),
     getEffectiveEndTime: vi.fn(() => 180),

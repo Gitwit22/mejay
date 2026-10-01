@@ -55,11 +55,6 @@ export interface Track {
   sourceType?: 'local-file' | 'starter';
   /** When the track was first imported (ms). Mirrors addedAt for new imports. */
   importedAt?: number;
-  /**
-   * Temporary object URL created via URL.createObjectURL(fileBlob).
-   * Never persisted – generated at runtime when the blob is loaded.
-   */
-  objectUrl?: string;
 }
 
 export interface Playlist {
@@ -335,7 +330,11 @@ export async function clearTracksAndPlaylists(): Promise<void> {
 // Settings operations
 export async function getSettings(): Promise<Settings> {
   const db = await getDB();
-  const settings = await db.get('settings', 'default');
+  return normalizeStoredSettings(await db.get('settings', 'default'));
+}
+
+/** Merge stored settings over defaults and normalize legacy/invalid values. Pure. */
+function normalizeStoredSettings(settings: (Settings & { id?: string }) | undefined): Settings {
   const DEFAULT_MAX_SHIFT_PCT = 8;
   const ABSOLUTE_MAX_SHIFT_PCT = 12;
   const defaults: Settings = {
@@ -445,8 +444,12 @@ export async function getSettings(): Promise<Settings> {
 
 export async function updateSettings(updates: Partial<Settings>): Promise<void> {
   const db = await getDB();
-  const current = await getSettings();
-  await db.put('settings', { ...current, ...stripLegacySettingsKeys(updates), id: 'default' } as Settings & { id: string });
+  // Read-modify-write inside one readwrite transaction so concurrent saves (e.g. two debounced
+  // writers) can't overwrite each other's changes.
+  const tx = db.transaction('settings', 'readwrite');
+  const current = normalizeStoredSettings(await tx.store.get('default'));
+  await tx.store.put({ ...current, ...stripLegacySettingsKeys(updates), id: 'default' } as Settings & { id: string });
+  await tx.done;
 }
 
 // Generate unique ID

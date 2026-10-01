@@ -153,24 +153,3 @@ function findBPM(intervals: number[]): { bpm: number; confidence: number } {
   
   return { bpm: normalizedBPM, confidence };
 }
-
-// Analyze BPM from a Blob
-export async function analyzeBPM(blob: Blob): Promise<{ bpm: number; hasBeat: boolean }> {
-  try {
-    const audioContext = new AudioContext();
-    const arrayBuffer = await blob.arrayBuffer();
-    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-    
-    const result = await detectBPM(audioBuffer);
-    
-    audioContext.close();
-    
-    return {
-      bpm: result.bpm,
-      hasBeat: result.confidence > 0.3 && result.bpm > 0,
-    };
-  } catch (error) {
-    console.error('BPM detection failed:', error);
-    return { bpm: 0, hasBeat: false };
-  }
-}
