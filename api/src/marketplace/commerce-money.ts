@@ -20,7 +20,13 @@ export type SplitAllocation = SplitInput & {
 
 export type SaleAmounts = {
   grossAmountMinor: number
+  /**
+   * Everything the platform retains: the platform fee plus recovery of Stripe's processing fee.
+   * Always satisfies platformFeeMinor + providerProceedsMinor = grossAmountMinor.
+   */
   platformFeeMinor: number
+  /** Portion of platformFeeMinor that recovers Stripe's processing fee (borne by the provider). */
+  processingFeeMinor: number
   providerProceedsMinor: number
 }
 
@@ -45,15 +51,30 @@ function distributeByWeights<T extends {id: string}>(amountMinor: number, values
   return new Map(rows.map((row) => [row.value.id, row.amount]))
 }
 
-export function calculateSaleAmounts(grossAmountMinor: number, platformFeeBps: number): SaleAmounts {
+/** Conservative estimate of Stripe's standard US card fee (2.9% + 30¢) when the real fee is unknown. */
+export function estimateStripeFeeMinor(grossAmountMinor: number): number {
+  requireMinorUnits(grossAmountMinor, 'grossAmountMinor')
+  return Math.floor((grossAmountMinor * 290 + 5000) / 10000) + 30
+}
+
+export function calculateSaleAmounts(grossAmountMinor: number, platformFeeBps: number, processingFeeMinor = 0): SaleAmounts {
   if (!Number.isSafeInteger(grossAmountMinor) || grossAmountMinor <= 0) throw new Error('grossAmountMinor must be a positive safe integer')
   if (!Number.isInteger(platformFeeBps) || platformFeeBps < 0 || platformFeeBps > 10000) {
     throw new Error('platformFeeBps must be between 0 and 10000')
   }
+  requireMinorUnits(processingFeeMinor, 'processingFeeMinor')
   const weightedFee = grossAmountMinor * platformFeeBps
   if (!Number.isSafeInteger(weightedFee)) throw new Error('Fee calculation exceeds safe integer precision')
-  const platformFeeMinor = Math.floor((weightedFee + 5000) / 10000)
-  return {grossAmountMinor, platformFeeMinor, providerProceedsMinor: grossAmountMinor - platformFeeMinor}
+  const commissionMinor = Math.floor((weightedFee + 5000) / 10000)
+  // The provider bears the processing fee, but proceeds can never go negative.
+  const recoveredProcessingMinor = Math.min(processingFeeMinor, grossAmountMinor - commissionMinor)
+  const platformFeeMinor = commissionMinor + recoveredProcessingMinor
+  return {
+    grossAmountMinor,
+    platformFeeMinor,
+    processingFeeMinor: recoveredProcessingMinor,
+    providerProceedsMinor: grossAmountMinor - platformFeeMinor,
+  }
 }
 
 export function allocateProviderProceeds(providerProceedsMinor: number, tracks: TrackSplitInput[]): SplitAllocation[] {

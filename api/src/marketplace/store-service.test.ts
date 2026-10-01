@@ -1,6 +1,6 @@
 import {describe, expect, it, vi} from 'vitest'
 
-import {StoreService} from './store-service'
+import {previewByteLimit, resolvePreviewRange, StoreService} from './store-service'
 
 describe('public music store policy', () => {
   it('filters catalog listings to LIVE releases in the database query', async () => {
@@ -58,5 +58,23 @@ describe('public music store policy', () => {
     await expect(new StoreService({prepare: () => statement} as never).recordPreview('missing', null))
       .rejects.toMatchObject({status: 404, code: 'preview_not_found'})
     expect(statement.run).not.toHaveBeenCalled()
+  })
+})
+describe('store audio previews', () => {
+  it('caps previews at about 30 seconds and never more than 20% of the file', () => {
+    // 3-minute 30 MB master: 30s ≈ 5 MB, under the 6 MB (20%) cap.
+    expect(previewByteLimit(30_000_000, 180_000)).toBe(5_000_000)
+    // 40-second DJ tool: the 20% cap wins, so it can't be ripped whole.
+    expect(previewByteLimit(7_000_000, 40_000)).toBe(1_400_000)
+    // Unknown duration falls back to 1 MB, still bounded by 20%.
+    expect(previewByteLimit(2_000_000, null)).toBe(400_000)
+  })
+
+  it('clamps client ranges to the preview window', () => {
+    expect(resolvePreviewRange(null, 1000)).toEqual({start: 0, end: 999})
+    expect(resolvePreviewRange('bytes=0-', 1000)).toEqual({start: 0, end: 999})
+    expect(resolvePreviewRange('bytes=500-5000000', 1000)).toEqual({start: 500, end: 999})
+    expect(resolvePreviewRange('bytes=-200', 1000)).toEqual({start: 800, end: 999})
+    expect(resolvePreviewRange('bytes=1000-', 1000)).toBeNull()
   })
 })

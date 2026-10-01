@@ -1,5 +1,5 @@
 import {MarketplaceError} from '../../marketplace/service'
-import {StoreService} from '../../marketplace/store-service'
+import {previewByteLimit, resolvePreviewRange, StoreService} from '../../marketplace/store-service'
 import type {PrivateBucket} from '../../services/r2'
 import {getSessionUserId, readJson} from '../_auth'
 
@@ -51,18 +51,38 @@ export async function getCatalogAsset(context: Context): Promise<Response> {
   if (!assetId) return json({ok: false, error: 'missing_parameter'}, 400)
   try {
     const asset = await new StoreService(context.env.DB).getAsset(assetId)
-    const audioPreview = asset.mimeType.startsWith('audio/')
-    const object = await context.env.DOWNLOADS.getExact(asset.storageKey, audioPreview ? 'bytes=0-5242879' : undefined)
+    if (!asset.mimeType.startsWith('audio/')) {
+      const object = await context.env.DOWNLOADS.getExact(asset.storageKey)
+      if (!object) return json({ok: false, error: 'not_found'}, 404)
+      return new Response(object.body, {
+        status: 200,
+        headers: {
+          'content-type': asset.mimeType,
+          'cache-control': 'private, max-age=300',
+          'content-disposition': 'inline',
+          ...(object.contentLength ? {'content-length': String(object.contentLength)} : {}),
+        },
+      })
+    }
+
+    // Audio: only a short leading window of the master is ever served, and the browser sees it
+    // as a complete file of that length so seeking/range requests stay inside the window.
+    const limit = previewByteLimit(asset.byteSize, asset.durationMs)
+    const range = resolvePreviewRange(context.request.headers.get('range'), limit)
+    if (!range) {
+      return new Response(null, {status: 416, headers: {'content-range': `bytes */${limit}`}})
+    }
+    const object = await context.env.DOWNLOADS.getExact(asset.storageKey, `bytes=${range.start}-${range.end}`)
     if (!object) return json({ok: false, error: 'not_found'}, 404)
     return new Response(object.body, {
-      status: audioPreview ? 206 : 200,
+      status: 206,
       headers: {
         'content-type': asset.mimeType,
         'cache-control': 'private, no-store, max-age=0',
         'content-disposition': 'inline',
-        ...(object.contentLength ? {'content-length': String(object.contentLength)} : {}),
-        ...(object.contentRange ? {'content-range': object.contentRange} : {}),
-        ...(audioPreview ? {'accept-ranges': 'bytes'} : {}),
+        'content-length': String(range.end - range.start + 1),
+        'content-range': `bytes ${range.start}-${range.end}/${limit}`,
+        'accept-ranges': 'bytes',
       },
     })
   } catch (error) {

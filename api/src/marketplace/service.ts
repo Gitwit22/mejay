@@ -1,6 +1,6 @@
 import {bootstrapProviderAccount} from './onboarding'
 import {userHasArtistPortalAccess} from '../account/artist-access'
-import {buildGeneratedIsrc, type IsrcGenerationConfig} from './isrc'
+import {buildGeneratedIsrc, externalIsrcProblem, type IsrcGenerationConfig} from './isrc'
 import type {PrivateBucket} from '../services/r2'
 import type {
   ArtistInput,
@@ -155,6 +155,23 @@ async function assertOwned(db: Database, table: 'artists' | 'releases' | 'tracks
 }
 
 const lockedReleaseStatuses: readonly ReleaseStatus[] = ['SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'SCHEDULED', 'LIVE', 'REJECTED', 'TAKEN_DOWN']
+
+/** Statuses a provider may move their own release into; everything else is a staff decision. */
+const PROVIDER_TRANSITION_TARGETS = new Set<string>([
+  'DRAFT', 'METADATA_COMPLETE', 'RIGHTS_COMPLETE', 'ISRC_COMPLETE', 'PRICING_COMPLETE', 'SUBMITTED',
+])
+
+async function assertProviderCanSubmit(db: Database, providerId: string): Promise<void> {
+  const provider = await db.prepare(
+    'SELECT status, suspended_at FROM provider_profiles WHERE id = ?1',
+  ).bind(providerId).first<{status: string; suspended_at: string | null}>()
+  if (provider?.suspended_at) {
+    throw new MarketplaceError(409, 'provider_suspended', 'Suspended providers cannot submit releases')
+  }
+  if (provider?.status !== 'approved') {
+    throw new MarketplaceError(409, 'provider_not_approved', 'The provider must be approved before submitting releases')
+  }
+}
 
 export function isReleaseMutable(status: ReleaseStatus): boolean {
   return !lockedReleaseStatuses.includes(status)
@@ -417,7 +434,7 @@ export class MarketplaceService {
       const row = await inserted<any>(db.prepare(
         `UPDATE provider_profiles SET display_name = ?1, legal_name = ?2, slug = ?3,
           contact_email = ?4, country_code = ?5, bio = ?6,
-           status = CASE WHEN status = 'pending_profile_completion' THEN ?7 ELSE status END,
+           status = CASE WHEN status IN ('pending_profile_completion', 'needs_changes', 'rejected') THEN ?7 ELSE status END,
           updated_at = ?8
          WHERE id = ?9 RETURNING *`,
         ).bind(input.displayName, input.legalName ?? null, input.slug, input.contactEmail, input.countryCode, input.bio ?? null, protectedOwner?.protected_owner ? 'approved' : 'pending_review', now, context.providerId))
@@ -637,6 +654,8 @@ export class MarketplaceService {
       const context = await providerContext(db, userId)
       const track = await loadTrackIsrcContext(db, trackId, context.providerId)
       await assertTrackHasNoIsrc(db, trackId)
+      const problem = externalIsrcProblem(input.isrc)
+      if (problem) throw new MarketplaceError(422, 'isrc_not_allowed', problem)
       const id = crypto.randomUUID()
       const prefix = input.isrc.slice(0, 5)
       const assignmentYear = Number(input.isrc.slice(5, 7))
@@ -685,15 +704,25 @@ export class MarketplaceService {
          VALUES (?1, ?2, 1)
          ON CONFLICT (prefix, assignment_year) DO NOTHING`,
       ).bind(config.prefix, assignmentYear).run()
-      const counter = await db.prepare(
-        `UPDATE isrc_sequences
-         SET next_number = next_number + 1, updated_at = CURRENT_TIMESTAMP
-         WHERE isrc_sequences.prefix = ?1 AND isrc_sequences.assignment_year = ?2
-           AND isrc_sequences.next_number <= 99999
-         RETURNING isrc_sequences.next_number - 1 AS reserved_number`,
-      ).bind(config.prefix, assignmentYear).first<{reserved_number: number}>()
-      if (!counter || counter.reserved_number < 1 || counter.reserved_number > 99999) {
-        throw new MarketplaceError(409, 'isrc_range_exhausted', `The ${assignmentYear} ISRC range is exhausted`)
+      // The counter row stays locked for the rest of this transaction, so concurrent generators
+      // serialize here. Skip designations that are already registered (e.g. legacy rows or
+      // externally registered codes) instead of failing on the unique constraint forever.
+      let counter: {reserved_number: number} | null = null
+      for (;;) {
+        counter = await db.prepare(
+          `UPDATE isrc_sequences
+           SET next_number = next_number + 1, updated_at = CURRENT_TIMESTAMP
+           WHERE isrc_sequences.prefix = ?1 AND isrc_sequences.assignment_year = ?2
+             AND isrc_sequences.next_number <= 99999
+           RETURNING isrc_sequences.next_number - 1 AS reserved_number`,
+        ).bind(config.prefix, assignmentYear).first<{reserved_number: number}>()
+        if (!counter || counter.reserved_number < 1 || counter.reserved_number > 99999) {
+          throw new MarketplaceError(409, 'isrc_range_exhausted', `The ${assignmentYear} ISRC range is exhausted`)
+        }
+        const taken = await db.prepare(
+          'SELECT 1 AS taken FROM isrc_registry WHERE isrc = ?1',
+        ).bind(buildGeneratedIsrc(config.prefix, assignmentYear, counter.reserved_number)).first()
+        if (!taken) break
       }
 
       const isrc = buildGeneratedIsrc(config.prefix, assignmentYear, counter.reserved_number)
@@ -815,17 +844,14 @@ export class MarketplaceService {
         throw new MarketplaceError(409, 'stale_release_version', 'The release was modified by another request')
       }
 
-      if (['UNDER_REVIEW', 'APPROVED', 'SCHEDULED', 'LIVE'].includes(targetStatus)) {
-        const staff = await db.prepare(
-          `SELECT role FROM marketplace_staff WHERE user_id = ?1 AND NOT EXISTS (
-            SELECT 1 FROM provider_members WHERE user_id = ?1 AND provider_profile_id = ?2
-          )`,
-        ).bind(userId, release.provider_profile_id).first<{role: string}>()
-        if (!staff) throw new MarketplaceError(403, 'marketplace_staff_required', 'Marketplace reviewer access is required')
-      } else {
-        const context = await providerContext(db, userId)
-        if (context.providerId !== release.provider_profile_id) throw new MarketplaceError(404, 'not_found', 'Release was not found')
+      // Review and publishing decisions go through MarketplaceAdminService.commandRelease, which
+      // enforces staff roles, self-review rules, sale readiness and product activation.
+      if (!PROVIDER_TRANSITION_TARGETS.has(targetStatus)) {
+        throw new MarketplaceError(403, 'marketplace_review_required', 'Review and publishing decisions must use the marketplace admin review actions')
       }
+      const context = await providerContext(db, userId)
+      if (context.providerId !== release.provider_profile_id) throw new MarketplaceError(404, 'not_found', 'Release was not found')
+      if (targetStatus === 'SUBMITTED') await assertProviderCanSubmit(db, release.provider_profile_id)
 
       const unmet = await this.unmetPrerequisites(db, release, targetStatus)
       if (unmet.length > 0) throw new MarketplaceError(422, 'release_prerequisites_unmet', 'Release prerequisites are not complete', unmet)
@@ -866,9 +892,7 @@ export class MarketplaceService {
       if (release.version !== input.expectedVersion) {
         throw new MarketplaceError(409, 'stale_release_version', 'The release was modified by another request')
       }
-      if (release.provider_status !== 'approved') {
-        throw new MarketplaceError(409, 'provider_not_approved', 'The provider must be approved before submitting releases')
-      }
+      await assertProviderCanSubmit(db, release.provider_profile_id)
 
       const unmet = await this.unmetPrerequisites(db, release, 'SUBMITTED')
       if (unmet.length > 0) {

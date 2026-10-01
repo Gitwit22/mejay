@@ -141,6 +141,18 @@ export async function downloadIsrcRegistryExport(filters: {
 
 export type ReleaseAdminAction = 'start_review' | 'approve' | 'request_changes' | 'reject' | 'publish_now' | 'schedule' | 'publish_due' | 'unpublish' | 'takedown'
 
+export type ProviderAdminAction = 'approve' | 'reject' | 'suspend' | 'reinstate'
+
+export function commandMarketplaceProvider(providerId: string, input: {action: ProviderAdminAction; reason?: string}): Promise<AdminRecord> {
+  return request(`/api/marketplace-admin/providers/${encodeURIComponent(providerId)}/commands`, {
+    method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input),
+  })
+}
+
+export function retryMarketplacePayouts(): Promise<{attempted: number; transferred: number; failed: number}> {
+  return request('/api/marketplace-admin/payouts/retry', {method: 'POST'})
+}
+
 export function commandMarketplaceRelease(releaseId: string, input: {
   action: ReleaseAdminAction
   expectedVersion: number

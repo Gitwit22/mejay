@@ -3,7 +3,6 @@ import {MarketplaceError, MarketplaceService} from '../../marketplace/service'
 import {readIsrcGenerationConfig} from '../../marketplace/isrc'
 import {
   artistSchema,
-  assetSchema,
   isrcAssignmentSchema,
   generatedIsrcSchema,
   priceSchema,
@@ -125,7 +124,6 @@ export const createTrack = handler(trackSchema, (service, userId, input, params)
 export const updateTrack = handler(trackDraftSchema, (service, userId, input, params) =>
   service.updateTrack(userId, requiredParam(params, 'trackId'), input),
 200)
-export const createAsset = handler(assetSchema, (service, userId, input) => service.createAsset(userId, input))
 export const initiateUpload = handler(uploadInitSchema, (service, userId, input, _params, env) =>
   service.initiateUpload(userId, input, env.DOWNLOADS),
 )

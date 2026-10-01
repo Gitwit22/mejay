@@ -231,7 +231,7 @@ function PricingStep({detail}: {detail: ProviderReleaseDetail}) {
   const [price, setPrice] = useState(detail.product?.amount_minor != null ? (detail.product.amount_minor / 100).toFixed(2) : '1.00')
   const numericPrice = Number(price)
   const save = useMutation({mutationFn: () => createProviderPricing(detail.release.id, detail.release.title, Math.round(Number(price) * 100)), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', detail.release.id]}); toast({title: 'Release price saved'})}})
-  return <><StepHeading title="Pricing" detail="Every MEJay release is sold in USD for at least $1.00." /><div className="max-w-sm space-y-5"><Field label="USD price"><Input type="number" min="1" step="0.01" value={price} onChange={(event) => setPrice(event.target.value)} disabled={Boolean(detail.product)} /></Field>{detail.product ? <p className="text-sm text-emerald-400">Current price: ${(Number(detail.product.amount_minor) / 100).toFixed(2)} USD</p> : <Button disabled={!Number.isFinite(numericPrice) || numericPrice < 1 || save.isPending} onClick={() => save.mutate()}>Save price</Button>}{save.isError && <p className="text-sm text-red-400">{save.error.message}</p>}</div></>
+  return <><StepHeading title="Pricing" detail="Every MEJay release is sold in USD for at least $1.00." /><div className="max-w-sm space-y-5"><Field label="USD price"><Input type="number" min="1" step="0.01" value={price} onChange={(event) => setPrice(event.target.value)} disabled={Boolean(detail.product)} /></Field>{detail.product ? <p className="text-sm text-emerald-400">Current price: ${(Number(detail.product.amount_minor) / 100).toFixed(2)} USD</p> : <Button disabled={!Number.isFinite(numericPrice) || numericPrice < 1 || save.isPending} onClick={() => save.mutate()}>Save price</Button>}{Number.isFinite(numericPrice) && numericPrice >= 1 && <PayoutEstimate amountMinor={Math.round(numericPrice * 100)} />}{save.isError && <p className="text-sm text-red-400">{save.error.message}</p>}</div></>
 }
 
 function SplitsStep({detail}: {detail: ProviderReleaseDetail}) {
@@ -252,4 +252,12 @@ function ReviewStep({detail}: {detail: ProviderReleaseDetail}) {
   const editable = ['DRAFT', 'METADATA_COMPLETE', 'RIGHTS_COMPLETE', 'ISRC_COMPLETE', 'PRICING_COMPLETE', 'CHANGES_REQUESTED'].includes(detail.release.status)
   const latestFeedback = detail.reviewEvents.find((event) => event.note)?.note
   return <><StepHeading title="Review & Submit" detail="Confirm the release package before sending it to MEJay Publishing." />{latestFeedback && <div className="mb-5 border border-amber-400/30 bg-amber-400/5 p-4 text-sm text-amber-200"><p className="font-medium">Review feedback</p><p className="mt-1">{latestFeedback}</p></div>}<div className="divide-y divide-white/10 border-y border-white/10">{detail.prerequisites.length === 0 ? <div className="flex items-center gap-3 py-4 text-emerald-400"><Check className="h-4 w-4" />All submission requirements are complete</div> : detail.prerequisites.map((item) => <div key={item} className="py-3 text-sm text-zinc-400">Required: {item}</div>)}</div><Button className="mt-6 bg-emerald-400 text-zinc-950 hover:bg-emerald-300" disabled={!editable || detail.prerequisites.length > 0 || submit.isPending} onClick={() => submit.mutate()}>{submit.isPending ? 'Submitting...' : editable ? 'Submit to MEJay Review' : `Release is ${detail.release.status.replace(/_/g, ' ')}`}</Button>{submit.isError && <p className="mt-3 text-sm text-red-400">{submit.error.message}</p>}</>
+}
+/** Mirrors the API's default fee model: 10% MEJay commission plus Stripe's 2.9% + 30¢ processing fee. */
+function PayoutEstimate({amountMinor}: {amountMinor: number}) {
+  const commission = Math.round(amountMinor * 0.1)
+  const processing = Math.round(amountMinor * 0.029) + 30
+  const payout = Math.max(0, amountMinor - commission - processing)
+  const format = (value: number) => `$${(value / 100).toFixed(2)}`
+  return <p className="text-xs text-zinc-400">Estimated payout per sale: <span className="text-zinc-200">{format(payout)}</span> after the {format(commission)} MEJay fee and ~{format(processing)} Stripe processing fee (deducted from your share).</p>
 }

@@ -19,6 +19,13 @@ type Release = {id: string; provider_profile_id: string; status: string; version
 type IsrcRegistryFilters = {isrc?: string; track?: string; artist?: string; provider?: string; year?: number | null}
 
 const reviewActions = new Set<ReleaseAdminCommand['action']>(['start_review', 'approve', 'request_changes', 'reject'])
+// Must match the release_review_events.decision CHECK constraint.
+const reviewDecision = {
+  start_review: 'review_started',
+  approve: 'approved',
+  request_changes: 'changes_requested',
+  reject: 'rejected',
+} as const
 const adminActions = new Set<ReleaseAdminCommand['action']>(['publish_now', 'schedule', 'publish_due', 'unpublish', 'takedown'])
 
 export function releaseCommandTarget(action: ReleaseAdminCommand['action']): string {
@@ -93,9 +100,11 @@ export class MarketplaceAdminService {
        WHERE r.status IN ('APPROVED', 'SCHEDULED', 'LIVE') ORDER BY r.updated_at DESC`,
     ).all()
     const providers = await this.database.prepare(
-      `SELECT p.id, p.display_name, p.contact_email, p.status, COUNT(r.id)::integer AS release_count
+      `SELECT p.id, p.display_name, p.contact_email, p.country_code, p.status, p.suspended_at,
+        p.stripe_payouts_enabled, COUNT(r.id)::integer AS release_count
        FROM provider_profiles p LEFT JOIN releases r ON r.provider_profile_id = p.id
-       GROUP BY p.id ORDER BY p.updated_at DESC`,
+       GROUP BY p.id
+       ORDER BY CASE WHEN p.status = 'pending_review' THEN 0 ELSE 1 END, p.updated_at DESC`,
     ).all()
     const artists = await this.database.prepare(
       `SELECT a.id, a.name, a.country_code, p.display_name AS provider_name
@@ -307,6 +316,9 @@ export class MarketplaceAdminService {
         'SELECT * FROM provider_profiles WHERE id = ?1 FOR UPDATE',
       ).bind(providerId).first<Record<string, unknown> & {suspended_at: string | null}>()
       if (!provider) throw new MarketplaceError(404, 'not_found', 'Provider profile was not found')
+      if (command.action === 'approve' || command.action === 'reject') {
+        return reviewProviderApplication(db, userId, provider, command)
+      }
       const suspend = command.action === 'suspend'
       if (suspend === Boolean(provider.suspended_at)) {
         throw new MarketplaceError(409, suspend ? 'provider_already_suspended' : 'provider_not_suspended', 'Provider suspension state is unchanged')
@@ -319,6 +331,14 @@ export class MarketplaceAdminService {
       if (suspend) {
         await db.prepare(
           `UPDATE products SET active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE provider_profile_id = ?1`,
+        ).bind(providerId).run()
+      } else {
+        // Restore sales for releases that are still live; drafts/taken-down releases stay inactive.
+        await db.prepare(
+          `UPDATE products SET active = TRUE, updated_at = CURRENT_TIMESTAMP
+           WHERE provider_profile_id = ?1 AND release_id IN (
+             SELECT id FROM releases WHERE provider_profile_id = ?1 AND status = 'LIVE'
+           )`,
         ).bind(providerId).run()
       }
       await db.prepare(
@@ -434,7 +454,7 @@ export class MarketplaceAdminService {
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
         ).bind(
           crypto.randomUUID(), release.id, release.provider_profile_id, userId,
-          command.action === 'start_review' ? 'review_started' : command.action === 'request_changes' ? 'changes_requested' : command.action,
+          reviewDecision[command.action as keyof typeof reviewDecision],
           'note' in command ? command.note : null, release.status, target,
         ).run()
       }
@@ -455,6 +475,36 @@ export class MarketplaceAdminService {
       return row
     })
   }
+}
+
+const reviewableProviderStatuses = new Set(['pending_review', 'needs_changes', 'rejected'])
+
+async function reviewProviderApplication(
+  db: Database,
+  userId: string,
+  provider: Record<string, unknown>,
+  command: Extract<ProviderAdminCommand, {action: 'approve' | 'reject'}>,
+): Promise<unknown> {
+  const status = String(provider.status ?? '')
+  if (!reviewableProviderStatuses.has(status)) {
+    throw new MarketplaceError(409, 'provider_not_reviewable', `A ${status} provider cannot be ${command.action === 'approve' ? 'approved' : 'rejected'}`)
+  }
+  if (command.action === 'reject' && status === 'rejected') {
+    throw new MarketplaceError(409, 'provider_not_reviewable', 'Provider is already rejected')
+  }
+  const target = command.action === 'approve' ? 'approved' : 'rejected'
+  const row = await db.prepare(
+    `UPDATE provider_profiles SET status = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2 RETURNING *`,
+  ).bind(target, provider.id).first()
+  await db.prepare(
+    `INSERT INTO marketplace_audit_events
+      (id, provider_profile_id, actor_user_id, entity_type, entity_id, action, before_data, after_data, metadata)
+     VALUES (?1, ?2, ?3, 'provider', ?2, ?4, ?5, ?6, ?7)`,
+  ).bind(
+    crypto.randomUUID(), provider.id, userId, `provider.${command.action}`,
+    JSON.stringify(provider), JSON.stringify(row), JSON.stringify({reason: command.reason ?? null}),
+  ).run()
+  return row
 }
 
 async function validateFeatureIds(db: Database, kind: 'release' | 'artist', ids: string[]): Promise<void> {

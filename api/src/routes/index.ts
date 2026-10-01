@@ -20,7 +20,6 @@ import {
   assignIsrc,
   assignGeneratedIsrc,
   createArtist,
-  createAsset,
   createPrice,
   createProduct,
   createProvider,
@@ -39,7 +38,7 @@ import {
   updateTrack,
   finalizeUpload,
 } from './marketplace'
-import {commandProvider as marketplaceAdminCommandProvider, commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview, recordSplitDispute, replaceDiscoveryFeatures} from './marketplace-admin'
+import {commandProvider as marketplaceAdminCommandProvider, commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview, recordSplitDispute, replaceDiscoveryFeatures, retryProviderPayouts} from './marketplace-admin'
 import {createIndustryReportingBatch, createIndustryReportingCorrection, exportIndustryReportingBatch, getIndustryReporting, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting} from './marketplace-admin/reporting'
 import {onRequest as stripeWebhook} from './stripe-webhook'
 import {getCatalogAsset, getCatalogRelease, listCatalog, recordCatalogPreview} from './store'
@@ -94,7 +93,6 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'patch', path: '/api/marketplace/releases/:releaseId', handler: updateReleaseDraft},
   {method: 'post', path: '/api/marketplace/releases/:releaseId/tracks', handler: createTrack},
   {method: 'patch', path: '/api/marketplace/tracks/:trackId', handler: updateTrack},
-  {method: 'post', path: '/api/marketplace/assets', handler: createAsset},
   {method: 'post', path: '/api/marketplace/uploads', handler: initiateUpload},
   {method: 'post', path: '/api/marketplace/uploads/finalize', handler: finalizeUpload},
   {method: 'post', path: '/api/marketplace/rights-declarations', handler: createRightsDeclaration},
@@ -114,6 +112,7 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'post', path: '/api/marketplace-admin/releases/:releaseId/commands', handler: marketplaceAdminCommandRelease},
   {method: 'post', path: '/api/marketplace-admin/providers/:providerId/commands', handler: marketplaceAdminCommandProvider},
   {method: 'post', path: '/api/marketplace-admin/split-disputes', handler: recordSplitDispute},
+  {method: 'post', path: '/api/marketplace-admin/payouts/retry', handler: retryProviderPayouts},
   {method: 'get', path: '/api/marketplace-admin/overview', handler: marketplaceAdminOverview},
   {method: 'put', path: '/api/marketplace-admin/discovery/features', handler: replaceDiscoveryFeatures},
   {method: 'get', path: '/api/marketplace-admin/reporting', handler: getIndustryReporting},

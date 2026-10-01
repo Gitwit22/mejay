@@ -18,6 +18,8 @@ export const releaseAdminCommandSchema = z.discriminatedUnion('action', [
 export type ReleaseAdminCommand = z.infer<typeof releaseAdminCommandSchema>
 
 export const providerAdminCommandSchema = z.discriminatedUnion('action', [
+  z.object({action: z.literal('approve'), reason: note.optional()}),
+  z.object({action: z.literal('reject'), reason: note}),
   z.object({action: z.literal('suspend'), reason: note}),
   z.object({action: z.literal('reinstate'), reason: note}),
 ])

@@ -7,7 +7,7 @@ import {Dialog, DialogContent, DialogHeader, DialogTitle} from '@/components/ui/
 import {Input} from '@/components/ui/input'
 import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
-import {commandMarketplaceRelease, createIndustryReportingBatch, downloadIndustryReportingBatch, downloadIsrcRegistryExport, getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview, replaceMarketplaceDiscoveryFeatures, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting, type AdminRecord, type IndustryReportingDashboard, type IsrcRegistryRecord, type MarketplaceAdminOverview, type ReleaseAdminAction} from '@/lib/marketplaceAdminApi'
+import {commandMarketplaceProvider, commandMarketplaceRelease, retryMarketplacePayouts, type ProviderAdminAction, createIndustryReportingBatch, downloadIndustryReportingBatch, downloadIsrcRegistryExport, getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview, replaceMarketplaceDiscoveryFeatures, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting, type AdminRecord, type IndustryReportingDashboard, type IsrcRegistryRecord, type MarketplaceAdminOverview, type ReleaseAdminAction} from '@/lib/marketplaceAdminApi'
 
 type Section = 'pending' | 'catalog' | 'discovery' | 'providers' | 'artists' | 'isrcs' | 'rights' | 'pricing' | 'splits' | 'takedowns' | 'reporting'
 
@@ -40,8 +40,48 @@ function SectionView({section, data}: {section: Section; data: Awaited<ReturnTyp
   if (section === 'reporting') return <Reporting />
   if (section === 'discovery') return <DiscoveryCuration data={data} />
   if (section === 'isrcs') return <IsrcRegistrySection />
+  if (section === 'providers') return <ProvidersSection rows={data.providers} role={data.role} />
   const rows = data[section]
   return <RecordTable title={navigation.find(([id]) => id === section)?.[1] || section} rows={rows} actionable={section === 'pending' || section === 'catalog'} role={data.role} />
+}
+
+const reviewableProviderStatuses = new Set(['pending_review', 'needs_changes', 'rejected'])
+
+function ProvidersSection({rows, role}: {rows: AdminRecord[]; role: MarketplaceAdminOverview['role']}) {
+  const queryClient = useQueryClient()
+  const admin = role === 'admin'
+  const command = useMutation({
+    mutationFn: ({providerId, action, reason}: {providerId: string; action: ProviderAdminAction; reason?: string}) => commandMarketplaceProvider(providerId, {action, reason}),
+    onSuccess: async (_data, variables) => {
+      await queryClient.invalidateQueries({queryKey: ['marketplace-admin']})
+      toast({title: `Provider ${variables.action === 'approve' ? 'approved' : variables.action === 'reject' ? 'rejected' : variables.action === 'suspend' ? 'suspended' : 'reinstated'}`})
+    },
+    onError: (error) => toast({title: 'Provider action failed', description: error.message, variant: 'destructive'}),
+  })
+  const payouts = useMutation({
+    mutationFn: retryMarketplacePayouts,
+    onSuccess: (result) => toast({title: 'Payout retry finished', description: `${result.transferred} paid, ${result.failed} failed of ${result.attempted} pending`}),
+    onError: (error) => toast({title: 'Payout retry failed', description: error.message, variant: 'destructive'}),
+  })
+  const run = (providerId: string, action: ProviderAdminAction, needsReason: boolean) => {
+    const reason = needsReason ? window.prompt(`Reason to ${action} this provider`)?.trim() : undefined
+    if (needsReason && !reason) return
+    command.mutate({providerId, action, reason})
+  }
+  const pendingCount = rows.filter((row) => row.status === 'pending_review').length
+  return <div className="space-y-5">
+    <div className="flex flex-wrap items-end justify-between gap-4"><div><h1 className="text-2xl font-bold">Providers</h1><p className="mt-1 text-sm text-zinc-400">{pendingCount > 0 ? `${pendingCount} application${pendingCount === 1 ? '' : 's'} awaiting review.` : 'No applications awaiting review.'}</p></div>{admin && <Button variant="outline" disabled={payouts.isPending} onClick={() => payouts.mutate()}><RefreshCw className="h-4 w-4" />Retry pending payouts</Button>}</div>
+    {rows.length === 0 ? <div className="border-y border-dashed border-white/10 py-16 text-center text-sm text-zinc-500">No providers yet.</div> : <div className="overflow-x-auto border-y border-white/10"><table className="w-full min-w-[860px] text-left text-sm"><thead className="text-xs uppercase text-zinc-500"><tr><th className="px-3 py-3 font-medium">Provider</th><th className="px-3 py-3 font-medium">Contact</th><th className="px-3 py-3 font-medium">Status</th><th className="px-3 py-3 font-medium">Payouts</th><th className="px-3 py-3 font-medium">Releases</th><th className="px-3 py-3 font-medium">Actions</th></tr></thead><tbody className="divide-y divide-white/10">{rows.map((row) => {
+      const id = String(row.id)
+      const status = String(row.status ?? '')
+      const suspended = Boolean(row.suspended_at)
+      return <tr key={id}><td className="px-3 py-3"><p className="text-zinc-200">{formatValue(row.display_name)}</p><p className="text-xs text-zinc-500">{formatValue(row.country_code)}</p></td><td className="px-3 py-3 text-zinc-300">{formatValue(row.contact_email)}</td><td className="px-3 py-3"><span className={status === 'approved' && !suspended ? 'text-emerald-300' : status === 'pending_review' ? 'text-amber-300' : 'text-zinc-300'}>{suspended ? 'Suspended' : status.replace(/_/g, ' ')}</span></td><td className="px-3 py-3 text-zinc-300">{row.stripe_payouts_enabled ? 'Enabled' : 'Not set up'}</td><td className="px-3 py-3 tabular-nums text-zinc-300">{formatValue(row.release_count)}</td><td className="px-3 py-3">{admin ? <div className="flex flex-wrap gap-2">
+        {reviewableProviderStatuses.has(status) && <Button size="sm" className="bg-emerald-400 text-zinc-950 hover:bg-emerald-300" disabled={command.isPending} onClick={() => run(id, 'approve', false)}><CheckCircle2 className="h-4 w-4" />Approve</Button>}
+        {reviewableProviderStatuses.has(status) && status !== 'rejected' && <Button size="sm" variant="outline" disabled={command.isPending} onClick={() => run(id, 'reject', true)}><XCircle className="h-4 w-4" />Reject</Button>}
+        {status === 'approved' && <Button size="sm" variant="outline" disabled={command.isPending} onClick={() => run(id, suspended ? 'reinstate' : 'suspend', true)}>{suspended ? 'Reinstate' : 'Suspend'}</Button>}
+      </div> : <span className="text-xs text-zinc-500">Admin only</span>}</td></tr>
+    })}</tbody></table></div>}
+  </div>
 }
 
 function DiscoveryCuration({data}: {data: MarketplaceAdminOverview}) {

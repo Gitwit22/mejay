@@ -19,8 +19,8 @@ function fakeDb(handlers: {first?: (sql: string, args: unknown[]) => unknown; ru
           args = values
           return stmt
         },
-        async first() {
-          return (handlers.first?.(sql, args) ?? null) as any
+        async first<T = Record<string, unknown>>() {
+          return (handlers.first?.(sql, args) ?? null) as T | null
         },
         async run() {
           runs.push({sql, args})

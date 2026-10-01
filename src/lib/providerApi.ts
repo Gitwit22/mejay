@@ -118,6 +118,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return payload.data
 }
 
+export type ProviderProfileInput = {
+  displayName: string
+  legalName?: string
+  slug: string
+  contactEmail: string
+  countryCode: string
+  bio?: string
+}
+
+/** Submit (or resubmit) the provider profile; moves the application into admin review. */
+export function submitProviderProfile(input: ProviderProfileInput): Promise<{id: string; status: string}> {
+  return request('/api/marketplace/providers', {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify(input),
+  })
+}
+
 export function getProviderDashboard(): Promise<ProviderDashboard> {
   return request('/api/marketplace/dashboard')
 }

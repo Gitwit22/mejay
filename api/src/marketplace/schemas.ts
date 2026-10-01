@@ -1,4 +1,5 @@
 import {z} from 'zod'
+import {externalIsrcProblem} from './isrc'
 
 const id = z.string().trim().min(1).max(128)
 const nonEmpty = z.string().trim().min(1).max(300)
@@ -127,7 +128,11 @@ export const rightsDeclarationSchema = z.object({
 })
 
 export const isrcAssignmentSchema = z.object({
-  isrc: z.string().trim().toUpperCase().transform((value) => value.replace(/[-\s]/g, '')).pipe(z.string().regex(/^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$/)),
+  isrc: z.string().trim().toUpperCase().transform((value) => value.replace(/[-\s]/g, '')).pipe(z.string().regex(/^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$/))
+    .superRefine((value, context) => {
+      const problem = externalIsrcProblem(value)
+      if (problem) context.addIssue({code: z.ZodIssueCode.custom, message: problem})
+    }),
   source: z.enum(['provider', 'imported', 'agency']).default('provider'),
 })
 

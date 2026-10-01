@@ -1,4 +1,4 @@
-import {allocateProviderProceeds, calculateSaleAmounts, refundLedgerEntries, saleLedgerEntries, type TrackSplitInput} from './commerce-money'
+import {allocateProviderProceeds, calculateSaleAmounts, estimateStripeFeeMinor, refundLedgerEntries, saleLedgerEntries, type TrackSplitInput} from './commerce-money'
 import {allocateCumulativeRefunds, buildReportingEvents, buildReportingEventsForTrackAmounts, insertReportingEvents} from './industry-reporting'
 import {MarketplaceError} from './service'
 import {stripeRequest} from '../services/stripe'
@@ -117,6 +117,7 @@ type OrderRow = {
   gross_amount_minor?: number
   platform_fee_minor?: number
   refunded_amount_minor?: number
+  transfer_reversed_minor?: number
   payment_status?: string
   dispute_status?: string
 }
@@ -162,6 +163,19 @@ function chargeDetails(intent: StripePaymentIntent): {chargeId: string | null; b
       ? intent.latest_charge!.balance_transaction!.fee!
       : null,
   }
+}
+
+/**
+ * Cumulative provider share of `refundedAmountMinor`, mirroring refundLedgerEntries: the platform
+ * refunds its proportional retained share; the provider refunds the rest.
+ */
+export function providerRefundShare(order: Pick<OrderRow, 'gross_amount_minor' | 'platform_fee_minor' | 'provider_proceeds_minor'>, refundedAmountMinor: number): number {
+  const gross = Number(order.gross_amount_minor ?? 0)
+  if (gross <= 0 || refundedAmountMinor <= 0) return 0
+  const refunded = Math.min(refundedAmountMinor, gross)
+  const platformFee = Number(order.platform_fee_minor ?? 0)
+  const platformShare = refunded === gross ? platformFee : Math.floor(refunded * platformFee / gross)
+  return Math.min(refunded - platformShare, Number(order.provider_proceeds_minor))
 }
 
 export class CommerceService {
@@ -359,7 +373,10 @@ export class CommerceService {
         throw new MarketplaceError(409, 'checkout_amount_mismatch', 'Stripe amount does not match the authoritative checkout snapshot')
       }
       const snapshot = parseSnapshot(attempt.snapshot)
-      const amounts = calculateSaleAmounts(attempt.amount_minor, attempt.platform_fee_bps)
+      // The provider bears Stripe's processing fee; use the actual fee from the balance
+      // transaction, falling back to the standard-rate estimate when Stripe hasn't settled it yet.
+      const processingFeeMinor = charge.stripeFeeMinor ?? estimateStripeFeeMinor(attempt.amount_minor)
+      const amounts = calculateSaleAmounts(attempt.amount_minor, attempt.platform_fee_bps, processingFeeMinor)
       const orderId = crypto.randomUUID()
       const paidAt = new Date().toISOString()
       const insertedOrder = await db.prepare(
@@ -470,6 +487,34 @@ export class CommerceService {
     return {orderId: order.id}
   }
 
+  /**
+   * Pay out orders whose provider transfer is still pending or failed (e.g. the provider was
+   * suspended at sale time, or Stripe rejected the transfer). Safe to run repeatedly: transfers
+   * use a per-order idempotency key. Returns counts for observability.
+   */
+  async retryPendingTransfers(options: {providerId?: string; limit?: number} = {}): Promise<{attempted: number; transferred: number; failed: number}> {
+    const {results} = await this.database.prepare(
+      `SELECT o.* FROM marketplace_orders o
+       JOIN provider_profiles p ON p.id = o.provider_profile_id
+       WHERE o.transfer_status IN ('pending', 'failed') AND p.suspended_at IS NULL
+         AND o.payment_status IN ('paid', 'partially_refunded') AND o.dispute_status IN ('none', 'won')
+         AND (?1 = '' OR o.provider_profile_id = ?1)
+       ORDER BY o.created_at LIMIT ?2`,
+    ).bind(options.providerId ?? '', options.limit ?? 100).all<OrderRow>()
+    let transferred = 0
+    let failed = 0
+    for (const order of results) {
+      try {
+        await this.ensureProviderTransfer(order)
+        transferred += 1
+      } catch (error) {
+        failed += 1
+        console.error('[marketplace] provider transfer retry failed', {orderId: order.id, error: error instanceof Error ? error.message : error})
+      }
+    }
+    return {attempted: results.length, transferred, failed}
+  }
+
   private async ensureProviderTransfer(order: OrderRow): Promise<void> {
     if (order.stripe_transfer_id && order.transfer_status === 'transferred') return
     if (!order.provider_profile_id || !order.stripe_charge_id) throw new Error('Order transfer destination is incomplete')
@@ -477,9 +522,15 @@ export class CommerceService {
       `SELECT suspended_at FROM provider_profiles WHERE id = ?1`,
     ).bind(order.provider_profile_id).first<{suspended_at: string | null}>()
     if (provider?.suspended_at) return
+    if (order.payment_status === 'refunded' || order.payment_status === 'disputed' || order.dispute_status === 'lost') return
     if (!order.stripe_destination_account_id) throw new Error('Provider Stripe account is unavailable')
+    // Refunds that happened before payout reduce what is sent; record them as already recovered so
+    // later refunds only reverse the incremental provider share.
+    const alreadyRecoveredMinor = providerRefundShare(order, Number(order.refunded_amount_minor ?? 0))
+    const transferAmountMinor = Number(order.provider_proceeds_minor) - alreadyRecoveredMinor
+    if (transferAmountMinor <= 0) return
     const params = new URLSearchParams()
-    params.set('amount', String(order.provider_proceeds_minor))
+    params.set('amount', String(transferAmountMinor))
     params.set('currency', order.currency.toLowerCase())
     params.set('destination', order.stripe_destination_account_id)
     params.set('source_transaction', order.stripe_charge_id)
@@ -489,7 +540,11 @@ export class CommerceService {
       method: 'POST',
       path: '/v1/transfers',
       params,
-      idempotencyKey: `marketplace-transfer-${order.id}`,
+      // A failed transfer must be retried as a new transfer, so it gets a new key; otherwise the key
+      // is stable per order+amount so webhook retries can't double-pay.
+      idempotencyKey: order.transfer_status === 'failed' && order.stripe_transfer_id
+        ? `marketplace-transfer-${order.id}-${transferAmountMinor}-after-${order.stripe_transfer_id}`
+        : `marketplace-transfer-${order.id}-${transferAmountMinor}`,
     })
     if (!transfer.id) throw new Error('Stripe did not return a transfer ID')
     await this.database.transaction(async (db) => {
@@ -512,12 +567,13 @@ export class CommerceService {
         await db.prepare(
           `INSERT INTO marketplace_ledger_entries (id, transaction_id, account_code, debit_minor, credit_minor)
            VALUES (?1, ?2, 'provider_payable', ?3, 0), (?4, ?2, 'stripe_clearing', 0, ?3)`,
-        ).bind(crypto.randomUUID(), posted.id, order.provider_proceeds_minor, crypto.randomUUID()).run()
+        ).bind(crypto.randomUUID(), posted.id, transferAmountMinor, crypto.randomUUID()).run()
       }
       await db.prepare(
         `UPDATE marketplace_orders SET stripe_transfer_id = ?1, transfer_status = 'transferred',
+          transfer_reversed_minor = GREATEST(transfer_reversed_minor, ?3),
           updated_at = CURRENT_TIMESTAMP WHERE id = ?2`,
-      ).bind(transfer.id, order.id).run()
+      ).bind(transfer.id, order.id, alreadyRecoveredMinor).run()
     })
   }
 
@@ -532,20 +588,9 @@ export class CommerceService {
     const grossAmountMinor = order.gross_amount_minor
     const refundedAmount = Math.min(charge.amount_refunded ?? 0, grossAmountMinor)
     const fullRefund = refundedAmount >= grossAmountMinor
-    if (fullRefund && order.stripe_transfer_id && order.transfer_status === 'transferred') {
-      const params = new URLSearchParams()
-      params.set('amount', String(order.provider_proceeds_minor))
-      params.set('metadata[orderId]', order.id)
-      const reversal = await stripeRequest<{id?: string}>({
-        secretKey: this.secretKey,
-        method: 'POST',
-        path: `/v1/transfers/${encodeURIComponent(order.stripe_transfer_id)}/reversals`,
-        params,
-        idempotencyKey: `marketplace-transfer-reversal-${order.id}`,
-      })
-      if (!reversal.id) throw new Error('Stripe did not return a transfer reversal ID')
-      await this.postTransferReversal(order, reversal.id)
-    }
+    // Claw back the provider's share of every refund (partial or full), cumulatively, so the
+    // platform never funds the provider's portion of a refund.
+    await this.reverseProviderTransferTo(order, providerRefundShare(order, refundedAmount))
 
     await this.database.transaction(async (db) => {
       const current = await db.prepare('SELECT * FROM marketplace_orders WHERE id = ?1 FOR UPDATE').bind(order.id).first<OrderRow>()
@@ -643,11 +688,39 @@ export class CommerceService {
     })
   }
 
-  private async postTransferReversal(order: OrderRow, reversalId: string): Promise<void> {
+  /**
+   * Ensure the cumulative amount reversed from the provider's transfer is at least
+   * `targetReversedMinor` (capped at the transferred proceeds). Idempotent per target amount.
+   */
+  private async reverseProviderTransferTo(order: OrderRow, targetReversedMinor: number): Promise<void> {
+    const proceeds = Number(order.provider_proceeds_minor)
+    const target = Math.min(Math.max(0, Math.floor(targetReversedMinor)), proceeds)
+    const alreadyReversed = Number(order.transfer_reversed_minor ?? 0)
+    const delta = target - alreadyReversed
+    if (delta <= 0 || !order.stripe_transfer_id || order.transfer_status !== 'transferred') return
+    const params = new URLSearchParams()
+    params.set('amount', String(delta))
+    params.set('metadata[orderId]', order.id)
+    params.set('metadata[cumulativeReversedMinor]', String(target))
+    const reversal = await stripeRequest<{id?: string}>({
+      secretKey: this.secretKey,
+      method: 'POST',
+      path: `/v1/transfers/${encodeURIComponent(order.stripe_transfer_id)}/reversals`,
+      params,
+      idempotencyKey: `marketplace-transfer-reversal-${order.id}-${target}`,
+    })
+    if (!reversal.id) throw new Error('Stripe did not return a transfer reversal ID')
+    await this.postTransferReversal(order, reversal.id, target)
+  }
+
+  private async postTransferReversal(order: OrderRow, reversalId: string, targetReversedMinor: number): Promise<void> {
     await this.database.transaction(async (db) => {
       const current = await db.prepare('SELECT * FROM marketplace_orders WHERE id = ?1 FOR UPDATE').bind(order.id).first<OrderRow>()
-      if (!current || current.transfer_status === 'reversed') return
-      const key = `transfer-reversal-${order.id}`
+      if (!current) return
+      const alreadyReversed = Number(current.transfer_reversed_minor ?? 0)
+      const delta = targetReversedMinor - alreadyReversed
+      if (delta <= 0) return
+      const key = `transfer-reversal-${order.id}-${targetReversedMinor}`
       const transactionId = crypto.randomUUID()
       await db.prepare(
         `INSERT INTO marketplace_ledger_transactions
@@ -665,12 +738,14 @@ export class CommerceService {
         await db.prepare(
           `INSERT INTO marketplace_ledger_entries (id, transaction_id, account_code, debit_minor, credit_minor)
            VALUES (?1, ?2, 'stripe_clearing', ?3, 0), (?4, ?2, 'provider_payable', 0, ?3)`,
-        ).bind(crypto.randomUUID(), transaction.id, order.provider_proceeds_minor, crypto.randomUUID()).run()
+        ).bind(crypto.randomUUID(), transaction.id, delta, crypto.randomUUID()).run()
       }
+      const fullyReversed = targetReversedMinor >= Number(current.provider_proceeds_minor)
       await db.prepare(
-        `UPDATE marketplace_orders SET stripe_transfer_reversal_id = ?1, transfer_status = 'reversed',
-          updated_at = CURRENT_TIMESTAMP WHERE id = ?2`,
-      ).bind(reversalId, order.id).run()
+        `UPDATE marketplace_orders SET stripe_transfer_reversal_id = ?1, transfer_reversed_minor = ?2,
+          transfer_status = CASE WHEN ?3 THEN 'reversed' ELSE transfer_status END,
+          updated_at = CURRENT_TIMESTAMP WHERE id = ?4`,
+      ).bind(reversalId, targetReversedMinor, fullyReversed, order.id).run()
     })
   }
 
@@ -683,18 +758,26 @@ export class CommerceService {
     if (!order) return
     const won = !opened && dispute.status === 'won'
     const lost = !opened && dispute.status === 'lost'
+    // A lost chargeback returns the whole sale to the buyer: recover all remaining provider proceeds.
+    if (lost) await this.reverseProviderTransferTo(order, Number(order.provider_proceeds_minor))
     await this.database.transaction(async (db) => {
+      // Closing a dispute any way other than "lost" restores the pre-dispute payment status.
       await db.prepare(
         `UPDATE marketplace_orders SET dispute_status = ?1,
-          payment_status = CASE WHEN ?2 THEN 'disputed' ELSE payment_status END,
+          payment_status = CASE
+            WHEN ?2 THEN 'disputed'
+            WHEN ?4 THEN payment_status
+            WHEN COALESCE(refunded_amount_minor, 0) >= gross_amount_minor THEN 'refunded'
+            WHEN COALESCE(refunded_amount_minor, 0) > 0 THEN 'partially_refunded'
+            ELSE 'paid' END,
           updated_at = CURRENT_TIMESTAMP WHERE id = ?3`,
-      ).bind(opened ? 'open' : won ? 'won' : lost ? 'lost' : 'none', opened, order.id).run()
+      ).bind(opened ? 'open' : won ? 'won' : lost ? 'lost' : 'none', opened, order.id, lost).run()
       if (opened) {
         await db.prepare(
           `UPDATE download_entitlements SET status = 'suspended', suspended_at = CURRENT_TIMESTAMP,
             updated_at = CURRENT_TIMESTAMP WHERE order_id = ?1 AND status = 'active'`,
         ).bind(order.id).run()
-      } else if (won) {
+      } else if (!lost) {
         await db.prepare(
           `UPDATE download_entitlements SET status = 'active', suspended_at = NULL,
             updated_at = CURRENT_TIMESTAMP WHERE order_id = ?1 AND status = 'suspended'`,
@@ -744,10 +827,10 @@ export class CommerceService {
 
   async getOrderStatus(userId: string, sessionId: string): Promise<unknown> {
     const attempt = await this.database.prepare(
-      `SELECT attempt.status, attempt.stripe_checkout_session_id, order.id AS order_id,
-        order.payment_status, order.transfer_status
+      `SELECT attempt.status, attempt.stripe_checkout_session_id, purchase_order.id AS order_id,
+        purchase_order.payment_status, purchase_order.transfer_status
        FROM marketplace_checkout_attempts attempt
-       LEFT JOIN marketplace_orders order ON order.checkout_attempt_id = attempt.id
+       LEFT JOIN marketplace_orders purchase_order ON purchase_order.checkout_attempt_id = attempt.id
        WHERE attempt.buyer_user_id = ?1 AND attempt.stripe_checkout_session_id = ?2`,
     ).bind(userId, sessionId).first()
     if (!attempt) throw new MarketplaceError(404, 'checkout_not_found', 'Checkout was not found')
@@ -757,7 +840,7 @@ export class CommerceService {
   async listPurchases(userId: string): Promise<unknown[]> {
     const {results} = await this.database.prepare(
       `SELECT entitlement.id AS entitlement_id, entitlement.status AS entitlement_status,
-        order.id AS order_id, order.paid_at, order.payment_status, order.currency,
+        purchase_order.id AS order_id, purchase_order.paid_at, purchase_order.payment_status, purchase_order.currency,
         item.product_id, item.release_title, item.artist_name, item.artwork_asset_id, item.unit_amount_minor,
         COALESCE(json_agg(json_build_object(
           'id', file.id, 'trackId', file.track_id, 'title', file.track_title,
@@ -765,12 +848,12 @@ export class CommerceService {
           'fileName', file.file_name, 'mimeType', file.mime_type, 'byteSize', file.byte_size
         ) ORDER BY file.disc_number, file.track_number) FILTER (WHERE file.id IS NOT NULL), '[]'::json) AS files
        FROM download_entitlements entitlement
-       JOIN marketplace_orders order ON order.id = entitlement.order_id
+       JOIN marketplace_orders purchase_order ON purchase_order.id = entitlement.order_id
        JOIN marketplace_order_items item ON item.id = entitlement.order_item_id
        LEFT JOIN download_entitlement_files file ON file.entitlement_id = entitlement.id
        WHERE entitlement.buyer_user_id = ?1
-       GROUP BY entitlement.id, order.id, item.id
-       ORDER BY order.paid_at DESC`,
+       GROUP BY entitlement.id, purchase_order.id, item.id
+       ORDER BY purchase_order.paid_at DESC`,
     ).bind(userId).all()
     return results
   }

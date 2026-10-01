@@ -1,9 +1,11 @@
 import {Pool} from 'pg'
-import {afterAll, beforeAll, describe, expect, it} from 'vitest'
+import {afterAll, afterEach, beforeAll, describe, expect, it, vi} from 'vitest'
 import {Database} from '../db/client'
 import {runMigrations} from '../db/migrations'
 import {AccountDeletionService} from '../account/deletion'
 import {MarketplaceAdminService} from './admin-service'
+import {CommerceService} from './commerce-service'
+import {claimStripeWebhookEvent} from './webhook-events'
 import {MarketplaceService} from './service'
 
 const connectionString = process.env.TEST_DATABASE_URL
@@ -18,7 +20,7 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
   const reviewerUserId = crypto.randomUUID()
 
   beforeAll(async () => {
-    pool = new Pool({connectionString, max: 4, ssl: connectionString?.includes('localhost') ? false : {rejectUnauthorized: false}})
+    pool = new Pool({connectionString, max: 4, options: `-c search_path=${schema}`, ssl: connectionString?.includes('localhost') ? false : {rejectUnauthorized: false}})
     await pool.query(`CREATE SCHEMA "${schema}"`)
     await pool.query(`SET search_path TO "${schema}"`)
 
@@ -46,6 +48,10 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
     await pool.end()
   })
 
+  function adminService() {
+    return new MarketplaceAdminService(new Database(connectionString!, pool) as never)
+  }
+
   async function resetIsrcState() {
     await pool.query('TRUNCATE isrc_assignments, isrc_registry, isrc_sequences, isrc_counters, isrc_rights_certifications CASCADE')
   }
@@ -67,6 +73,12 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       contactEmail: `${label}-${userId.slice(0, 8)}@example.test`,
       countryCode: 'US',
     }) as {id: string}
+    await adminService().commandProvider(adminUserId, provider.id, {action: 'approve'})
+    await pool.query(
+      `UPDATE provider_profiles SET stripe_account_id = $2, stripe_details_submitted = TRUE,
+        stripe_payouts_enabled = TRUE, stripe_transfers_status = 'active' WHERE id = $1`,
+      [provider.id, `acct_${label.toLowerCase()}_${userId.slice(0, 8)}`],
+    )
     const artist = await service.createArtist(userId, {
       name: `${label} Artist`,
       countryCode: 'US',
@@ -146,9 +158,9 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       const transitioned = await service.transitionRelease(fixture.userId, fixture.release.id, {targetStatus, expectedVersion: version}) as {version: number}
       version = transitioned.version
     }
-    for (const targetStatus of ['UNDER_REVIEW', 'APPROVED', 'LIVE'] as const) {
-      const transitioned = await service.transitionRelease(reviewerUserId, fixture.release.id, {targetStatus, expectedVersion: version}) as {version: number}
-      version = transitioned.version
+    for (const [actor, action] of [[reviewerUserId, 'start_review'], [reviewerUserId, 'approve'], [adminUserId, 'publish_now']] as const) {
+      const commanded = await adminService().commandRelease(actor, fixture.release.id, {action, expectedVersion: version}) as {version: number}
+      version = commanded.version
     }
     return {...fixture, version}
   }
@@ -300,6 +312,12 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
     )
     expect(takedownRetention.rows[0]).toEqual({release_status: 'TAKEN_DOWN', registry_rows: 1})
 
+    // Deletion requires the account to be back on the free tier.
+    await pool.query(
+      `UPDATE entitlements SET access_type = 'free', has_full_access = 0, stripe_subscription_id = NULL,
+        subscription_status = 'canceled' WHERE user_id = $1`,
+      [providerUserId],
+    )
     await new AccountDeletionService(new Database(connectionString!, pool) as never).deleteCurrentUser({
       userId: providerUserId,
       email: `retention-${providerUserId.slice(0, 8)}@example.test`,
@@ -327,5 +345,147 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       [providerUserId, provider.id, release.id, track.id],
     )
     expect(deletion.rows[0]).toEqual({users: 0, providers: 0, releases: 0, identified_audits: 0, snapshot_audits: 0, registry_rows: 1, identified_registry_rows: 0})
+  })
+
+  it('requires provider approval before a release can be submitted', async () => {
+    const userId = crypto.randomUUID()
+    await pool.query(`INSERT INTO users (id, email, account_intent) VALUES ($1, $2, 'provider')`, [userId, `pending-${userId.slice(0, 8)}@example.test`])
+    await pool.query(
+      `INSERT INTO entitlements (user_id, access_type, has_full_access, stripe_subscription_id, subscription_status)
+       VALUES ($1, 'pro', 1, $2, 'active')`,
+      [userId, `sub_pending_${userId.slice(0, 8)}`],
+    )
+    const provider = await service.completeProvider(userId, {
+      displayName: 'Pending Records',
+      slug: `pending-${userId.slice(0, 8)}`,
+      contactEmail: `pending-${userId.slice(0, 8)}@example.test`,
+      countryCode: 'US',
+    }) as {id: string; status: string}
+    expect(provider.status).toBe('pending_review')
+    const artist = await service.createArtist(userId, {name: 'Pending Artist', countryCode: 'US', metadata: {}}) as {id: string}
+    const release = await service.createRelease(userId, {title: 'Pending Release', releaseType: 'single', primaryArtistId: artist.id}) as {id: string; version: number}
+    await pool.query(`UPDATE releases SET status = 'PRICING_COMPLETE' WHERE id = $1`, [release.id])
+    await expect(service.transitionRelease(userId, release.id, {targetStatus: 'SUBMITTED', expectedVersion: release.version}))
+      .rejects.toMatchObject({code: 'provider_not_approved'})
+
+    await expect(adminService().commandProvider(reviewerUserId, provider.id, {action: 'approve'}))
+      .rejects.toMatchObject({code: 'marketplace_admin_required'})
+    const approved = await adminService().commandProvider(adminUserId, provider.id, {action: 'approve'}) as {status: string}
+    expect(approved.status).toBe('approved')
+  })
+
+  it('does not let staff publish through the provider transition endpoint', async () => {
+    const {release} = await createProviderFixture('Bypass')
+    await pool.query(`UPDATE releases SET status = 'APPROVED' WHERE id = $1`, [release.id])
+    await expect(service.transitionRelease(adminUserId, release.id, {targetStatus: 'LIVE', expectedVersion: release.version}))
+      .rejects.toMatchObject({code: 'marketplace_review_required'})
+  })
+
+  it('rejects external ISRCs under the MEJay prefix and skips already-registered designations', async () => {
+    await resetIsrcState()
+    const fixture = await createProviderFixture('Jam')
+    await expect(service.assignIsrc(fixture.userId, fixture.track.id, {isrc: `QTA3L${String(currentYear).padStart(2, '0')}00001`, source: 'provider'}))
+      .rejects.toMatchObject({code: 'isrc_not_allowed'})
+
+    const first = await service.assignGeneratedIsrc(fixture.userId, fixture.track.id, {
+      controlsRecording: true, neverAssignedIsrc: true, authorizeAssignment: true,
+    }, {prefix: 'QTA3L', countryCode: 'QT', registrantCode: 'A3L'}) as {isrc: string}
+    // Simulate a counter that fell behind the registry (legacy import / manual fix).
+    await pool.query('UPDATE isrc_sequences SET next_number = 1 WHERE prefix = $1 AND assignment_year = $2', ['QTA3L', currentYear])
+    const trackTwo = await service.createTrack(fixture.userId, fixture.release.id, {
+      title: 'Jam Track 2', primaryArtistId: fixture.artist.id, discNumber: 1, trackNumber: 2, durationMs: 120_000, explicit: false, metadata: {},
+    }) as {id: string}
+    const second = await service.assignGeneratedIsrc(fixture.userId, trackTwo.id, {
+      controlsRecording: true, neverAssignedIsrc: true, authorizeAssignment: true,
+    }, {prefix: 'QTA3L', countryCode: 'QT', registrantCode: 'A3L'}) as {isrc: string}
+    expect(first.isrc.endsWith('00001')).toBe(true)
+    expect(second.isrc.endsWith('00002')).toBe(true)
+  })
+
+  it('runs the purchase status and purchased-music queries', async () => {
+    const commerce = new CommerceService(new Database(connectionString!, pool) as never, 'sk_test_unused')
+    await expect(commerce.listPurchases(crypto.randomUUID())).resolves.toEqual([])
+    await expect(commerce.getOrderStatus(crypto.randomUUID(), 'cs_test_missing')).rejects.toMatchObject({code: 'checkout_not_found'})
+    await expect(commerce.retryPendingTransfers({providerId: crypto.randomUUID()})).resolves.toEqual({attempted: 0, transferred: 0, failed: 0})
+  })
+
+  describe('marketplace money flow', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    function stubStripe(stripeFee: number) {
+      const calls: Array<{url: string; body: URLSearchParams | null}> = []
+      vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+        const url = String(input)
+        const body = init?.body instanceof URLSearchParams ? init.body : null
+        calls.push({url, body})
+        const reply = (data: unknown) => new Response(JSON.stringify(data), {status: 200})
+        if (url.includes('/v1/checkout/sessions')) return reply({id: `cs_${crypto.randomUUID()}`, url: 'https://checkout.stripe.test'})
+        if (url.includes('/v1/payment_intents/')) {
+          return reply({id: url.split('/v1/payment_intents/')[1].split('?')[0], status: 'succeeded', latest_charge: {id: `ch_${crypto.randomUUID()}`, balance_transaction: {id: 'txn_1', fee: stripeFee}}})
+        }
+        if (url.includes('/reversals')) return reply({id: `trr_${crypto.randomUUID()}`})
+        if (url.endsWith('/v1/transfers')) return reply({id: `tr_${crypto.randomUUID()}`})
+        throw new Error(`Unexpected Stripe call ${url}`)
+      }))
+      return calls
+    }
+
+    async function buyLiveRelease(label: string, stripeFee: number) {
+      await resetIsrcState()
+      const fixture = await prepareLiveRelease(label)
+      const product = await pool.query<{id: string}>('SELECT id FROM products WHERE release_id = $1', [fixture.release.id])
+      const buyerId = crypto.randomUUID()
+      await pool.query(`INSERT INTO users (id, email, account_intent) VALUES ($1, $2, 'consumer')`, [buyerId, `buyer-${buyerId.slice(0, 8)}@example.test`])
+      const calls = stubStripe(stripeFee)
+      const commerce = new CommerceService(new Database(connectionString!, pool) as never, 'sk_test', 1000)
+      const checkout = await commerce.createCheckout(buyerId, product.rows[0].id, 'https://app.test')
+      const attempt = await pool.query<{id: string}>('SELECT id FROM marketplace_checkout_attempts WHERE stripe_checkout_session_id = $1', [checkout.sessionId])
+      const {orderId} = await commerce.fulfillPaidSession({
+        id: checkout.sessionId,
+        payment_status: 'paid',
+        payment_intent: `pi_${crypto.randomUUID()}`,
+        amount_total: 999,
+        currency: 'usd',
+        metadata: {kind: 'marketplace_purchase', attemptId: attempt.rows[0].id, userId: buyerId, productId: product.rows[0].id},
+      })
+      const order = await pool.query('SELECT * FROM marketplace_orders WHERE id = $1', [orderId])
+      return {commerce, calls, order: order.rows[0], buyerId}
+    }
+
+    it('charges the Stripe fee to the provider and reverses the provider share of partial refunds', async () => {
+      const {commerce, calls, order, buyerId} = await buyLiveRelease('Money', 59)
+      // $9.99: 100¢ commission + 59¢ Stripe fee retained; provider receives 840¢.
+      expect(order).toMatchObject({gross_amount_minor: 999, platform_fee_minor: 159, provider_proceeds_minor: 840, transfer_status: 'transferred'})
+      const transfer = calls.find((call) => call.url.endsWith('/v1/transfers'))
+      expect(transfer?.body?.get('amount')).toBe('840')
+
+      await commerce.handleRefund({id: order.stripe_charge_id, amount: 999, amount_refunded: 500})
+      const reversal = calls.filter((call) => call.url.includes('/reversals'))
+      // Platform keeps floor(500 * 159 / 999) = 79¢ of its share; provider returns 421¢.
+      expect(reversal.map((call) => call.body?.get('amount'))).toEqual(['421'])
+      const partial = await pool.query('SELECT transfer_reversed_minor, transfer_status, payment_status FROM marketplace_orders WHERE id = $1', [order.id])
+      expect(partial.rows[0]).toEqual({transfer_reversed_minor: 421, transfer_status: 'transferred', payment_status: 'partially_refunded'})
+
+      const eventId = `evt_${crypto.randomUUID()}`
+      await claimStripeWebhookEvent(new Database(connectionString!, pool) as never, {id: eventId, type: 'charge.dispute.closed', createdAt: new Date().toISOString()})
+      await commerce.handleDispute({id: 'dp_1', charge: order.stripe_charge_id, status: 'lost'}, false, eventId)
+      const afterDispute = calls.filter((call) => call.url.includes('/reversals')).map((call) => call.body?.get('amount'))
+      expect(afterDispute).toEqual(['421', '419'])
+      const final = await pool.query('SELECT transfer_reversed_minor, transfer_status FROM marketplace_orders WHERE id = $1', [order.id])
+      expect(final.rows[0]).toEqual({transfer_reversed_minor: 840, transfer_status: 'reversed'})
+      const purchases = await commerce.listPurchases(buyerId) as Array<{entitlement_status: string}>
+      expect(purchases[0].entitlement_status).toBe('revoked')
+    })
+
+    it('pays out held transfers once a suspended provider is reinstated', async () => {
+      const {commerce, order} = await buyLiveRelease('Held', 59)
+      await pool.query(`UPDATE marketplace_orders SET transfer_status = 'pending', stripe_transfer_id = NULL WHERE id = $1`, [order.id])
+      const result = await commerce.retryPendingTransfers({providerId: order.provider_profile_id})
+      expect(result).toEqual({attempted: 1, transferred: 1, failed: 0})
+      const updated = await pool.query('SELECT transfer_status FROM marketplace_orders WHERE id = $1', [order.id])
+      expect(updated.rows[0].transfer_status).toBe('transferred')
+    })
   })
 })

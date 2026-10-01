@@ -26,6 +26,7 @@ describe('runMigrations', () => {
       {version: 10, name: 'industry_reporting'},
       {version: 11, name: 'production_hardening'},
       {version: 12, name: 'isrc_registry'},
+      {version: 13, name: 'marketplace_payout_integrity'},
     ])
   })
 

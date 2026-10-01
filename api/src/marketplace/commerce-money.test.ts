@@ -1,14 +1,32 @@
 import {describe, expect, it} from 'vitest'
 
-import {allocateProviderProceeds, assertBalancedLedger, calculateSaleAmounts, refundLedgerEntries, saleLedgerEntries} from './commerce-money'
+import {allocateProviderProceeds, assertBalancedLedger, calculateSaleAmounts, estimateStripeFeeMinor, refundLedgerEntries, saleLedgerEntries} from './commerce-money'
 
 describe('marketplace commerce money', () => {
   it('calculates the configured platform fee in integer minor units', () => {
     expect(calculateSaleAmounts(129, 1000)).toEqual({
       grossAmountMinor: 129,
       platformFeeMinor: 13,
+      processingFeeMinor: 0,
       providerProceedsMinor: 116,
     })
+  })
+
+  it('deducts the Stripe processing fee from provider proceeds', () => {
+    // $1.00 sale: 10¢ commission + 33¢ Stripe fee recovered; provider keeps 57¢.
+    expect(estimateStripeFeeMinor(100)).toBe(33)
+    expect(calculateSaleAmounts(100, 1000, 33)).toEqual({
+      grossAmountMinor: 100,
+      platformFeeMinor: 43,
+      processingFeeMinor: 33,
+      providerProceedsMinor: 57,
+    })
+  })
+
+  it('never lets fees push provider proceeds below zero', () => {
+    const amounts = calculateSaleAmounts(100, 9000, 33)
+    expect(amounts.providerProceedsMinor).toBe(0)
+    expect(amounts.platformFeeMinor).toBe(100)
   })
 
   it('allocates proceeds equally by track and then by payee without losing cents', () => {

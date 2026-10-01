@@ -72,7 +72,11 @@ export async function persistSubscriptionState(args: {
  * Users who still hold a live Pro subscription fall back to Pro; everyone else to free.
  * Returns true when an entitlement row was downgraded.
  */
-export async function revokeFullProgramAccess(args: {db: any; userId: string}): Promise<boolean> {
+type RunnableDb = {
+  prepare: (sql: string) => {bind: (...values: unknown[]) => {run: () => Promise<{meta?: {changes?: number}} | unknown>}}
+}
+
+export async function revokeFullProgramAccess(args: {db: RunnableDb; userId: string}): Promise<boolean> {
   const {db, userId} = args
   const result = await db
     .prepare(
@@ -86,5 +90,5 @@ export async function revokeFullProgramAccess(args: {db: any; userId: string}): 
     )
     .bind(userId)
     .run()
-  return Number(result?.meta?.changes ?? 0) > 0
+  return Number((result as {meta?: {changes?: number}} | null)?.meta?.changes ?? 0) > 0
 }

@@ -9,7 +9,45 @@ type Statement = {
 
 type Database = {prepare: (sql: string) => Statement}
 
-export type StoreAsset = {storageKey: string; mimeType: string}
+export type StoreAsset = {storageKey: string; mimeType: string; byteSize: number; durationMs: number | null}
+
+/** Only objects created through the signed-upload flow live under this prefix. */
+export const MARKETPLACE_STORAGE_PREFIX = 'marketplace/'
+
+export const PREVIEW_SECONDS = 30
+const PREVIEW_MAX_FILE_FRACTION = 0.2
+const PREVIEW_FALLBACK_BYTES = 1_048_576
+
+/**
+ * Number of leading bytes of an audio master that may be streamed as a public preview: roughly
+ * PREVIEW_SECONDS of audio, never more than 20% of the file, so short tracks are never given away.
+ */
+export function previewByteLimit(byteSize: number, durationMs: number | null): number {
+  const size = Math.max(0, Math.floor(byteSize))
+  const fractionCap = Math.floor(size * PREVIEW_MAX_FILE_FRACTION)
+  const durationCap = durationMs && durationMs > 0
+    ? Math.floor((size / durationMs) * PREVIEW_SECONDS * 1000)
+    : PREVIEW_FALLBACK_BYTES
+  return Math.max(0, Math.min(fractionCap, durationCap))
+}
+
+/**
+ * Resolve a client Range header against the preview window. Returns null when the requested
+ * range starts beyond the window (416).
+ */
+export function resolvePreviewRange(rangeHeader: string | null, limit: number): {start: number; end: number} | null {
+  if (limit <= 0) return null
+  const match = /^bytes=(\d*)-(\d*)$/.exec((rangeHeader ?? '').trim())
+  if (!match || (!match[1] && !match[2])) return {start: 0, end: limit - 1}
+  if (!match[1]) {
+    const suffix = Math.min(Number(match[2]), limit)
+    return suffix > 0 ? {start: limit - suffix, end: limit - 1} : null
+  }
+  const start = Number(match[1])
+  if (start >= limit) return null
+  const end = match[2] ? Math.min(Number(match[2]), limit - 1) : limit - 1
+  return end >= start ? {start, end} : null
+}
 
 export class StoreService {
   constructor(private readonly database: Database) {}
@@ -119,13 +157,20 @@ export class StoreService {
 
   async getAsset(assetId: string): Promise<StoreAsset> {
     const asset = await this.database.prepare(
-      `SELECT asset.storage_key, asset.mime_type
+      `SELECT asset.storage_key, asset.mime_type, asset.byte_size, track.duration_ms
        FROM marketplace_assets asset
        LEFT JOIN tracks track ON track.id = asset.track_id
        JOIN releases r ON r.id = COALESCE(asset.release_id, track.release_id)
        WHERE asset.id = ?1 AND asset.processing_status = 'ready' AND r.status = 'LIVE'`,
-    ).bind(assetId).first<{storage_key: string; mime_type: string}>()
-    if (!asset) throw new MarketplaceError(404, 'not_found', 'Catalog asset was not found')
-    return {storageKey: asset.storage_key, mimeType: asset.mime_type}
+    ).bind(assetId).first<{storage_key: string; mime_type: string; byte_size: number | string; duration_ms: number | null}>()
+    if (!asset || !asset.storage_key.startsWith(MARKETPLACE_STORAGE_PREFIX)) {
+      throw new MarketplaceError(404, 'not_found', 'Catalog asset was not found')
+    }
+    return {
+      storageKey: asset.storage_key,
+      mimeType: asset.mime_type,
+      byteSize: Number(asset.byte_size),
+      durationMs: asset.duration_ms === null ? null : Number(asset.duration_ms),
+    }
   }
 }
