@@ -1,15 +1,18 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { Track, TrackStatus, Settings, getAllTracks, getSettings, addTrack, updateTrack, deleteTrack, updateSettings, generateId, getAllPlaylists, Playlist, addPlaylist, updatePlaylist, deletePlaylist, PartySource, resetLocalDatabase, clearTracksAndPlaylists, markTrackMissing as dbMarkTrackMissing } from '@/lib/db';
-import { audioEngine, DeckId } from '@/lib/audioEngine';
+import { audioEngine, isStaleLoadError, DeckId } from '@/lib/audioEngine';
 import { detectBPM } from '@/lib/bpmDetector';
 import { computeClampedTempoRatio, computeRequiredTempoShiftPercent, isOverTempoCap, resolveMaxTempoPercent } from '@/lib/tempoMatch';
-import { TEMPO_PRESET_RATIOS, TEMPO_PRESET_MAX_STRETCH, computePresetTempo } from '@/lib/tempoPresets';
+import { computePresetTempo } from '@/lib/tempoPresets';
 // Note: Energy Mode automation removed; mixing uses manual sliders only.
 import { usePlanStore } from '@/stores/planStore';
 import { toast } from '@/hooks/use-toast';
 import { detectTrueEndTime, detectTrueStartTime } from '@/lib/trueEndTime';
 import { getStarterPackTracks, isStarterPackId, type StarterPackId } from '@/config/starterPacks';
+
+/** Outcome of loading a track onto a deck. */
+export type DeckLoadResult = 'loaded' | 'stale' | 'failed';
 
 interface DeckState {
   trackId: string | null;
@@ -120,7 +123,8 @@ interface DJState {
   removeFromCurrentSource: (trackId: string, opts?: {emit?: boolean}) => Promise<void>;
   
   // Playback
-  loadTrackToDeck: (trackId: string, deck: DeckId, offsetSeconds?: number) => Promise<void>;
+  /** 'stale' = superseded by a newer load on the same deck; 'failed' = track missing or undecodable. */
+  loadTrackToDeck: (trackId: string, deck: DeckId, offsetSeconds?: number) => Promise<DeckLoadResult>;
   play: (deck?: DeckId) => void;
   pause: (deck?: DeckId) => void;
   togglePlayPause: (deck?: DeckId) => void;
@@ -142,6 +146,11 @@ interface DJState {
   moveTrackInParty: (fromIndex: number, toIndex: number) => void;
   playNow: (index: number) => void;
   playNext: (index: number) => void;
+  /**
+   * Tap-to-preview from Library/Import. Outside Party Mode it plays (or toggles) the track on
+   * deck A; during Party Mode it never touches the live decks and queues the track next instead.
+   */
+  previewTrack: (trackId: string) => Promise<void>;
   shufflePartyTracks: () => void;
   restartPlaylist: () => void;
   
@@ -384,9 +393,6 @@ export const useDJStore = create<DJState>()(
   // Preset mode is intentionally more expressive than Auto/Locked.
   // Auto is capped for safety; presets should be able to reach their targets.
   const PRESET_MAX_TEMPO_PERCENT = 35;
-  // Default max stretch used when a preset's per-preset cap is not found.
-  const DEFAULT_PRESET_MAX_STRETCH_FALLBACK = 35;
-
   const getEffectiveMaxTempoPercent = (settings: Settings): number => {
     if (settings.tempoMode === 'preset') return PRESET_MAX_TEMPO_PERCENT;
     return settings.maxTempoPercent;
@@ -512,6 +518,23 @@ export const useDJStore = create<DJState>()(
     return { nextIds, nextNow, shouldAdvance: false };
   };
 
+  /** Mark a track that the browser can't decode so the queue skips it instead of stalling. */
+  const markTrackUnplayable = (trackId: string) => {
+    const track = get().tracks.find(t => t.id === trackId);
+    if (!track || track.status === 'error') return;
+    set(s => ({
+      tracks: s.tracks.map(t => t.id === trackId ? { ...t, status: 'error' as TrackStatus } : t),
+    }));
+    void updateTrack(trackId, { status: 'error' }).catch(() => {});
+    toast({
+      title: "Can't play track",
+      description: `"${track.displayName}" couldn't be decoded by this browser and was skipped.`,
+    });
+  };
+
+  const isTrackPlayable = (track: Track | undefined): boolean =>
+    Boolean(track?.fileBlob) && track?.status === 'ready';
+
   const jumpToQueueIndex = async (index: number) => {
     const state = get();
     if (!state.isPartyMode) return;
@@ -525,7 +548,8 @@ export const useDJStore = create<DJState>()(
     const track = state.tracks.find(t => t.id === trackId);
     if (!track?.fileBlob || track.status !== 'ready') {
       // Track is missing – mark it and try to skip to the next available track.
-      if (track && track.status !== 'missing') {
+      // Only a track without file data is "missing"; undecodable tracks keep their 'error' status.
+      if (track && !track.fileBlob && track.status !== 'missing') {
         void dbMarkTrackMissing(track.id);
         set(s => ({
           tracks: s.tracks.map(t => t.id === track.id ? { ...t, status: 'missing' as TrackStatus } : t),
@@ -571,7 +595,17 @@ export const useDJStore = create<DJState>()(
     }
 
     const startAt = getEffectiveStartTimeSec(track, get().settings);
-    await get().loadTrackToDeck(trackId, 'A', startAt);
+    const loadResult = await get().loadTrackToDeck(trackId, 'A', startAt);
+    if (loadResult === 'stale') return;
+    if (loadResult === 'failed') {
+      // Undecodable: it is now marked, so move on to the next track (bounded by queue length).
+      if (index + 1 < get().partyTrackIds.length) {
+        await jumpToQueueIndex(index + 1);
+      } else {
+        get().stopPartyMode();
+      }
+      return;
+    }
     get().play('A');
 
     // Restore automix trigger.
@@ -1670,7 +1704,22 @@ export const useDJStore = create<DJState>()(
       let importedCount = 0;
       let skippedUnsupportedCount = 0;
       let failedCount = 0;
+      let undecodableCount = 0;
+      let notPersistedCount = 0;
+
+      // One decoding context for the whole batch (browsers cap concurrent AudioContexts, iOS ~4).
+      let importDecodeContext: BaseAudioContext | null = null;
+      const getImportDecodeContext = (): BaseAudioContext => {
+        if (!importDecodeContext) {
+          // An OfflineAudioContext decodes without claiming an output device.
+          importDecodeContext = typeof OfflineAudioContext !== 'undefined'
+            ? new OfflineAudioContext(2, 1, 44100)
+            : new AudioContext();
+        }
+        return importDecodeContext;
+      };
       
+      try {
       for (const file of Array.from(files)) {
         try {
           if (!isSupportedAudioFile(file)) {
@@ -1712,17 +1761,20 @@ export const useDJStore = create<DJState>()(
           importedAt: now,
         };
 
-        // Try to get duration
+        // Decode once; the buffer is reused below for BPM, silence and loudness analysis.
+        let decoded: AudioBuffer | null = null;
         try {
-          const audioContext = new AudioContext();
           const arrayBuffer = await file.arrayBuffer();
-          const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-          track.duration = audioBuffer.duration;
-          audioContext.close();
+          decoded = await getImportDecodeContext().decodeAudioData(arrayBuffer);
+          track.duration = decoded.duration;
         } catch (e) {
           console.error('Failed to decode audio:', e);
+          // Keep the file (another browser may decode it) but flag it so playback skips it.
           // Conservative estimate so duration-less imports can't bypass the quota.
           track.duration = 240;
+          track.status = 'error';
+          track.analysisStatus = 'basic';
+          undecodableCount += 1;
         }
 
         if (isFree) {
@@ -1748,6 +1800,7 @@ export const useDJStore = create<DJState>()(
           } catch (e) {
             console.error('[DJ Store] Failed to persist imported track to IndexedDB:', e);
             // Fallback: still add to in-memory state so the user can play it in this session.
+            notPersistedCount += 1;
           }
         }
 
@@ -1783,6 +1836,8 @@ export const useDJStore = create<DJState>()(
           }
         }
 
+        if (!decoded) continue;
+
         // Start BPM analysis in background
         set(state => ({
           tracks: state.tracks.map(t =>
@@ -1793,10 +1848,8 @@ export const useDJStore = create<DJState>()(
         try {
           const settings = get().settings;
 
-          // Decode once and reuse the AudioBuffer for all analysis.
-          const audioContext = new AudioContext();
-          const arrayBuffer = await file.arrayBuffer();
-          const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+          // Reuse the buffer decoded above for all analysis.
+          const audioBuffer = decoded;
 
           const bpmResult = await detectBPM(audioBuffer);
           const bpm = bpmResult.bpm;
@@ -1840,12 +1893,6 @@ export const useDJStore = create<DJState>()(
             } catch (e) {
               console.error('Loudness analysis failed:', e);
             }
-          }
-
-          try {
-            audioContext.close();
-          } catch {
-            // ignore
           }
 
           const updates = {
@@ -1897,8 +1944,21 @@ export const useDJStore = create<DJState>()(
           failedCount += 1;
           console.error('[DJ Store] Import failed for file:', file?.name, e);
         }
+        // Let the UI paint between files; analysis of large batches is CPU heavy.
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+      } finally {
+        const ctx = importDecodeContext as BaseAudioContext | null;
+        if (ctx && typeof AudioContext !== 'undefined' && ctx instanceof AudioContext) {
+          void ctx.close().catch(() => {});
+        }
+        importDecodeContext = null;
       }
 
+      if (importedCount > 0 && keepImportsOnDevice) {
+        // Ask the browser not to evict the local library under storage pressure (Safari/iOS).
+        void navigator.storage?.persist?.().catch(() => false);
+      }
       if (importedCount === 0) {
         if (skippedUnsupportedCount > 0) {
           toast({
@@ -1914,10 +1974,18 @@ export const useDJStore = create<DJState>()(
       if (skippedUnsupportedCount > 0) parts.push(`${skippedUnsupportedCount} skipped`);
       // failedCount includes IDB failures + per-file exceptions; keep it as a hint.
       if (failedCount > 0) parts.push(`${failedCount} issue${failedCount === 1 ? '' : 's'}`);
+      // Only one toast is visible at a time, so warnings ride on the summary.
+      if (undecodableCount > 0) {
+        parts.push(`${undecodableCount} can't be played in this browser and will be skipped`);
+      }
+      if (notPersistedCount > 0) {
+        parts.push(`${notPersistedCount} not saved to this device (storage may be full)`);
+      }
 
       toast({
         title: `Imported ${importedCount} track${importedCount === 1 ? '' : 's'}`,
-        description: parts.length > 0 ? parts.join(' • ') : 'Analyzing BPM in the background.',
+        description: parts.length > 0 ? parts.join(' • ') : 'Ready to play.',
+        ...(undecodableCount > 0 || notPersistedCount > 0 ? {variant: 'destructive' as const} : {}),
       });
     },
 
@@ -2030,15 +2098,23 @@ export const useDJStore = create<DJState>()(
           }));
           toast({ title: 'Track unavailable', description: `"${track.displayName}" could not be loaded. Re-import to restore it.` });
         }
-        return;
+        return 'failed';
       }
 
       // Apply track gain if auto volume match is enabled (compute on-demand if missing)
       const gainDb = await ensureGainDbForTrack(track, state.settings);
       
-      const duration = offsetSeconds !== undefined
-        ? await audioEngine.loadTrackWithOffset(deck, track.fileBlob, offsetSeconds, track.bpm, gainDb)
-        : await audioEngine.loadTrack(deck, track.fileBlob, track.bpm, gainDb);
+      let duration: number;
+      try {
+        duration = offsetSeconds !== undefined
+          ? await audioEngine.loadTrackWithOffset(deck, track.fileBlob, offsetSeconds, track.bpm, gainDb)
+          : await audioEngine.loadTrack(deck, track.fileBlob, track.bpm, gainDb);
+      } catch (error) {
+        if (isStaleLoadError(error)) return 'stale';
+        console.error('[DJ Store] Failed to decode track', trackId, error);
+        markTrackUnplayable(trackId);
+        return 'failed';
+      }
       
       // Set base BPM for tempo matching
       if (track.bpm) {
@@ -2066,6 +2142,7 @@ export const useDJStore = create<DJState>()(
       } catch {
         // ignore
       }
+      return 'loaded';
     },
 
     play: (deck?: DeckId) => {
@@ -2111,8 +2188,8 @@ export const useDJStore = create<DJState>()(
         const trackId = state.partyTrackIds[state.nowPlayingIndex];
         const track = state.tracks.find(t => t.id === trackId);
         if (track?.fileBlob && track.status === 'ready') {
-          get().loadTrackToDeck(trackId, targetDeck).then(() => {
-            get().play(targetDeck);
+          void get().loadTrackToDeck(trackId, targetDeck).then((result) => {
+            if (result === 'loaded') get().play(targetDeck);
           });
         }
       } else {
@@ -2246,7 +2323,16 @@ export const useDJStore = create<DJState>()(
 
         const gainDb = await ensureGainDbForTrack(previousTrack, state.settings);
         const startAt = getEffectiveStartTimeSec(previousTrack, state.settings);
-        const duration = await audioEngine.loadTrackWithOffset(targetDeck, previousTrack.fileBlob, startAt, previousTrack.bpm, gainDb);
+        let duration: number;
+        try {
+          duration = await audioEngine.loadTrackWithOffset(targetDeck, previousTrack.fileBlob, startAt, previousTrack.bpm, gainDb);
+        } catch (error) {
+          if (isStaleLoadError(error)) return;
+          console.error('[DJ Store] playPreviousTrack() failed to load previous track:', error);
+          set({ mixInProgress: false, _mixInProgressSince: null });
+          markTrackUnplayable(previousTrackId);
+          return;
+        }
         if (previousTrack.bpm) audioEngine.setBaseBpm(targetDeck, previousTrack.bpm);
 
         // Provide the analyzed "musical end" so automix avoids trailing silence.
@@ -2408,8 +2494,10 @@ export const useDJStore = create<DJState>()(
 
         toast({ title: 'Previous Track' });
       }).catch((error) => {
+        if (isStaleLoadError(error)) return;
         console.error('[DJ Store] playPreviousTrack() failed to load previous track:', error);
         set({ mixInProgress: false });
+        markTrackUnplayable(previousTrackId);
       });
     },
 
@@ -2466,6 +2554,25 @@ export const useDJStore = create<DJState>()(
         if (settings.repeatMode === 'playlist') {
           nextIndex = 0;
         } else {
+          get().stopPartyMode();
+          return;
+        }
+      }
+
+      // Skip tracks that are missing or failed to decode (bounded to one pass over the queue).
+      for (let attempts = 0; attempts < partyTrackIds.length; attempts++) {
+        const candidate = tracks.find(t => t.id === partyTrackIds[nextIndex]);
+        if (isTrackPlayable(candidate)) break;
+        nextIndex += 1;
+        if (nextIndex >= partyTrackIds.length) {
+          if (settings.repeatMode !== 'playlist') {
+            get().stopPartyMode();
+            return;
+          }
+          nextIndex = 0;
+        }
+        if (attempts === partyTrackIds.length - 1) {
+          toast({ title: 'Nothing left to play', description: 'None of the remaining tracks can be played.' });
           get().stopPartyMode();
           return;
         }
@@ -2529,20 +2636,7 @@ export const useDJStore = create<DJState>()(
           return getCanonicalTargetBpm(settings) ?? nextBaseBpm;
         }
         if (settings.tempoMode === 'preset') {
-          // Model A: the target for the incoming track is the CURRENT song's effective BPM.
-          // Effective BPM = outgoing track's native BPM × its current playback rate.
-          // This ensures Song B is tempo-matched to what the listener already hears — no
-          // audible "catch-up" ramp after Song B becomes audible.
-          const currentBpm = currentTrack?.bpm;
-          const hasCurrentBpm = Number.isFinite(currentBpm) && (currentBpm as number) > 0;
-          if (hasCurrentBpm) {
-            const currentEffectiveBpm = (currentBpm as number) * outgoingRate;
-            if (Number.isFinite(currentEffectiveBpm) && currentEffectiveBpm > 0) {
-              return currentEffectiveBpm;
-            }
-          }
-          // Fallback when BPM data is missing: play the incoming track at original tempo.
-          return nextBaseBpm;
+          return computePresetTempo(nextTrack.bpm, settings.tempoPreset ?? 'original').targetBpm ?? nextBaseBpm;
         }
         return nextBaseBpm;
       };
@@ -2756,18 +2850,10 @@ export const useDJStore = create<DJState>()(
           // Free mode: keep pitch/BPM normal.
           get().setTempo(nextDeck, 1);
         } else if (settings.tempoMode === 'preset') {
-          // Model A (preset mode): incoming track is pre-matched to the current song's effective BPM.
-          // Each preset has its own max-stretch cap; "original" = 0% = always plays at native speed.
           const preset = settings.tempoPreset ?? 'original';
-          const presetMaxStretch = TEMPO_PRESET_MAX_STRETCH[preset] ?? DEFAULT_PRESET_MAX_STRETCH_FALLBACK;
-          const computedIncoming = computeTempoForDeck(nextDeck, targetBpm, presetMaxStretch);
-          const incomingTargetRatio = computedIncoming.ratio;
-          set({ lastTempoDebug: computedIncoming.debug });
-          // Apply rate before playback starts — listener hears the correct tempo immediately.
+          const incomingTargetRatio = computePresetTempo(nextTrack.bpm, preset).ratio;
           get().setTempo(nextDeck, incomingTargetRatio);
 
-          // Preset mode: outgoing deck stays at its current effective rate (no audible ramp).
-          // The target IS the current effective BPM, so no speed change is needed or wanted.
           set((s) => ({
             lastTransitionTempoPlan: s.lastTransitionTempoPlan
               ? {
@@ -2972,8 +3058,14 @@ export const useDJStore = create<DJState>()(
           }));
         }
       }).catch((error) => {
+        // A newer transition superseded this load; it owns the deck and mix state now.
+        if (isStaleLoadError(error)) return;
         console.error('[DJ Store] skip() failed to load next track:', error);
         set({ mixInProgress: false });
+        if (myNonce !== transitionNonce) return;
+        // Undecodable file: mark it and immediately try the next track so the party keeps going.
+        markTrackUnplayable(nextTrackId);
+        if (get().isPartyMode) get().skip(reason);
       });
     },
 
@@ -3007,17 +3099,27 @@ export const useDJStore = create<DJState>()(
         return;
       }
 
-      const firstTrackId = trackIds[0];
-      const firstTrack = state.tracks.find(t => t.id === firstTrackId);
-      
-      if (!firstTrack?.fileBlob || firstTrack.status !== 'ready') {
-        console.error('[DJ Store] First track has no fileBlob or is not ready');
+      // Start from the first track that actually loads; undecodable files are marked and skipped.
+      let startIndex = -1;
+      for (let i = 0; i < trackIds.length; i++) {
+        const candidate = get().tracks.find(t => t.id === trackIds[i]);
+        if (!isTrackPlayable(candidate)) continue;
+        // Apply Start Offset (and trueStartTime silence skip) to the first track in Party Mode.
+        const startAt = getEffectiveStartTimeSec(candidate, get().settings);
+        const result = await get().loadTrackToDeck(trackIds[i], 'A', startAt);
+        if (result === 'stale') return;
+        if (result === 'loaded') {
+          startIndex = i;
+          break;
+        }
+      }
+      if (startIndex < 0) {
+        console.error('[DJ Store] No track in the selected source could be loaded');
+        toast({ title: "Can't start Party Mode", description: 'None of the tracks in this source can be played.' });
         return;
       }
-      
-      // Apply Start Offset (and trueStartTime silence skip) to the first track in Party Mode.
-      const startAt = getEffectiveStartTimeSec(firstTrack, get().settings);
-      await get().loadTrackToDeck(firstTrackId, 'A', startAt);
+      const firstTrackId = trackIds[startIndex];
+      const firstTrack = get().tracks.find(t => t.id === firstTrackId);
 
       // If Auto Match is enabled but has no baseline yet (fresh installs / old settings),
       // capture it from what's currently playing (relative lock starting at 0).
@@ -3040,7 +3142,7 @@ export const useDJStore = create<DJState>()(
         isPartyMode: true,
         partySource: source,
         partyTrackIds: trackIds,
-        nowPlayingIndex: 0,
+        nowPlayingIndex: startIndex,
         pendingNextIndex: null,
         pendingSourceSwitch: null,
         queuedSourceSwitch: null,
@@ -3224,6 +3326,31 @@ export const useDJStore = create<DJState>()(
     playNext: (index: number) => {
       // Set this track to play after current track ends
       set({ pendingNextIndex: index });
+    },
+
+    previewTrack: async (trackId: string) => {
+      const state = get();
+      if (state.isPartyMode) {
+        const queueIndex = state.partyTrackIds.indexOf(trackId);
+        if (queueIndex === state.nowPlayingIndex) return;
+        if (queueIndex >= 0) {
+          get().playNext(queueIndex);
+          toast({ title: 'Playing next', description: 'This track will play after the current song.' });
+        } else {
+          toast({
+            title: 'Party Mode is playing',
+            description: "This track isn't in the current party source. Stop the party to preview it, or add it to the playing playlist.",
+          });
+        }
+        return;
+      }
+
+      if (state.deckA.trackId === trackId) {
+        get().togglePlayPause('A');
+        return;
+      }
+      const result = await get().loadTrackToDeck(trackId, 'A');
+      if (result === 'loaded') get().play('A');
     },
 
     shufflePartyTracks: () => {

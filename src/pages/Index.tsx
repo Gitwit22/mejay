@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { TabBar } from '@/components/TabBar';
+import { TabBar, type TabId } from '@/components/TabBar';
 import { LibraryView } from '@/components/LibraryView';
 import { PartyModeView } from '@/components/PartyModeView';
 import { PlaylistsView } from '@/components/PlaylistsView';
@@ -17,10 +17,10 @@ import { StarterPacksOnboardingModal } from '@/components/StarterPacksOnboarding
 import { consumeStarterPromptPending, readStarterPacksPrefs, setStarterPromptPending } from '@/lib/starterPacksPrefs';
 import { startCheckout } from '@/lib/checkout';
 import { toast } from '@/hooks/use-toast';
-
-type TabId = 'library' | 'playlists' | 'import' | 'party';
+import { MusicOverviewView } from '@/app/components/MusicOverviewView';
 
 const LAST_TAB_KEY = 'mejay:lastTab';
+const tabs: TabId[] = ['library', 'playlists', 'import', 'music', 'party'];
 
 const Index = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -30,10 +30,10 @@ const Index = () => {
   const [starterPacksOpen, setStarterPacksOpen] = useState(false);
   const [isFading, setIsFading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>(() => {
-    if (tabFromUrl && ['library', 'playlists', 'import', 'party'].includes(tabFromUrl)) return tabFromUrl;
+    if (tabFromUrl && tabs.includes(tabFromUrl)) return tabFromUrl;
     try {
       const stored = sessionStorage.getItem(LAST_TAB_KEY) as TabId | null;
-      if (stored && ['library', 'playlists', 'import', 'party'].includes(stored)) return stored;
+      if (stored && tabs.includes(stored)) return stored;
     } catch {
       // ignore
     }
@@ -48,6 +48,9 @@ const Index = () => {
     
     setTimeout(() => {
       setActiveTab(tab);
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.set('tab', tab);
+      setSearchParams(nextParams, { replace: true });
       setIsFading(false);
     }, 160);
   };
@@ -129,7 +132,7 @@ const Index = () => {
 
   // Sync tab from URL
   useEffect(() => {
-    if (tabFromUrl && ['library', 'playlists', 'import', 'party'].includes(tabFromUrl)) {
+    if (tabFromUrl && tabs.includes(tabFromUrl)) {
       setActiveTab(tabFromUrl);
     }
   }, [tabFromUrl]);
@@ -181,11 +184,12 @@ const Index = () => {
           // Reserve space for the fixed tab bar.
           activeTab === 'party'
             ? 'pt-3 overflow-visible md:overflow-hidden'
-            : 'pt-14 overflow-visible md:overflow-hidden'
+            : 'pt-14 overflow-visible md:overflow-hidden',
+          ['library', 'playlists', 'import'].includes(activeTab) && 'pb-16'
         )}
       >
         {/* Logo Header (hide in Party Mode to maximize usable viewport) */}
-        {activeTab !== 'party' && (
+        {activeTab !== 'party' && activeTab !== 'music' && (
           <div className="flex justify-center mb-3 flex-shrink-0">
             <img
               src={MEJAY_LOGO_URL}
@@ -212,9 +216,12 @@ const Index = () => {
           {activeTab === 'library' && <LibraryView />}
           {activeTab === 'playlists' && <PlaylistsView />}
           {activeTab === 'import' && <ImportRoomView />}
+          {activeTab === 'music' && <MusicOverviewView />}
           {activeTab === 'party' && <PartyModeView />}
         </div>
       </div>
+
+      {['library', 'playlists', 'import'].includes(activeTab) && <button type="button" className="latest-on-mejay" onClick={() => switchTab('music')}><span><strong>LATEST ON MEJAY</strong><small>New Music · New Projects · Trending</small></span><span aria-hidden="true">→</span></button>}
 
       {/* Tab Bar */}
       <TabBar activeTab={activeTab} onTabChange={switchTab} />

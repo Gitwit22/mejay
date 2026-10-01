@@ -134,6 +134,21 @@ export default function WelcomePage() {
                     Log In
                   </span>
                 </button>
+                <button
+                  type="button"
+                  className="cta-secondary cta-button"
+                  onClick={() => navigate('/login?intent=signup&accountIntent=provider')}
+                  style={{
+                    background: 'rgba(255,255,255,0.08)',
+                    border: '1px solid rgba(255,255,255,0.16)',
+                    minWidth: '280px',
+                    fontWeight: '600',
+                  }}
+                >
+                  <span className="inline-flex items-center justify-center gap-2 w-full">
+                    Sell Music on MEJay
+                  </span>
+                </button>
               </div>
 
             </section>

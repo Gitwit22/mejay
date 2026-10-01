@@ -146,7 +146,7 @@ export function UpgradeModal() {
                 </p>
                 {!isFullProgramOwner && (
                   <p className="text-xs text-muted-foreground/80">
-                    $5/month after trial. Cancel anytime.
+                    No charge for 3 days (first-time subscribers), then $5/month. Cancel anytime.
                   </p>
                 )}
               </div>

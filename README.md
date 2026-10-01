@@ -66,31 +66,31 @@ bun run test:watch
 ### What the app does
 
 - Library
-	- Import audio files from your computer.
-	- Tracks are stored in IndexedDB (metadata + the imported Blob while the browser keeps it).
-	- Background BPM detection runs after import and labels tracks as `Analyzing`, `Ready`, or `Basic`.
-	- Clicking a track loads it onto Deck A.
+  - Import audio files from your computer.
+  - Tracks are stored in IndexedDB (metadata + the imported Blob while the browser keeps it).
+  - Background BPM detection runs after import and labels tracks as `Analyzing`, `Ready`, or `Basic`.
+  - Clicking a track loads it onto Deck A.
 
 - Playlists (“Party Sets”)
-	- Create playlists and add tracks from the Library.
-	- Reorder playlist tracks via drag-and-drop.
-	- Start Party Mode from a playlist and jump to the Party tab.
+  - Create playlists and add tracks from the Library.
+  - Reorder playlist tracks via drag-and-drop.
+  - Start Party Mode from a playlist and jump to the Party tab.
 
 - Party Mode (Auto DJ)
-	- Choose a source to play from:
-		- Import List (all imported tracks)
-		- Playlist
-	- Shows Now Playing, Next Up, and a queue panel.
-	- Auto-advances through the list and can loop the playlist.
-	- Queue tools:
-		- Shuffle (toggle + “Shuffle Now”)
-		- Drag reorder
-		- “Play Now” / “Play Next” actions
+  - Choose a source to play from:
+    - Import List (all imported tracks)
+    - Playlist
+  - Shows Now Playing, Next Up, and a queue panel.
+  - Auto-advances through the list and can loop the playlist.
+  - Queue tools:
+    - Shuffle (toggle + “Shuffle Now”)
+    - Drag reorder
+    - “Play Now” / “Play Next” actions
 
 - Mixing features
-	- Crossfade + mix timing controls (including “Mix Now” when in manual mode).
-	- Tempo controls (auto-match / locked BPM, max tempo stretch, energy mode).
-	- Auto volume matching + limiter controls.
+  - Crossfade + mix timing controls (including “Mix Now” when in manual mode).
+  - Tempo controls (auto-match / locked BPM, max tempo stretch, energy mode).
+  - Auto volume matching + limiter controls.
 
 ### Important behavior/limitations (browser constraints)
 
@@ -100,25 +100,25 @@ bun run test:watch
 ### How it’s built (high-level architecture)
 
 - UI + routing
-	- Single-page app with React Router.
-	- Main screen is tab-based: Library / Party Mode / Playlists.
+  - Single-page app with React Router.
+  - Main screen is tab-based: Library / Party Mode / Playlists.
 
 - State management
-	- Zustand store drives the app state (tracks, playlists, party queue, deck state, settings).
+  - Zustand store drives the app state (tracks, playlists, party queue, deck state, settings).
 
 - Persistence
-	- IndexedDB via the `idb` package stores tracks/playlists/settings.
+  - IndexedDB via the `idb` package stores tracks/playlists/settings.
 
 - Audio engine
-	- Web Audio API dual-deck engine with:
-		- Two decks (A/B)
-		- Crossfade
-		- Tempo via playbackRate
-		- Loudness analysis and per-track gain
-		- Limiter (DynamicsCompressorNode) with multiple strength presets
+  - Web Audio API dual-deck engine with:
+    - Two decks (A/B)
+    - Crossfade
+    - Tempo via playbackRate
+    - Loudness analysis and per-track gain
+    - Limiter (DynamicsCompressorNode) with multiple strength presets
 
 - BPM detection
-	- Web Audio based BPM detection analyzes a mid-section of the track, finds peaks, and estimates tempo with a confidence score.
+  - Web Audio based BPM detection analyzes a mid-section of the track, finds peaks, and estimates tempo with a confidence score.
 
 ### “Free vs Plus” gating (dev)
 
@@ -171,13 +171,23 @@ This is a React Router single-page app.
 
 - For Cloudflare Pages / Netlify-style SPA refresh support on deep links like `/app/...`, this repo includes [public/_redirects](public/_redirects) so all routes serve `index.html`.
 
+## Backend and deployment
+
+The React/Vite frontend deploys to Cloudflare Pages. The API is the separate Render service `mejay-api` under [api](api), backed by Neon PostgreSQL. See [DEPLOYMENT.md](DEPLOYMENT.md) for build commands and environment variables.
+
+Frontend API requests use `VITE_API_URL`. For staging:
+
+```text
+VITE_API_URL=https://api-staging.mejayapp.com
+```
+
 ## Full Program fulfillment email (Resend)
 
 When a Stripe purchase sets the `full_program` entitlement, the API will (best-effort) send a one-time email containing a download link to:
 
 - `/api/download/full-program`
 
-To enable this, configure these environment variables in Cloudflare Pages (Project → Settings → Environment variables):
+To enable this, configure these environment variables on the Render API service:
 
 - `RESEND_API_KEY`
 - `RESEND_FROM` (must be a verified sender in Resend, e.g. `MEJay <support@yourdomain.com>`)
@@ -191,17 +201,13 @@ The login flow uses email verification codes:
 - `POST /api/auth/start` generates a 6-digit code and emails it.
 - `POST /api/auth/verify` verifies the code and sets a session cookie.
 
-In this repo, the `/api/auth/*` routes are implemented as Cloudflare Pages Functions under [functions/api/auth](functions/api/auth).
+The `/api/auth/*` routes are implemented by the Render service under [api/src/routes/auth](api/src/routes/auth).
 
-There is also an optional Cloudflare Worker entrypoint at [src/worker.ts](src/worker.ts) (configured by [wrangler.toml](wrangler.toml)) if you deploy the API separately as a Worker.
-
-To enable login emails in production, set these environment variables in the environment that serves `/api/auth/*`:
+To enable login emails in production, set these environment variables on the Render API service:
 
 - `RESEND_API_KEY`
 - `RESEND_FROM` (verified sender in Resend)
 
 Sender fallback: the backend will also accept `EMAIL_FROM`, `FROM_EMAIL`, or `MAIL_FROM` if `RESEND_FROM` is not set.
 
-If you are using Cloudflare Pages Functions (the default in this repo), set them in Cloudflare Pages (Project → Settings → Environment variables).
-
-If you are deploying the API as a separate Worker, set them on the Worker.
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the complete Pages, Render, Neon, and R2 configuration.

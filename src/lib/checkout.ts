@@ -1,4 +1,5 @@
 import {usePlanStore, type Plan} from '@/stores/planStore'
+import {apiFetch, apiUrl} from '@/lib/api'
 
 // NOTE: Only `startCheckout` + `getCheckoutStatus` are used by the app.
 
@@ -51,7 +52,7 @@ export class CheckoutStatusError extends Error {
   }
 }
 
-export async function startCheckout(plan: 'pro' | 'full_program', intent?: 'trial' | 'upgrade', cadence?: 'monthly' | 'yearly') {
+export async function startCheckout(plan: 'pro' | 'full_program', intent?: 'trial' | 'upgrade' | 'artist_upgrade', cadence?: 'monthly' | 'yearly') {
   const fullProgramCheckoutEnabled = String(import.meta.env.VITE_ENABLE_FULL_PROGRAM_CHECKOUT || '').toLowerCase() === 'true'
   if (plan === 'full_program' && !fullProgramCheckoutEnabled) {
     throw new Error('Full Program is coming soon.')
@@ -67,8 +68,8 @@ export async function startCheckout(plan: 'pro' | 'full_program', intent?: 'tria
     throw new Error('Checkout is disabled while Login Bypass is enabled. Disable bypass and sign in to upgrade.')
   }
 
-  // Guest mode: redirect to login first
-  if (isGuestMode || authStatus === 'anonymous') {
+  // Authenticated state wins over a stale guest flag during guest-to-user conversion.
+  if (authStatus !== 'authenticated' && (isGuestMode || authStatus === 'anonymous')) {
     const returnPath = `/app?tab=party&upgrade=${plan}`
     window.location.href = `/login?returnTo=${encodeURIComponent(returnPath)}`
     return
@@ -76,7 +77,7 @@ export async function startCheckout(plan: 'pro' | 'full_program', intent?: 'tria
 
   const checkoutToken = getOrCreateCheckoutToken()
 
-  const res = await fetch('/api/checkout', {
+  const res = await apiFetch('/api/checkout', {
     method: 'POST',
     credentials: 'include',
     headers: { 'content-type': 'application/json' },
@@ -95,7 +96,10 @@ export async function startCheckout(plan: 'pro' | 'full_program', intent?: 'tria
       const data = (await res
         .clone()
         .json()
-        .catch(() => null)) as null | {error?: unknown; message?: unknown}
+        .catch(() => null)) as null | {error?: unknown; message?: unknown; code?: unknown}
+      if (res.status === 409 && data?.code === 'subscription_exists') {
+        throw new Error('You already have a Pro subscription. Open Billing to update your payment method or manage it.')
+      }
       const msg =
         typeof data?.error === 'string'
           ? data.error
@@ -116,7 +120,7 @@ export async function startCheckout(plan: 'pro' | 'full_program', intent?: 'tria
 }
 
 export async function getCheckoutStatus(sessionId: string): Promise<CheckoutStatus> {
-  const url = new URL('/api/checkout-status', window.location.origin)
+  const url = new URL(apiUrl('/api/checkout-status'), window.location.origin)
   url.searchParams.set('session_id', sessionId)
 
   let checkoutToken: string | null = null
@@ -126,7 +130,7 @@ export async function getCheckoutStatus(sessionId: string): Promise<CheckoutStat
     checkoutToken = null
   }
 
-  const res = await fetch(url.toString(), {
+  const res = await apiFetch(url.toString(), {
     method: 'GET',
     cache: 'no-store',
     headers: {
@@ -183,7 +187,7 @@ export async function openBillingPortal() {
     throw new Error('Manage billing is disabled while Login Bypass is enabled. Disable bypass and sign in to manage billing.')
   }
 
-  const res = await fetch('/api/billing-portal', {
+  const res = await apiFetch('/api/billing-portal', {
     method: 'POST',
     credentials: 'include',
     headers: {'content-type': 'application/json'},
@@ -202,7 +206,10 @@ export async function openBillingPortal() {
       const data = (await res
         .clone()
         .json()
-        .catch(() => null)) as null | {error?: unknown; message?: unknown}
+        .catch(() => null)) as null | {error?: unknown; message?: unknown; code?: unknown}
+      if (res.status === 409 && data?.code === 'subscription_exists') {
+        throw new Error('You already have a Pro subscription. Open Billing to update your payment method or manage it.')
+      }
       const msg =
         typeof data?.message === 'string'
           ? data.message

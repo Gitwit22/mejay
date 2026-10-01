@@ -1,6 +1,6 @@
 import {useEffect, useMemo, useState} from 'react'
 import {useLocation, useNavigate, type NavigateOptions} from 'react-router-dom'
-import {ChevronDown, LogOut, Settings as SettingsIcon, X} from 'lucide-react'
+import {ChevronDown, LogOut, Settings as SettingsIcon, Trash2, X} from 'lucide-react'
 import {
   Sheet,
   SheetContent,
@@ -37,6 +37,8 @@ import {getNextRequiredCheckBy} from '@/licensing/licensePolicy'
 import {openBillingPortal} from '@/lib/checkout'
 import {getSettingsEntryNavigateOptions} from '@/app/navigation/settingsReturnTo'
 import {DownloadPacksModal} from '@/components/DownloadPacksModal'
+import {AccountRequestError, clearMejayBrowserStorage, deleteAccount, logoutAccount} from '@/lib/account'
+import {convertToArtistAccount} from '@/lib/artistAccount'
 
 type TopRightSettingsMenuProps = {
   className?: string
@@ -50,11 +52,17 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   const [licenseKey, setLicenseKey] = useState('')
   const [resetAlsoClearLicense, setResetAlsoClearLicense] = useState(false)
   const [downloadPacksModalOpen, setDownloadPacksModalOpen] = useState(false)
+  const [logoutPending, setLogoutPending] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleteEmail, setDeleteEmail] = useState('')
+  const [forfeitFullProgram, setForfeitFullProgram] = useState(false)
+  const [deletePending, setDeletePending] = useState(false)
+  const [artistSwitchPending, setArtistSwitchPending] = useState(false)
 
   const keepImportsOnDevice = useDJStore((s) => s.settings.keepImportsOnDevice)
   const updateUserSettings = useDJStore((s) => s.updateUserSettings)
 
-  const {plan, authStatus, authBypassEnabled} = usePlanStore()
+  const {plan, authStatus, authBypassEnabled, stripeCustomerId, user, currentPeriodEnd, artistPortalAccess, providerProfile, marketplaceRole} = usePlanStore()
 
   const {
     token,
@@ -95,37 +103,27 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
   )
 
   const handleLogout = async () => {
-    // Close modal first (per UX requirement).
-    setOpen(false)
-
-    // Optional in-memory UI state reset (no persistent storage changes).
-    // Stop Party Mode to ensure playback + timers are cleaned up.
+    if (logoutPending) return
+    setLogoutPending(true)
     try {
-      useDJStore.getState().stopPartyMode()
-    } catch {
-      // ignore
-    }
-
-    // Call the logout API to clear the server-side session
-    try {
-      const res = await fetch('/api/auth/logout', {
-        method: 'POST',
-        credentials: 'include',
-        headers: {'Content-Type': 'application/json'},
-      })
-      
-      if (!res.ok) {
-        console.error('Logout API call failed:', res.status)
+      await logoutAccount()
+      try {
+        useDJStore.getState().stopPartyMode()
+      } catch {
+        // The server session is already closed; continue local cleanup.
       }
+      usePlanStore.getState().clearAccountSession()
+      setOpen(false)
+      window.location.assign('/')
     } catch (error) {
       console.error('Logout error:', error)
+      toast({
+        title: 'Could not log out',
+        description: error instanceof Error ? error.message : 'Please try again.',
+        variant: 'destructive',
+      })
+      setLogoutPending(false)
     }
-
-    // Update auth status to anonymous (this clears the session state)
-    usePlanStore.setState({authStatus: 'anonymous', user: null})
-
-    // Navigate to home page (with dev param to bypass redirect)
-    navigate('/?dev=1', {replace: true})
   }
 
   const closeAndNavigate = (to: string, options?: NavigateOptions) => {
@@ -139,12 +137,73 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
 
   const from = `${location.pathname}${location.search}`
 
-  const planDestination = hasPaidPlan
+  const planDestination = hasPaidPlan || stripeCustomerId
     ? `/app/settings/billing?returnTo=${encodeURIComponent(from)}`
     : `/app/settings/pricing?returnTo=${encodeURIComponent(from)}`
-  const planLabelInMenu = hasPaidPlan ? 'Manage plan' : 'View pricing'
-  const planLabelInSupport = hasPaidPlan ? 'Manage Plan' : 'Pricing'
+  const planLabelInMenu = hasPaidPlan || stripeCustomerId ? 'Manage plan' : 'View pricing'
+  const planLabelInSupport = hasPaidPlan || stripeCustomerId ? 'Manage Plan' : 'Pricing'
   const showManageBillingButton = plan !== 'full_program'
+  const showDeleteAccount = authStatus === 'authenticated' && !authBypassEnabled && Boolean(user)
+  const subscriptionBlocksDeletion = plan === 'pro'
+  const deleteEmailMatches = deleteEmail.trim().toLowerCase() === user?.email.toLowerCase()
+  const deletionConfirmed = deleteEmailMatches && (!subscriptionBlocksDeletion) && (plan !== 'full_program' || forfeitFullProgram)
+
+  const handleDeleteAccount = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    if (!user || !deletionConfirmed || deletePending) return
+    setDeletePending(true)
+    try {
+      await deleteAccount({email: deleteEmail, forfeitFullProgram})
+      try {
+        useDJStore.getState().stopPartyMode()
+        await useDJStore.getState().resetLocalData()
+      } catch (error) {
+        console.error('Local data cleanup failed after account deletion:', error)
+      }
+      clearLicense()
+      clearMejayBrowserStorage()
+      usePlanStore.getState().clearAccountSession()
+      setDeleteDialogOpen(false)
+      setOpen(false)
+      window.location.assign('/')
+    } catch (error) {
+      const description = error instanceof AccountRequestError
+        ? error.message
+        : 'The account could not be deleted. Please try again.'
+      toast({title: 'Account not deleted', description, variant: 'destructive'})
+      setDeletePending(false)
+    }
+  }
+
+  const handleArtistEntry = async () => {
+    if (artistSwitchPending) return
+    if (!user || authStatus !== 'authenticated') {
+      closeAndNavigate('/login?returnTo=/app/artist')
+      return
+    }
+    if (!artistPortalAccess) {
+      closeAndNavigateSettings('/app/settings/pricing?artist_upgrade=1', {state: {from}})
+      return
+    }
+    if (user.accountIntent === 'provider' && providerProfile) {
+      closeAndNavigate('/app/artist')
+      return
+    }
+
+    setArtistSwitchPending(true)
+    try {
+      await convertToArtistAccount()
+      await usePlanStore.getState().refreshFromServer({reason: 'artistSwitch'})
+      closeAndNavigate('/app/artist/onboarding')
+    } catch (error) {
+      toast({
+        title: 'Artist account not activated',
+        description: error instanceof Error ? error.message : 'Please try again.',
+        variant: 'destructive',
+      })
+      setArtistSwitchPending(false)
+    }
+  }
 
   const handleResetLocalData = async () => {
     setOpen(false)
@@ -303,7 +362,123 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                       >
                         {planLabelInMenu}
                       </Button>
+                      {showDeleteAccount && (
+                        <AlertDialog open={deleteDialogOpen} onOpenChange={(nextOpen) => {
+                          if (deletePending) return
+                          setDeleteDialogOpen(nextOpen)
+                          if (!nextOpen) {
+                            setDeleteEmail('')
+                            setForfeitFullProgram(false)
+                          }
+                        }}>
+                          <AlertDialogTrigger asChild>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="w-full text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              Delete Account
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Delete your account?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                {subscriptionBlocksDeletion
+                                  ? `Your paid subscription must end before this account can be deleted.${currentPeriodEnd ? ` Access is currently available through ${new Date(currentPeriodEnd).toLocaleDateString()}.` : ''}`
+                                  : plan === 'full_program'
+                                    ? 'This permanently deletes your profile and device data and forfeits your Full Program purchase and license.'
+                                    : 'This permanently deletes your profile and all MEJay data stored on this device. This cannot be undone.'}
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+
+                            {!subscriptionBlocksDeletion && (
+                              <div className="space-y-4 py-2">
+                                <div className="space-y-2">
+                                  <Label htmlFor="delete-account-email">Type {user?.email} to confirm</Label>
+                                  <Input
+                                    id="delete-account-email"
+                                    type="email"
+                                    value={deleteEmail}
+                                    onChange={(event) => setDeleteEmail(event.target.value)}
+                                    autoComplete="off"
+                                    disabled={deletePending}
+                                  />
+                                </div>
+                                {plan === 'full_program' && (
+                                  <div className="flex items-start gap-3">
+                                    <Checkbox
+                                      id="forfeit-full-program"
+                                      checked={forfeitFullProgram}
+                                      onCheckedChange={(value) => setForfeitFullProgram(Boolean(value))}
+                                      disabled={deletePending}
+                                    />
+                                    <Label htmlFor="forfeit-full-program" className="font-normal leading-tight text-muted-foreground">
+                                      I understand that my Full Program purchase and license will be permanently forfeited.
+                                    </Label>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            <AlertDialogFooter>
+                              <AlertDialogCancel disabled={deletePending}>Cancel</AlertDialogCancel>
+                              {subscriptionBlocksDeletion ? (
+                                <Button type="button" onClick={() => closeAndNavigateSettings(planDestination, {state: {from}})}>
+                                  Manage Billing
+                                </Button>
+                              ) : (
+                                <AlertDialogAction
+                                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                  disabled={!deletionConfirmed || deletePending}
+                                  onClick={handleDeleteAccount}
+                                >
+                                  {deletePending ? 'Deleting...' : 'Delete Account'}
+                                </AlertDialogAction>
+                              )}
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      )}
                     </div>
+                  </div>
+                </CollapsibleContent>
+              </div>
+            </Collapsible>
+
+            <Collapsible>
+              <div className="space-y-3">
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="group flex w-full items-center justify-between text-left text-xs font-semibold tracking-wide uppercase text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <span>Marketplace</span>
+                    <ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]:rotate-180" />
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm p-4 space-y-2">
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/app/store')}>
+                      Music Store
+                    </Button>
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/app/purchased')}>
+                      Purchased Music
+                    </Button>
+                    {authStatus === 'authenticated' && <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/app/earnings')}>
+                      Earnings
+                    </Button>}
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => void handleArtistEntry()} disabled={artistSwitchPending}>
+                      {artistSwitchPending
+                        ? 'Activating Artist Account...'
+                        : user?.accountIntent === 'provider'
+                          ? artistPortalAccess ? 'Artist Portal' : 'Renew Pro for Artist Portal'
+                          : artistPortalAccess ? 'Switch to Artist Account' : 'Become an Artist'}
+                    </Button>
+                    {marketplaceRole && <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/app/marketplace-admin')}>
+                      Marketplace Admin
+                    </Button>}
                   </div>
                 </CollapsibleContent>
               </div>
@@ -509,9 +684,9 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                   🏠 View Landing Page (Dev)
                 </Button>
               )}
-              <Button type="button" variant="outline" className={logoutButtonClassName} onClick={handleLogout}>
+              <Button type="button" variant="outline" className={logoutButtonClassName} onClick={handleLogout} disabled={logoutPending}>
                 <LogOut className="h-4 w-4" />
-                Logout
+                {logoutPending ? 'Logging out...' : 'Logout'}
               </Button>
             </div>
           </div>

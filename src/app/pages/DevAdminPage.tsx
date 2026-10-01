@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import {apiFetch} from '@/lib/api'
 
 // Dev Admin Page - Industrial/Terminal Aesthetic
 // Only renders in development mode
@@ -30,7 +31,7 @@ export default function DevAdminPage() {
   const fetchUsers = async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/dev-admin/users')
+      const res = await apiFetch('/api/dev-admin/users')
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`)
       }
@@ -51,7 +52,7 @@ export default function DevAdminPage() {
 
   const handleDelete = async (userId: string, email: string) => {
     try {
-      const res = await fetch(`/api/dev-admin/users/${userId}`, { method: 'DELETE' })
+      const res = await apiFetch(`/api/dev-admin/users/${userId}`, { method: 'DELETE' })
       const json = await res.json()
       if (json.ok) {
         setUsers((prev) => prev.filter((u) => u.id !== userId))

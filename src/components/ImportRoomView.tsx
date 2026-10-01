@@ -12,7 +12,7 @@ export function ImportRoomView() {
     isLoadingTracks,
     importTracks,
     clearAllImports,
-    loadTrackToDeck,
+    previewTrack,
     deckA,
     switchPartySourceSmooth,
     playlists,
@@ -74,12 +74,7 @@ export function ImportRoomView() {
           for (const id of newIds) merged.add(id);
           return merged;
         });
-        if (newIds.size > 0) {
-          toast({
-            title: 'Import complete',
-            description: `${newIds.size} track${newIds.size !== 1 ? 's' : ''} added to your library.`,
-          });
-        }
+        // The store shows the import summary toast (including skipped/undecodable files).
       } catch (error) {
         console.error('[Import] Import failed:', error);
         toast({
@@ -133,7 +128,7 @@ export function ImportRoomView() {
       toggleTrackSelection(trackId);
       return;
     }
-    await loadTrackToDeck(trackId, 'A');
+    await previewTrack(trackId);
   };
 
   const filteredPlaylists = playlists.filter(p =>
@@ -348,7 +343,10 @@ export function ImportRoomView() {
                 <div className="flex-1 min-w-0">
                   <h5 className="text-sm font-medium truncate">{track.displayName}</h5>
                   <p className="text-xs text-muted-foreground flex items-center gap-2">
-                    <span>{formatDuration(track.duration)}</span>
+                    <span>{track.status === 'error' ? '--:--' : formatDuration(track.duration)}</span>
+                    {track.status === 'error' && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30">Can't play</span>
+                    )}
                     {track.status === 'ready' && track.analysisStatus === 'analyzing' && (
                       <span className="badge-analyzing">Analyzing</span>
                     )}
@@ -360,7 +358,7 @@ export function ImportRoomView() {
                     )}
                   </p>
                 </div>
-                {!isSelectMode && <CheckCircle2 className="w-4 h-4 text-green-400 flex-shrink-0" />}
+                {!isSelectMode && track.status === 'ready' && <CheckCircle2 className="w-4 h-4 text-green-400 flex-shrink-0" />}
               </div>
             ))}
           </>

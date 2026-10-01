@@ -48,6 +48,23 @@ describe('trueEndTime', () => {
     expect(trueEnd).toBeCloseTo(duration, 6)
   })
 
+  it('ignores silent gaps inside the song when the tail is not silent', () => {
+    const sampleRate = 10
+    const samples = new Float32Array(100).fill(0.01)
+    // 1.5s silent break mid-song, short (0.3s) silent tail
+    for (let i = 40; i < 55; i++) samples[i] = 0
+    for (let i = 97; i < 100; i++) samples[i] = 0
+
+    const duration = samples.length / sampleRate
+    const trueEnd = detectTrueEndTimeFromChannelData(samples, sampleRate, duration, {
+      silenceThresholdDb: -55,
+      minSilenceMs: 1000,
+      minCutBeforeEndSec: 0,
+    })
+
+    expect(trueEnd).toBeCloseTo(duration, 6)
+  })
+
   it('never cuts inside the last minCutBeforeEndSec', () => {
     const sampleRate = 10
     const samples = new Float32Array(100).fill(0.01)

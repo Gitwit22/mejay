@@ -1,0 +1,56 @@
+services:
+  - type: web
+    name: mejay-api
+    runtime: node
+    rootDir: api
+    buildCommand: npm install && npm run build
+    preDeployCommand: npm run db:migrate
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: FRONTEND_URL
+        value: https://mejay2.pages.dev
+      - key: COOKIE_SAME_SITE
+        value: none
+      - key: SESSION_PEPPER
+        generateValue: true
+      - key: AUTH_CODE_PEPPER
+        generateValue: true
+      - key: AUTH_TOKEN_SECRET
+        generateValue: true
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_PRO
+        sync: false
+      - key: STRIPE_PRICE_YEARLY
+        sync: false
+      - key: STRIPE_PRICE_FULL_PROGRAM
+        sync: false
+      - key: MARKETPLACE_PLATFORM_FEE_BPS
+        value: "1000"
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+      - key: ISRC_PREFIX
+        value: QTA3L
+      - key: ISRC_COUNTRY_CODE
+        value: QT
+      - key: ISRC_REGISTRANT_CODE
+        value: A3L

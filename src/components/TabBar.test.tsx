@@ -5,12 +5,13 @@ import { TabBar } from './TabBar';
 describe('TabBar', () => {
   const mockOnTabChange = vi.fn();
 
-  it('should render all four tabs', () => {
+  it('should render all five tabs', () => {
     render(<TabBar activeTab="library" onTabChange={mockOnTabChange} />);
     
     expect(screen.getByText('My Music')).toBeInTheDocument();
     expect(screen.getByText('Playlists')).toBeInTheDocument();
     expect(screen.getByText('Import')).toBeInTheDocument();
+    expect(screen.getByText('Discover')).toBeInTheDocument();
     expect(screen.getByText('Play Mode')).toBeInTheDocument();
   });
 
@@ -53,6 +54,10 @@ describe('TabBar', () => {
     mockOnTabChange.mockClear();
     fireEvent.click(screen.getByText('Import'));
     expect(mockOnTabChange).toHaveBeenCalledWith('import');
+
+    mockOnTabChange.mockClear();
+    fireEvent.click(screen.getByText('Discover'));
+    expect(mockOnTabChange).toHaveBeenCalledWith('music');
     
     mockOnTabChange.mockClear();
     fireEvent.click(screen.getByText('Play Mode'));
@@ -64,6 +69,6 @@ describe('TabBar', () => {
     
     // Check that SVG icons are present
     const svgElements = container.querySelectorAll('svg');
-    expect(svgElements.length).toBe(4); // One for each tab
+    expect(svgElements.length).toBe(5); // One for each tab
   });
 });

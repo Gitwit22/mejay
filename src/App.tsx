@@ -13,6 +13,8 @@ import { toast } from "@/hooks/use-toast";
 import { handleBecameOnline, periodicPolicyTick, startupCheck } from "@/licensing/licenseService";
 import { useLicenseStore } from "@/licensing/licenseStore";
 import { initMediaSession } from "@/lib/mediaSession";
+import {apiFetch} from "@/lib/api";
+import {convertToArtistAccount} from "@/lib/artistAccount";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import WelcomePage from "./app/pages/WelcomePage";
@@ -24,6 +26,16 @@ import TermsPage from "./app/pages/TermsPage";
 import ContactPage from "./app/pages/ContactPage";
 import PrivacyPage from "./app/pages/PrivacyPage";
 import DevAdminPage from "./app/pages/DevAdminPage";
+import MusicStorePage from "./app/pages/MusicStorePage";
+import {StoreReleasePage} from "./app/pages/MusicStorePage";
+import ProviderOnboardingPage from "./app/pages/ProviderOnboardingPage";
+import ProviderPortalPage from "./app/pages/ProviderPortalPage";
+import ReleaseWizardPage from "./app/pages/ReleaseWizardPage";
+import ArtistPortalGate from "./app/components/ArtistPortalGate";
+import MarketplaceAdminGate from "./app/components/MarketplaceAdminGate";
+import MarketplaceAdminPage from "./app/pages/MarketplaceAdminPage";
+import PurchasedMusicPage from "./app/pages/PurchasedMusicPage";
+import RecipientEarningsPage from "./app/pages/RecipientEarningsPage";
 import PlaylistEditorPage from "./pages/PlaylistEditorPage";
 
 const queryClient = new QueryClient();
@@ -54,8 +66,7 @@ const shouldRedirectToWelcomeOnMount = () => {
     | undefined;
   const entry = entries?.[0];
 
-  // eslint-disable-next-line deprecation/deprecation
-  const legacyType = (window.performance as any)?.navigation?.type;
+  const legacyType = (window.performance as Performance & {navigation?: {type?: number}})?.navigation?.type;
   const isReload = entry?.type === "reload" || legacyType === 1;
   if (!isReload) return false;
 
@@ -249,6 +260,7 @@ const AppLicenseBootstrap = () => {
 
 const AppBillingBootstrap = () => {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const hasAppliedUpgradeRef = useRef(false);
 
   useEffect(() => {
@@ -274,12 +286,14 @@ const AppBillingBootstrap = () => {
         const url = new URL(window.location.href);
         const checkout = url.searchParams.get('checkout');
         const sessionIdFromUrl = url.searchParams.get('session_id');
+        const artistUpgrade = url.searchParams.get('artist_upgrade') === '1';
 
         const cleanCheckoutUrl = () => {
           const cleaned = new URL(window.location.href)
           cleaned.searchParams.delete('checkout')
           cleaned.searchParams.delete('plan')
           cleaned.searchParams.delete('session_id')
+          cleaned.searchParams.delete('artist_upgrade')
           window.history.replaceState(null, "", `${cleaned.pathname}${cleaned.search}${cleaned.hash}`)
         }
 
@@ -289,7 +303,6 @@ const AppBillingBootstrap = () => {
           stripeCustomerId?: string
         }) => {
           if (hasAppliedUpgradeRef.current) return;
-          hasAppliedUpgradeRef.current = true;
 
           // Truth source: refresh from /api/account/me after server persists entitlements.
           try {
@@ -307,6 +320,13 @@ const AppBillingBootstrap = () => {
             usePlanStore.getState().refreshFromStorage({emit: false, reason: 'postCheckout:fallback:error'})
           }
 
+          if (artistUpgrade) {
+            await convertToArtistAccount()
+            await usePlanStore.getState().refreshFromServer({reason: 'postCheckoutArtistConversion'})
+          }
+
+          hasAppliedUpgradeRef.current = true;
+
           // Best-effort: refresh any cached server data that may depend on entitlements.
           // (This is effectively a no-op today if there are no queries.)
           try {
@@ -322,6 +342,7 @@ const AppBillingBootstrap = () => {
           } catch {
             // ignore
           }
+          if (artistUpgrade) navigate('/app/artist/onboarding', {replace: true})
         };
 
         const verifyAndApplyOnce = async (sessionId: string, opts?: {allowDowngrade?: boolean}) => {
@@ -376,7 +397,7 @@ const AppBillingBootstrap = () => {
             // 1a) Fast-path activation: ask the server to sync+persist from Stripe once.
             // This updates D1 so the subsequent refreshFromServer() reflects the new plan immediately.
             try {
-              const syncRes = await fetch('/api/billing/sync', {
+              const syncRes = await apiFetch('/api/billing/sync', {
                 method: 'POST',
                 credentials: 'include',
                 headers: {'content-type': 'application/json'},
@@ -541,6 +562,20 @@ const AnimatedRoutes = () => {
             <Route path="privacy" element={<PrivacyPage mode="app" />} />
             <Route path="contact" element={<ContactPage mode="app" />} />
           </Route>
+          <Route path="store" element={<MusicStorePage />} />
+          <Route path="store/:releaseId" element={<StoreReleasePage />} />
+          <Route path="purchased" element={<PurchasedMusicPage />} />
+          <Route path="earnings" element={<RecipientEarningsPage />} />
+          <Route path="artist" element={<ArtistPortalGate />}>
+            <Route index element={<ProviderPortalPage />} />
+            <Route path="onboarding" element={<ProviderOnboardingPage />} />
+            <Route path="releases/:releaseId/edit/:step" element={<ReleaseWizardPage />} />
+          </Route>
+          <Route path="provider" element={<Navigate to="/app/artist" replace />} />
+          <Route path="provider/onboarding" element={<Navigate to="/app/artist/onboarding" replace />} />
+          <Route path="marketplace-admin" element={<MarketplaceAdminGate />}>
+            <Route index element={<MarketplaceAdminPage />} />
+          </Route>
           <Route path="playlist/:playlistId/edit" element={<PlaylistEditorPage />} />
           {/* Dev-only admin page */}
           {import.meta.env.DEV && <Route path="dev-admin" element={<DevAdminPage />} />}
@@ -561,8 +596,8 @@ const App = () => (
       <AppLifetimeAudioCleanup />
       <AppMediaSessionBootstrap />
       <AppLicenseBootstrap />
-      <AppBillingBootstrap />
       <BrowserRouter>
+        <AppBillingBootstrap />
         <AnimatedRoutes />
       </BrowserRouter>
     </TooltipProvider>

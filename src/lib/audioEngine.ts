@@ -41,6 +41,18 @@ interface DeckState {
   } | null;
 }
 
+/** Thrown when a deck load was superseded by a newer load before it finished decoding. */
+export class StaleLoadError extends Error {
+  constructor(readonly deck: DeckId) {
+    super(`Load on deck ${deck} was superseded by a newer load`);
+    this.name = 'StaleLoadError';
+  }
+}
+
+export function isStaleLoadError(error: unknown): error is StaleLoadError {
+  return error instanceof StaleLoadError;
+}
+
 class AudioEngine {
   private audioContext: AudioContext | null = null;
   private masterGain: GainNode | null = null;
@@ -50,6 +62,12 @@ class AudioEngine {
   
   // Per-deck ignore flag: stop()/restart() will trigger onended — don't treat it like a natural track finish
   private ignoreNextEnded: Record<DeckId, number> = { A: 0, B: 0 };
+
+  // Set once a silent frame has played inside a user gesture (iOS unlock).
+  private unlocked = false;
+
+  // Monotonic per-deck load counter; a decode that finishes after a newer load started is discarded.
+  private loadTokens: Record<DeckId, number> = { A: 0, B: 0 };
 
   // Master tone shaping (pre-limiter)
   private preLimiterGain: GainNode | null = null;
@@ -377,10 +395,8 @@ class AudioEngine {
   playAt(deck: DeckId, whenTime: number): void {
     if (!this.audioContext || !this.decks[deck].audioBuffer) return;
 
-    // Resume audio context if suspended (mobile browsers)
-    if (this.audioContext.state === 'suspended') {
-      this.audioContext.resume();
-    }
+    // Resume audio context if suspended/interrupted (mobile browsers)
+    this.resumeContext();
 
     const deckState = this.decks[deck];
     if (deckState.isPlaying) return;
@@ -433,6 +449,9 @@ class AudioEngine {
     }, delayMs);
 
     source.onended = () => {
+      // A source that has been replaced (pause/seek/stop/reload) must never report a track end:
+      // its 'ended' event arrives asynchronously, after the deck may already be playing again.
+      if (deckState.sourceNode !== source) return;
       // stop()/restart will trigger onended — don't treat it like a natural track finish
       if ((this.ignoreNextEnded[deck] ?? 0) > Date.now()) return;
       
@@ -444,10 +463,74 @@ class AudioEngine {
     };
   }
 
+  /**
+   * Resume a suspended/interrupted context. iOS reports 'interrupted' after calls, Siri or
+   * another app taking the audio session; 'suspended' after autoplay policy or backgrounding.
+   */
+  private resumeContext(): void {
+    const ctx = this.audioContext;
+    if (!ctx) return;
+    const state = ctx.state as AudioContextState | 'interrupted';
+    if (state === 'suspended' || state === 'interrupted') {
+      ctx.resume().catch((error) => {
+        console.warn('[AudioEngine] AudioContext resume failed', error);
+      });
+    }
+  }
+
+  private hasActiveDeck(): boolean {
+    return this.decks.A.isPlaying || this.decks.B.isPlaying
+      || this.decks.A.scheduledStartAt !== null || this.decks.B.scheduledStartAt !== null;
+  }
+
+  private readonly handleVisibilityChange = (): void => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'visible' && this.hasActiveDeck()) {
+      this.resumeContext();
+    }
+  };
+
+  /**
+   * Must be called synchronously from a user gesture (tap/click/key). Creates and resumes the
+   * AudioContext inside the gesture and plays one silent frame, which is what iOS Safari needs
+   * to allow audio later from async code (decodes, timers, Media Session handlers).
+   */
+  unlock(): void {
+    if (!this.audioContext) {
+      // initialize() creates the context synchronously before its first await.
+      void this.initialize();
+    }
+    this.resumeContext();
+    const ctx = this.audioContext;
+    if (!ctx || this.unlocked) return;
+    try {
+      const buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      source.start(0);
+      this.unlocked = true;
+    } catch {
+      // ignore; a later gesture will retry
+    }
+  }
+
+  isUnlocked(): boolean {
+    return this.unlocked;
+  }
+
   async initialize(): Promise<void> {
     if (this.audioContext) return;
 
     this.audioContext = new AudioContext();
+    // Recover from OS interruptions (phone call, Siri) while music should be playing.
+    this.audioContext.addEventListener?.('statechange', () => {
+      if (this.hasActiveDeck() && (typeof document === 'undefined' || document.visibilityState === 'visible')) {
+        this.resumeContext();
+      }
+    });
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this.handleVisibilityChange);
+    }
     
     // Create master chain: deck gains -> preLimiter (trim) -> EQ -> limiter -> ceiling -> master gain -> destination
     this.masterGain = this.audioContext.createGain();
@@ -679,6 +762,9 @@ class AudioEngine {
   }
 
   async loadTrack(deck: DeckId, blob: Blob, bpm?: number, gainDb?: number): Promise<number> {
+    // Claim the deck before any await so a newer load always wins, even if it decodes first.
+    const loadToken = ++this.loadTokens[deck];
+
     await this.initialize();
     
     if (!this.audioContext) throw new Error('Audio context not initialized');
@@ -688,6 +774,9 @@ class AudioEngine {
 
     const arrayBuffer = await blob.arrayBuffer();
     const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
+    if (loadToken !== this.loadTokens[deck]) {
+      throw new StaleLoadError(deck);
+    }
     
     this.decks[deck].audioBuffer = audioBuffer;
     this.decks[deck].duration = audioBuffer.duration;
@@ -714,7 +803,9 @@ class AudioEngine {
 
   // Load track and set initial offset (start at X seconds)
   async loadTrackWithOffset(deck: DeckId, blob: Blob, offsetSeconds: number, bpm?: number, gainDb?: number): Promise<number> {
+    const loadToken = this.loadTokens[deck] + 1;
     const duration = await this.loadTrack(deck, blob, bpm, gainDb);
+    if (loadToken !== this.loadTokens[deck]) throw new StaleLoadError(deck);
     const clampedOffset = Math.max(0, Math.min(offsetSeconds, duration - 1));
     this.decks[deck].pausedAt = clampedOffset;
     return duration;
@@ -766,10 +857,8 @@ class AudioEngine {
   play(deck: DeckId): void {
     if (!this.audioContext || !this.decks[deck].audioBuffer) return;
 
-    // Resume audio context if suspended (mobile browsers)
-    if (this.audioContext.state === 'suspended') {
-      this.audioContext.resume();
-    }
+    // Resume audio context if suspended/interrupted (mobile browsers)
+    this.resumeContext();
 
     const deckState = this.decks[deck];
     
@@ -809,6 +898,9 @@ class AudioEngine {
 
     // Handle track end
     source.onended = () => {
+      // A source that has been replaced (pause/seek/stop/reload) must never report a track end:
+      // its 'ended' event arrives asynchronously, after the deck may already be playing again.
+      if (deckState.sourceNode !== source) return;
       // stop()/restart will trigger onended — don't treat it like a natural track finish
       if ((this.ignoreNextEnded[deck] ?? 0) > Date.now()) return;
       
@@ -827,6 +919,7 @@ class AudioEngine {
     deckState.pausedAt = this.getCurrentTime(deck);
     deckState.trackAtLastCtx = deckState.pausedAt;
     deckState.lastCtx = this.audioContext?.currentTime ?? deckState.lastCtx;
+    deckState.sourceNode.onended = null;
     deckState.sourceNode.stop();
     deckState.sourceNode.disconnect();
     deckState.sourceNode = null;
@@ -844,6 +937,7 @@ class AudioEngine {
     this.clearScheduledStart(deck);
     if (deckState.sourceNode) {
       try {
+        deckState.sourceNode.onended = null;
         deckState.sourceNode.stop();
         deckState.sourceNode.disconnect();
       } catch (e) {
@@ -1114,10 +1208,14 @@ class AudioEngine {
     }
     this.stop('A');
     this.stop('B');
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    }
     if (this.audioContext) {
       this.audioContext.close();
       this.audioContext = null;
     }
+    this.unlocked = false;
     this.masterGain = null;
     this.limiterNode = null;
     this.ceilingNode = null;
@@ -1130,3 +1228,18 @@ class AudioEngine {
 
 // Singleton instance
 export const audioEngine = new AudioEngine();
+
+/**
+ * Unlock Web Audio on the first user gestures (iOS Safari requires the AudioContext to be
+ * created/resumed inside a gesture). Listeners stay until a gesture actually unlocks audio.
+ */
+export function installAudioUnlockOnFirstGesture(target: Pick<Window, 'addEventListener' | 'removeEventListener'> = window): () => void {
+  const events = ['pointerdown', 'touchend', 'keydown'] as const;
+  const handler = () => {
+    audioEngine.unlock();
+    if (audioEngine.isUnlocked()) remove();
+  };
+  const remove = () => events.forEach((event) => target.removeEventListener(event, handler, true));
+  events.forEach((event) => target.addEventListener(event, handler, true));
+  return remove;
+}

@@ -280,6 +280,22 @@
     right: var(--mejay-mobile-gutter);
   }
 
+  .latest-on-mejay {
+    @apply fixed z-30 flex h-14 items-center justify-between border-t border-white/10 px-5 text-left;
+    bottom: 84px;
+    left: var(--mejay-mobile-gutter);
+    right: var(--mejay-mobile-gutter);
+    background: hsl(248 12% 8% / 0.96);
+  }
+
+  .latest-on-mejay strong {
+    @apply block text-[10px] font-bold text-primary;
+  }
+
+  .latest-on-mejay small {
+    @apply mt-0.5 block text-xs text-muted-foreground;
+  }
+
   /* Slightly inset "phone" viewport on small screens */
   .mejay-viewport {
     width: calc(100% - (var(--mejay-mobile-gutter) * 2));

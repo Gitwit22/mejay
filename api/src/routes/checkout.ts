@@ -1,0 +1,286 @@
+type Plan = "pro" | "full_program";
+
+type CheckoutRequestBody = {
+  plan?: Plan;
+  cadence?: 'monthly' | 'yearly';
+  /** Opaque client-generated token to help bind session verification to the initiating browser. */
+  checkoutToken?: string;
+  /** Intent to track which button/flow initiated checkout (e.g., 'trial' or 'upgrade'). */
+  intent?: 'trial' | 'upgrade' | 'artist_upgrade';
+};
+
+type Env = {
+  STRIPE_SECRET_KEY: string;
+  STRIPE_PRICE_PRO: string;
+  STRIPE_PRICE_YEARLY: string;
+  STRIPE_PRICE_FULL_PROGRAM: string;
+  DB: any;
+  SESSION_PEPPER?: string;
+  /** Optional: allow enabling Full Program checkout explicitly. */
+  ALLOW_FULL_PROGRAM_CHECKOUT?: string;
+  FRONTEND_URL?: string;
+  NODE_ENV?: string;
+};
+
+/** First-time Pro subscribers get a free trial before the first charge. */
+export const PRO_TRIAL_DAYS = 3;
+
+/** Subscription statuses that still represent a live subscription the user could be billed for. */
+const LIVE_SUBSCRIPTION_STATUSES = new Set(['active', 'trialing', 'past_due', 'unpaid', 'incomplete', 'paused']);
+
+export function hasLiveProSubscription(ent: EntitlementsRow): boolean {
+  return Boolean(ent?.stripe_subscription_id) && LIVE_SUBSCRIPTION_STATUSES.has(String(ent?.subscription_status ?? ''));
+}
+
+/** Trial only for accounts that have never had a Stripe subscription. */
+export function isEligibleForProTrial(ent: EntitlementsRow): boolean {
+  return !ent?.stripe_subscription_id && !ent?.subscription_status;
+}
+
+type EntitlementsRow = {
+  access_type: string;
+  has_full_access: number;
+  stripe_subscription_id: string | null;
+  subscription_status: string | null;
+} | null
+
+async function sha256Hex(input: string) {
+  const enc = new TextEncoder().encode(input);
+  const hashBuf = await crypto.subtle.digest('SHA-256', enc);
+  return [...new Uint8Array(hashBuf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function parseCookies(req: Request) {
+  const raw = req.headers.get('cookie') || '';
+  const out: Record<string, string> = {};
+  raw.split(';').forEach((part) => {
+    const [k, ...v] = part.trim().split('=');
+    if (!k) return;
+    out[k] = decodeURIComponent(v.join('=') || '');
+  });
+  return out;
+}
+
+async function getSessionUserId(req: Request, env: Pick<Env, 'DB' | 'SESSION_PEPPER'>) {
+  const cookies = parseCookies(req);
+  const token = cookies['mejay_session'];
+  if (!token) return null;
+  const pepper = env.SESSION_PEPPER || 'dev-session-pepper';
+  const sessionHash = await sha256Hex(`session:${token}:${pepper}`);
+  const row = (await env.DB
+    .prepare('SELECT user_id, expires_at FROM sessions WHERE token_hash = ?1')
+    .bind(sessionHash)
+    .first()) as {user_id: string; expires_at: string} | null;
+  if (!row) return null;
+  if (row.expires_at < new Date().toISOString()) return null;
+  return row.user_id;
+}
+
+async function getUserEmailById(db: any, userId: string): Promise<string | null> {
+  const row = (await db
+    .prepare('SELECT email FROM users WHERE id = ?1 LIMIT 1')
+    .bind(userId)
+    .first()) as {email: string | null} | null
+  const email = typeof row?.email === 'string' ? row.email.trim() : ''
+  return email ? email : null
+}
+
+async function getEntitlements(db: any, userId: string): Promise<EntitlementsRow> {
+  return (await db
+    .prepare('SELECT access_type, has_full_access, stripe_subscription_id, subscription_status FROM entitlements WHERE user_id = ?1 LIMIT 1')
+    .bind(userId)
+    .first()) as EntitlementsRow
+}
+
+function normalizeDbAccessType(raw: unknown): 'free' | 'pro' | 'full_program' {
+  if (raw === 'pro') return 'pro'
+  if (raw === 'full' || raw === 'full_program') return 'full_program'
+  return 'free'
+}
+
+function json(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "content-type": "application/json",
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "POST, OPTIONS",
+      "access-control-allow-headers": "content-type",
+    },
+  });
+}
+
+async function stripePost(secretKey: string, path: string, body: URLSearchParams, idempotencyKey?: string): Promise<any> {
+  const res = await fetch(`https://api.stripe.com${path}`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${secretKey}`,
+      "content-type": "application/x-www-form-urlencoded",
+      ...(idempotencyKey ? {"idempotency-key": idempotencyKey} : {}),
+    },
+    body,
+  });
+
+  const text = await res.text();
+  if (!res.ok) {
+    let message = text.slice(0, 500);
+    try {
+      const parsed = JSON.parse(text) as any;
+      const parsedMessage = parsed?.error?.message;
+      if (typeof parsedMessage === "string" && parsedMessage.trim()) {
+        message = parsedMessage;
+      }
+    } catch {
+      // ignore
+    }
+
+    throw new Error(message);
+  }
+  return JSON.parse(text);
+}
+
+export const onRequest = async (ctx: {request: Request; env: Env}) => {
+  const { request, env } = ctx;
+
+  // CORS preflight
+  if (request.method === "OPTIONS") return json({ ok: true }, 200);
+
+  if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
+
+  let body: any;
+  try {
+    body = (await request.json()) as CheckoutRequestBody;
+  } catch {
+    return json({ error: "Invalid JSON" }, 400);
+  }
+
+  const plan = body?.plan as Plan | undefined;
+  if (plan !== "pro" && plan !== "full_program") {
+    return json({ error: `Invalid plan. Use "pro" | "full_program".` }, 400);
+  }
+
+  // Packaging switch: Full Program is not ready for purchase yet.
+  // Keep an escape hatch for controlled enablement. Never derive this from the request host.
+  const allowFullProgram = env.NODE_ENV !== 'production'
+    || String(env.ALLOW_FULL_PROGRAM_CHECKOUT || '').toLowerCase() === 'true'
+  if (plan === 'full_program' && !allowFullProgram) {
+    return json({ error: 'Full Program is coming soon.' }, 403);
+  }
+
+  const checkoutToken = typeof body?.checkoutToken === 'string' ? body.checkoutToken.trim() : '';
+  const intent = body?.intent === 'trial' || body?.intent === 'upgrade' || body?.intent === 'artist_upgrade'
+    ? body.intent
+    : 'unknown';
+  const cadence = body?.cadence ?? 'monthly';
+  if (cadence !== 'monthly' && cadence !== 'yearly') {
+    return json({error: 'Invalid cadence. Use "monthly" or "yearly".'}, 400)
+  }
+
+  const secretKey = env.STRIPE_SECRET_KEY?.trim();
+  const proPrice = env.STRIPE_PRICE_PRO?.trim();
+  const yearlyPrice = env.STRIPE_PRICE_YEARLY?.trim();
+  const fullPrice = env.STRIPE_PRICE_FULL_PROGRAM?.trim();
+
+  if (!secretKey || !proPrice || !yearlyPrice || !fullPrice) {
+    return json({
+      error:
+        "Missing env vars. Required: STRIPE_SECRET_KEY, STRIPE_PRICE_PRO, STRIPE_PRICE_YEARLY, STRIPE_PRICE_FULL_PROGRAM",
+    }, 500);
+  }
+
+  const requestUrl = new URL(request.url);
+  const origin = env.FRONTEND_URL?.split(',')[0]?.trim() || `${requestUrl.protocol}//${requestUrl.host}`;
+
+  const isPro = plan === "pro";
+  const priceId = isPro ? (cadence === 'yearly' ? yearlyPrice : proPrice) : fullPrice;
+
+  if (!priceId.startsWith("price_")) {
+    return json(
+      {
+        error:
+          "Invalid Stripe price id. STRIPE_PRICE_PRO / STRIPE_PRICE_FULL_PROGRAM must be a Price ID that starts with 'price_'.",
+      },
+      500,
+    );
+  }
+
+  // Stripe Checkout mode
+  const mode = isPro ? "subscription" : "payment";
+
+  // Critical: bind checkout to logged-in user.
+  const userId = await getSessionUserId(request, env);
+  if (!userId) {
+    return json({ error: 'Login required' }, 401);
+  }
+
+  // Prevent repeat purchases / redundant checkouts. Fail closed: if we can't read the
+  // current entitlement we can't rule out a duplicate subscription.
+  let ent: EntitlementsRow
+  try {
+    ent = await getEntitlements(env.DB, userId)
+  } catch {
+    return json({error: 'Unable to verify your current plan. Please try again.'}, 503)
+  }
+  const current = normalizeDbAccessType(ent?.access_type)
+  if (plan === 'full_program' && current === 'full_program') {
+    return json({error: 'Already purchased Full Program.'}, 409)
+  }
+  if (plan === 'pro' && hasLiveProSubscription(ent)) {
+    // Includes past_due/unpaid: a second subscription would double-bill. Fix payment in the portal.
+    return json({error: 'You already have a Pro subscription. Manage it from Billing.', code: 'subscription_exists'}, 409)
+  }
+  const trialEligible = plan === 'pro' && isEligibleForProTrial(ent)
+
+  try {
+    const userEmail = await getUserEmailById(env.DB, userId).catch(() => null)
+
+    const params = new URLSearchParams();
+    params.set("mode", mode);
+    params.set("line_items[0][price]", priceId);
+    params.set("line_items[0][quantity]", "1");
+    // Include the session id so the app can verify purchase and unlock features.
+    // Stripe will replace {CHECKOUT_SESSION_ID} with the real ID.
+    const artistQuery = intent === 'artist_upgrade' ? '&artist_upgrade=1' : ''
+    params.set("success_url", `${origin}/pricing?checkout=success&session_id={CHECKOUT_SESSION_ID}${artistQuery}`);
+    params.set("cancel_url", `${origin}/pricing?checkout=cancel${artistQuery}`);
+    params.set("metadata[plan]", plan);
+    params.set('client_reference_id', userId);
+    params.set('metadata[userId]', userId);
+    params.set('metadata[source_intent]', intent);
+    params.set('metadata[cadence]', cadence);
+
+    // Ensure `session.customer` exists so activation can persist reliably.
+    // (In payment mode, Stripe may otherwise leave `customer` null.)
+    if (mode === 'payment') {
+      params.set('customer_creation', 'always')
+      if (userEmail) params.set('customer_email', userEmail)
+    }
+
+    // Propagate user binding into subscription webhooks (customer.subscription.*).
+    if (mode === 'subscription') {
+      params.set('subscription_data[metadata][userId]', userId)
+      params.set('subscription_data[metadata][plan]', plan)
+      params.set('subscription_data[metadata][source_intent]', intent)
+      params.set('subscription_data[metadata][cadence]', cadence)
+      if (trialEligible) {
+        params.set('subscription_data[trial_period_days]', String(PRO_TRIAL_DAYS))
+        params.set('subscription_data[metadata][trial]', 'true')
+      }
+    }
+
+    if (checkoutToken) {
+      params.set('metadata[checkoutToken]', checkoutToken);
+    }
+
+    // Collapse double-clicks / retries within a short window into one Checkout Session.
+    const idempotencyWindow = Math.floor(Date.now() / 60_000)
+    const idempotencyKey = await sha256Hex(`checkout:${userId}:${plan}:${cadence}:${checkoutToken}:${idempotencyWindow}`)
+    const session = await stripePost(secretKey, "/v1/checkout/sessions", params, idempotencyKey);
+    const redirectUrl: string | undefined = session?.url;
+    if (!redirectUrl) return json({ error: "No checkout URL returned" }, 500);
+    return json({ url: redirectUrl, trial: trialEligible ? PRO_TRIAL_DAYS : 0 }, 200);
+  } catch (err: any) {
+    console.error('/api/checkout Stripe error', err?.message ?? err)
+    return json({ error: "Unable to start checkout. Please try again." }, 502);
+  }
+};

@@ -304,4 +304,23 @@ describe('DJ Store transition tempo plan regression', () => {
     expect(incomingTempoCall).toBeTruthy()
     expect(after.deckB.playbackRate).toBeCloseTo(incomingTempoCall[1], 6)
   })
+
+  it('recalculates the selected tempo vibe for the incoming track before playback', async () => {
+    useDJStore.setState((state) => ({
+      settings: {...state.settings, tempoMode: 'preset', tempoPreset: 'club'},
+    }))
+
+    useDJStore.getState().skip('user')
+    await flush()
+
+    const setTempoOrder = (audioEngine.setTempo as any).mock.invocationCallOrder.find(
+      (_order: number, index: number) => (audioEngine.setTempo as any).mock.calls[index][0] === 'B',
+    )
+    const playOrder = (audioEngine.playAt as any).mock.invocationCallOrder[0]
+    const plan = useDJStore.getState().lastTransitionTempoPlan
+
+    expect(plan?.targetBpmUsed).toBe(180)
+    expect(plan?.incomingTargetRatio).toBeCloseTo(1.2, 6)
+    expect(setTempoOrder).toBeLessThan(playOrder)
+  })
 })

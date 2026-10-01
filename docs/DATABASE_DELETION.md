@@ -1,4 +1,6 @@
-# MEJay Database Deletion Guide
+# Legacy MEJay D1 Database Deletion Guide
+
+> This document applies only to the retired Cloudflare D1 schema. Production self-service account deletion uses Neon and `DELETE /api/account`; see [ACCOUNT_DELETION.md](ACCOUNT_DELETION.md).
 
 ## Database Info
 
