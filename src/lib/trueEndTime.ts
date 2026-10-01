@@ -68,25 +68,19 @@ export function detectTrueEndTimeFromChannelData(
   const threshold = dbToLinear(silenceThresholdDb);
   const minSilenceSamples = Math.max(1, Math.floor((sampleRate * minSilenceMs) / 1000));
 
-  let silenceCount = 0;
-  let silenceStartSample: number | null = null;
-
+  // Only *trailing* silence counts: find the last audible sample and stop there. Silent gaps
+  // earlier in the song (breakdowns, pauses) must never become the "end".
+  let lastAudibleSample = -1;
   for (let i = channelData.length - 1; i >= 0; i--) {
-    const v = channelData[i];
-    if (Math.abs(v) < threshold) {
-      silenceCount += 1;
-      if (silenceCount >= minSilenceSamples) {
-        silenceStartSample = i;
-      }
-    } else {
-      silenceCount = 0;
-      // Once we've found a trailing-silence region and then hit real signal,
-      // we can stop scanning.
-      if (silenceStartSample !== null) break;
+    if (Math.abs(channelData[i]) >= threshold) {
+      lastAudibleSample = i;
+      break;
     }
   }
 
-  if (silenceStartSample === null) return durationSec;
+  const trailingSilenceSamples = channelData.length - 1 - lastAudibleSample;
+  if (lastAudibleSample < 0 || trailingSilenceSamples < minSilenceSamples) return durationSec;
+  const silenceStartSample = lastAudibleSample + 1;
 
   const silenceStartTime = silenceStartSample / sampleRate;
 

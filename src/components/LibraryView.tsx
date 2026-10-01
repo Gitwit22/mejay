@@ -17,7 +17,7 @@ export function LibraryView() {
     tracks, 
     isLoadingTracks, 
     removeFromLibrary,
-    loadTrackToDeck, 
+    previewTrack,
     deckA,
     playlists,
     addTrackToPlaylist,
@@ -84,7 +84,7 @@ export function LibraryView() {
       toggleTrackSelection(trackId);
       return;
     }
-    await loadTrackToDeck(trackId, 'A');
+    await previewTrack(trackId);
   };
 
   const handleAddToPlaylist = async (playlistId: string, trackId: string) => {

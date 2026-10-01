@@ -35,29 +35,30 @@ export async function detectBPM(audioBuffer: AudioBuffer): Promise<{ bpm: number
   return { bpm: Math.round(bpm * 10) / 10, confidence };
 }
 
-function lowPassFilter(
+export function lowPassFilter(
   data: Float32Array,
   sampleRate: number,
   startSample: number,
   endSample: number
 ): Float32Array {
-  // Simple moving average as a low-pass filter
-  const windowSize = Math.floor(sampleRate / 100); // 10ms window
-  const length = endSample - startSample;
+  // Centered moving average of |x| as a cheap low-pass envelope. Uses a prefix sum so the cost
+  // is O(n) instead of O(n * window) (~1.2B ops per track before, which froze imports).
+  const windowSize = Math.floor(sampleRate / 100); // 10ms each side
+  const length = Math.max(0, endSample - startSample);
   const filtered = new Float32Array(length);
-  
+  if (length === 0) return filtered;
+
+  const prefix = new Float64Array(length + 1);
   for (let i = 0; i < length; i++) {
-    let sum = 0;
+    prefix[i + 1] = prefix[i] + Math.abs(data[startSample + i]);
+  }
+
+  for (let i = 0; i < length; i++) {
     const start = Math.max(0, i - windowSize);
     const end = Math.min(length - 1, i + windowSize);
-    
-    for (let j = start; j <= end; j++) {
-      sum += Math.abs(data[startSample + j]);
-    }
-    
-    filtered[i] = sum / (end - start + 1);
+    filtered[i] = (prefix[end + 1] - prefix[start]) / (end - start + 1);
   }
-  
+
   return filtered;
 }
 
