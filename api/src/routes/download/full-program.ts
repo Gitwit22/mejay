@@ -13,10 +13,9 @@ export async function onRequestGet({ request, env }: { request: Request; env: an
     .bind(userId)
     .first() as { access_type: string; has_full_access: number } | null;
 
-  const hasFull =
-    ent?.has_full_access === 1 ||
-    ent?.access_type === "full_program" ||
-    ent?.access_type === "full";
+  // has_full_access is also set for Pro subscribers; only the one-time Full Program purchase
+  // includes the downloadable program.
+  const hasFull = ent?.access_type === "full_program" || ent?.access_type === "full";
 
   if (!hasFull) return new Response("Forbidden", { status: 403 });
 

@@ -233,7 +233,7 @@ export default function PricingPage({ mode = 'app' }: PricingPageProps) {
                   {isCheckingOut === 'pro' ? 'Starting checkout…' : artistUpgrade ? 'Start Pro and Become an Artist' : 'Start 3-Day Pro Trial'}
                 </button>
                 <p className="plan-description" style={{fontSize: '0.875rem', marginTop: '0.5rem', textAlign: 'center'}}>
-                  Then ${cadence === 'yearly' ? '50/year' : '5/month'}. Cancel anytime.
+                  No charge for 3 days (first-time subscribers). Then ${cadence === 'yearly' ? '50/year' : '5/month'}. Cancel anytime.
                 </p>
               </>
             )}

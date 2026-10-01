@@ -10,6 +10,7 @@ import {
   signVerifiedToken,
   type VerifiedPurpose,
 } from '../_auth'
+import {applyRateLimit, getClientIp} from '../_security'
 
 type Purpose = VerifiedPurpose
 
@@ -44,6 +45,9 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
     const purpose = ((body as any).purpose === 'password_reset' ? 'password_reset' : 'signup_verify') as Purpose
 
     if (!email || !code) return json({ok: false, error: 'missing'}, {status: 400})
+
+    const ipLimit = await applyRateLimit({db: env.DB, key: getClientIp(request), purpose, kind: 'verify', maxPerWindow: 20})
+    if (!ipLimit.ok) return json({ok: false, error: 'rate_limited'}, {status: 429})
 
     const row = (await env.DB
       .prepare('SELECT code_hash, expires_at, attempts, locked_until FROM email_codes WHERE email = ?1 AND purpose = ?2')

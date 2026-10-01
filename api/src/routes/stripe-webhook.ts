@@ -1,4 +1,4 @@
-import {cadenceFromPrice, persistSubscriptionState, stripeTimestampToIso, type SubscriptionState} from '../services/billing'
+import {cadenceFromPrice, persistSubscriptionState, revokeFullProgramAccess, stripeTimestampToIso, type SubscriptionState} from '../services/billing'
 import {CommerceService} from '../marketplace/commerce-service'
 import {ConnectService} from '../marketplace/connect-service'
 import {claimStripeWebhookEvent, finalizeStripeWebhookEvent} from '../marketplace/webhook-events'
@@ -104,14 +104,29 @@ async function upsertEntitlementsInD1(args: {
         'ON CONFLICT(user_id) DO UPDATE SET',
         'access_type=excluded.access_type,',
         'has_full_access=excluded.has_full_access,',
-        'stripe_customer_id=excluded.stripe_customer_id,',
-        'stripe_subscription_id=excluded.stripe_subscription_id,',
+        'stripe_customer_id=COALESCE(excluded.stripe_customer_id, entitlements.stripe_customer_id),',
+        // Don't orphan an existing Pro subscription when Full Program is bought on top of it.
+        'stripe_subscription_id=COALESCE(excluded.stripe_subscription_id, entitlements.stripe_subscription_id),',
         'updated_at=excluded.updated_at',
       ].join(' '),
     )
     .bind(effectiveUserId, dbAccessType, hasFull, customerId, subscriptionId ?? null)
 
   await db.batch([stmt])
+}
+
+/**
+ * Resolve the MEJay user behind a one-time Full Program charge via its Checkout Session.
+ * Returns null for subscription invoices, marketplace purchases, and unknown charges.
+ */
+async function fullProgramUserForPaymentIntent(secretKey: string, paymentIntentId: string | null): Promise<string | null> {
+  if (!paymentIntentId) return null
+  const sessions = await stripeGet(secretKey, `/v1/checkout/sessions?payment_intent=${encodeURIComponent(paymentIntentId)}&limit=1`)
+  const session = Array.isArray(sessions?.data) ? sessions.data[0] : null
+  const meta = session?.metadata
+  if (!session || meta?.kind === 'marketplace_purchase') return null
+  if (getPlanFromMetadata(meta) !== 'full_program') return null
+  return getUserIdFromMetadata(meta)
 }
 
 function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
@@ -307,6 +322,13 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
 
     if (type === 'charge.refunded') {
       await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).handleRefund(obj)
+      // One-time Full Program purchases: a full refund revokes access. (Pro refunds are handled
+      // by the subscription lifecycle events.)
+      if (obj?.refunded === true && !obj?.invoice) {
+        const paymentIntentId = typeof obj?.payment_intent === 'string' ? obj.payment_intent : null
+        const userId = await fullProgramUserForPaymentIntent(secretKey, paymentIntentId)
+        if (userId) await revokeFullProgramAccess({db: env.DB, userId})
+      }
       return json({ok: true})
     }
 
@@ -317,6 +339,11 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
 
     if (type === 'charge.dispute.closed') {
       await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).handleDispute(obj, false, eventId)
+      if (obj?.status === 'lost') {
+        const paymentIntentId = typeof obj?.payment_intent === 'string' ? obj.payment_intent : null
+        const userId = await fullProgramUserForPaymentIntent(secretKey, paymentIntentId)
+        if (userId) await revokeFullProgramAccess({db: env.DB, userId})
+      }
       return json({ok: true})
     }
 

@@ -14,9 +14,14 @@ type Env = {
 }
 
 export async function requireDevAdmin(request: Request, env: Env): Promise<string | Response> {
-  // 1. Explicitly block production unless ALLOW_DEV_ADMIN is true
-  // This makes it impossible to access dev-admin in production by default
-  if (env.NODE_ENV === 'production' && env.ALLOW_DEV_ADMIN !== 'true') {
+  // 1. Fail closed: dev-admin requires BOTH an explicit opt-in and a non-empty allowlist,
+  // in every environment (staging deploys often run without NODE_ENV=production).
+  const allowedEmails = (env.DEV_ADMIN_EMAILS ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)
+  const optedIn = env.ALLOW_DEV_ADMIN === 'true'
+  if (!optedIn || allowedEmails.length === 0) {
     return new Response('Not found', { status: 404 })
   }
 
@@ -43,15 +48,7 @@ export async function requireDevAdmin(request: Request, env: Env): Promise<strin
   }
 
   // 4. Check allowlist
-  const allowedEmails = (env.DEV_ADMIN_EMAILS ?? '')
-    .split(',')
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean)
-
-  if (allowedEmails.length === 0) {
-    // No allowlist configured - allow any authenticated user in dev mode
-    console.warn('⚠️  DEV_ADMIN_EMAILS not set - allowing all authenticated users')
-  } else if (!allowedEmails.includes(userRow.email.toLowerCase())) {
+  if (!allowedEmails.includes(String(userRow.email ?? '').toLowerCase())) {
     return new Response(JSON.stringify({ error: 'Forbidden' }), {
       status: 403,
       headers: { 'content-type': 'application/json' },

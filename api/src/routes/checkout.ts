@@ -19,7 +19,23 @@ type Env = {
   /** Optional: allow enabling Full Program checkout explicitly. */
   ALLOW_FULL_PROGRAM_CHECKOUT?: string;
   FRONTEND_URL?: string;
+  NODE_ENV?: string;
 };
+
+/** First-time Pro subscribers get a free trial before the first charge. */
+export const PRO_TRIAL_DAYS = 3;
+
+/** Subscription statuses that still represent a live subscription the user could be billed for. */
+const LIVE_SUBSCRIPTION_STATUSES = new Set(['active', 'trialing', 'past_due', 'unpaid', 'incomplete', 'paused']);
+
+export function hasLiveProSubscription(ent: EntitlementsRow): boolean {
+  return Boolean(ent?.stripe_subscription_id) && LIVE_SUBSCRIPTION_STATUSES.has(String(ent?.subscription_status ?? ''));
+}
+
+/** Trial only for accounts that have never had a Stripe subscription. */
+export function isEligibleForProTrial(ent: EntitlementsRow): boolean {
+  return !ent?.stripe_subscription_id && !ent?.subscription_status;
+}
 
 type EntitlementsRow = {
   access_type: string;
@@ -94,12 +110,13 @@ function json(data: unknown, status = 200) {
   });
 }
 
-async function stripePost(secretKey: string, path: string, body: URLSearchParams): Promise<any> {
+async function stripePost(secretKey: string, path: string, body: URLSearchParams, idempotencyKey?: string): Promise<any> {
   const res = await fetch(`https://api.stripe.com${path}`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${secretKey}`,
       "content-type": "application/x-www-form-urlencoded",
+      ...(idempotencyKey ? {"idempotency-key": idempotencyKey} : {}),
     },
     body,
   });
@@ -143,18 +160,11 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
   }
 
   // Packaging switch: Full Program is not ready for purchase yet.
-  // Keep an escape hatch for controlled enablement.
-  try {
-    const url = new URL(request.url)
-    const isLocal = url.hostname === '127.0.0.1' || url.hostname === 'localhost'
-    const allowFullProgram = isLocal || String(env.ALLOW_FULL_PROGRAM_CHECKOUT || '').toLowerCase() === 'true'
-    if (plan === 'full_program' && !allowFullProgram) {
-      return json({ error: 'Full Program is coming soon.' }, 403);
-    }
-  } catch {
-    if (plan === 'full_program') {
-      return json({ error: 'Full Program is coming soon.' }, 403);
-    }
+  // Keep an escape hatch for controlled enablement. Never derive this from the request host.
+  const allowFullProgram = env.NODE_ENV !== 'production'
+    || String(env.ALLOW_FULL_PROGRAM_CHECKOUT || '').toLowerCase() === 'true'
+  if (plan === 'full_program' && !allowFullProgram) {
+    return json({ error: 'Full Program is coming soon.' }, 403);
   }
 
   const checkoutToken = typeof body?.checkoutToken === 'string' ? body.checkoutToken.trim() : '';
@@ -203,24 +213,23 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
     return json({ error: 'Login required' }, 401);
   }
 
-  // Prevent repeat purchases / redundant checkouts.
+  // Prevent repeat purchases / redundant checkouts. Fail closed: if we can't read the
+  // current entitlement we can't rule out a duplicate subscription.
+  let ent: EntitlementsRow
   try {
-    const ent = await getEntitlements(env.DB, userId)
-    const current = normalizeDbAccessType(ent?.access_type)
-    const hasFullAccess = !!ent?.has_full_access
-    if (hasFullAccess) {
-      if (plan === 'full_program' && current === 'full_program') {
-        return json({error: 'Already purchased Full Program.'}, 409)
-      }
-      const activeProSubscription = Boolean(ent?.stripe_subscription_id)
-        && (ent?.subscription_status === 'active' || ent?.subscription_status === 'trialing')
-      if (plan === 'pro' && activeProSubscription) {
-        return json({error: 'Pro is already active.'}, 409)
-      }
-    }
+    ent = await getEntitlements(env.DB, userId)
   } catch {
-    // Best-effort check; don't block checkout if the database is unavailable.
+    return json({error: 'Unable to verify your current plan. Please try again.'}, 503)
   }
+  const current = normalizeDbAccessType(ent?.access_type)
+  if (plan === 'full_program' && current === 'full_program') {
+    return json({error: 'Already purchased Full Program.'}, 409)
+  }
+  if (plan === 'pro' && hasLiveProSubscription(ent)) {
+    // Includes past_due/unpaid: a second subscription would double-bill. Fix payment in the portal.
+    return json({error: 'You already have a Pro subscription. Manage it from Billing.', code: 'subscription_exists'}, 409)
+  }
+  const trialEligible = plan === 'pro' && isEligibleForProTrial(ent)
 
   try {
     const userEmail = await getUserEmailById(env.DB, userId).catch(() => null)
@@ -253,17 +262,25 @@ export const onRequest = async (ctx: {request: Request; env: Env}) => {
       params.set('subscription_data[metadata][plan]', plan)
       params.set('subscription_data[metadata][source_intent]', intent)
       params.set('subscription_data[metadata][cadence]', cadence)
+      if (trialEligible) {
+        params.set('subscription_data[trial_period_days]', String(PRO_TRIAL_DAYS))
+        params.set('subscription_data[metadata][trial]', 'true')
+      }
     }
 
     if (checkoutToken) {
       params.set('metadata[checkoutToken]', checkoutToken);
     }
 
-    const session = await stripePost(secretKey, "/v1/checkout/sessions", params);
+    // Collapse double-clicks / retries within a short window into one Checkout Session.
+    const idempotencyWindow = Math.floor(Date.now() / 60_000)
+    const idempotencyKey = await sha256Hex(`checkout:${userId}:${plan}:${cadence}:${checkoutToken}:${idempotencyWindow}`)
+    const session = await stripePost(secretKey, "/v1/checkout/sessions", params, idempotencyKey);
     const redirectUrl: string | undefined = session?.url;
     if (!redirectUrl) return json({ error: "No checkout URL returned" }, 500);
-    return json({ url: redirectUrl }, 200);
+    return json({ url: redirectUrl, trial: trialEligible ? PRO_TRIAL_DAYS : 0 }, 200);
   } catch (err: any) {
-    return json({ error: err?.message ?? "Stripe error" }, 500);
+    console.error('/api/checkout Stripe error', err?.message ?? err)
+    return json({ error: "Unable to start checkout. Please try again." }, 502);
   }
 };

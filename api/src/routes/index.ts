@@ -47,6 +47,7 @@ import {createConnectDashboard, createConnectOnboarding, getConnectStatus} from 
 import {getProviderReporting, getRecipientEarnings} from './marketplace/reporting'
 import {createStoreCheckout, downloadStorePurchase, getStoreOrderStatus, listStorePurchases} from './store/commerce'
 import {getMusicDiscovery} from './music'
+import {CLIENT_IP_HEADER} from './_security'
 import {assignTrackIsrc, exportIsrcRecords, getIsrcRecord, getIsrcSequence, listIsrcRecords, registerExistingIsrc} from './isrc'
 
 export type RouteHandler = (context: any) => Promise<Response> | Response
@@ -125,16 +126,48 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'post', path: '/api/stripe-webhook', handler: stripeWebhook},
 ]
 
+function timingSafeEqualString(a: string, b: string): boolean {
+  if (a.length !== b.length) return false
+  let diff = 0
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  return diff === 0
+}
+
+let warnedMissingProxySecret = false
+
+/**
+ * Resolve the caller IP for rate limiting. The Cloudflare Pages proxy forwards the edge-verified
+ * client IP alongside a shared secret; requests that don't carry the secret fall back to the
+ * trusted-proxy `req.ip`.
+ */
+export function resolveClientIp(request: Parameters<RequestHandler>[0], env: Record<string, unknown>): string {
+  const secret = typeof env.API_PROXY_SECRET === 'string' ? env.API_PROXY_SECRET.trim() : ''
+  const forwarded = (request.get('x-mejay-proxy-client-ip') || '').trim()
+  if (secret) {
+    const presented = (request.get('x-mejay-proxy-secret') || '').trim()
+    if (forwarded && presented && timingSafeEqualString(presented, secret)) return forwarded
+    return request.ip || 'unknown'
+  }
+  if (env.NODE_ENV === 'production' && !warnedMissingProxySecret) {
+    warnedMissingProxySecret = true
+    console.warn('API_PROXY_SECRET is not set; rate limiting trusts the cf-connecting-ip header')
+  }
+  return (request.get('cf-connecting-ip') || '').trim() || request.ip || 'unknown'
+}
+
 export function adaptRoute(handler: RouteHandler, env: Record<string, unknown>): RequestHandler {
   return async (request, response, next) => {
     try {
-      const protocol = request.get('x-forwarded-proto') || request.protocol
-      const host = request.get('x-forwarded-host') || request.get('host')
+      // Express resolves protocol from the trusted proxy hop ('trust proxy'). Never build the
+      // request URL from X-Forwarded-Host: it is client-controlled.
+      const protocol = request.protocol
+      const host = request.get('host')
       const headers = new Headers()
       for (const [key, value] of Object.entries(request.headers)) {
         if (Array.isArray(value)) value.forEach((item) => headers.append(key, item))
         else if (value !== undefined) headers.set(key, value)
       }
+      headers.set(CLIENT_IP_HEADER, resolveClientIp(request, env))
 
       const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : request.body
       const webRequest = new Request(`${protocol}://${host}${request.originalUrl}`, {

@@ -1,5 +1,7 @@
 type Env = {
   API_ORIGIN?: string
+  /** Shared with the API's API_PROXY_SECRET so it can trust the forwarded client IP. */
+  API_PROXY_SECRET?: string
 }
 
 export const onRequest: PagesFunction<Env> = async ({request, env}) => {
@@ -9,6 +11,16 @@ export const onRequest: PagesFunction<Env> = async ({request, env}) => {
 
   const headers = new Headers(request.headers)
   headers.delete('host')
+  // Never forward client-supplied proxy headers; only this function may set them.
+  headers.delete('x-forwarded-host')
+  headers.delete('x-mejay-proxy-secret')
+  headers.delete('x-mejay-proxy-client-ip')
+  headers.delete('x-mejay-client-ip')
+  const clientIp = request.headers.get('cf-connecting-ip')
+  if (env.API_PROXY_SECRET && clientIp) {
+    headers.set('x-mejay-proxy-secret', env.API_PROXY_SECRET)
+    headers.set('x-mejay-proxy-client-ip', clientIp)
+  }
 
   const upstreamResponse = await fetch(
     new Request(targetUrl, {

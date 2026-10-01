@@ -2,6 +2,10 @@ import {verifyPassword} from '../_password'
 import {claimMarketplaceAccess} from '../../marketplace/staff-access'
 
 import {SESSION_TTL_MS, SHORT_SESSION_TTL_MS, addMsIso, makeSessionCookie, normalizeEmail, readJson, sha256Hex} from '../_auth'
+import {applyRateLimit, getClientIp} from '../_security'
+
+/** Failed password attempts allowed per account before a temporary lockout. */
+const MAX_FAILED_LOGINS_PER_EMAIL = 10
 
 type Env = {
   DB: any
@@ -37,17 +41,44 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
 
     if (!email || !password) return json({ok: false, error: 'missing'}, {status: 400})
 
+    const ipLimit = await applyRateLimit({db: env.DB, key: getClientIp(request), purpose: 'login', kind: 'attempt', maxPerWindow: 30})
+    if (!ipLimit.ok) return json({ok: false, error: 'rate_limited'}, {status: 429})
+
+    // Per-account lockout: checked before the password hash so a locked account costs nothing.
+    const emailKey = `email:${email}`
+    const lock = await env.DB
+      .prepare('SELECT locked_until FROM auth_ip_rates WHERE ip = ?1 AND purpose = ?2 AND kind = ?3')
+      .bind(emailKey, 'login', 'failed')
+      .first() as {locked_until: string | null} | null
+    if (lock?.locked_until && lock.locked_until > new Date().toISOString()) {
+      return json({ok: false, error: 'rate_limited'}, {status: 429})
+    }
+    const recordFailure = () => applyRateLimit({
+      db: env.DB,
+      key: emailKey,
+      purpose: 'login',
+      kind: 'failed',
+      maxPerWindow: MAX_FAILED_LOGINS_PER_EMAIL,
+      windowSeconds: 15 * 60,
+    })
+
     const user = (await env.DB
       .prepare('SELECT id, password_hash FROM users WHERE email = ?1')
       .bind(email)
       .first()) as {id: string; password_hash: string | null} | null
 
-    if (!user) return json({ok: false, error: 'invalid_credentials'}, {status: 401})
+    if (!user) {
+      await recordFailure()
+      return json({ok: false, error: 'invalid_credentials'}, {status: 401})
+    }
     if (!user.password_hash) return json({ok: false, error: 'password_not_set'}, {status: 400})
 
     const ok = await verifyPassword(password, user.password_hash)
 
-    if (!ok) return json({ok: false, error: 'invalid_credentials'}, {status: 401})
+    if (!ok) {
+      await recordFailure()
+      return json({ok: false, error: 'invalid_credentials'}, {status: 401})
+    }
 
     await claimMarketplaceAccess(env.DB, user.id, email)
 

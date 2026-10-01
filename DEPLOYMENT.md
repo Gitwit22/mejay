@@ -33,6 +33,15 @@ Set `DATABASE_URL` to the Neon pooled PostgreSQL connection string. Configure th
 
 For cookie authentication, `FRONTEND_URL` must exactly match the Pages origin. Multiple allowed origins can be comma-separated.
 
+### Security-relevant settings
+
+- `API_PROXY_SECRET`: set the same long random value on Render **and** as a Pages runtime variable. The Pages proxy then forwards the edge-verified client IP, which the API uses for login/code rate limiting. Without it the API falls back to the `cf-connecting-ip` header, which callers hitting Render directly can spoof.
+- `ALLOW_DEV_ENDPOINTS` must be `false` in production. Dev behaviour (returning login codes in responses, debug error detail) is enabled only when `NODE_ENV` is not `production` or this flag is `true`; it is never inferred from the request host.
+- Dev admin (`/api/dev-admin/*`) requires **both** `ALLOW_DEV_ADMIN=true` and a non-empty `DEV_ADMIN_EMAILS` allowlist in every environment.
+- `ALLOW_FULL_PROGRAM_CHECKOUT` (API) and `VITE_ENABLE_FULL_PROGRAM_CHECKOUT` (frontend) must agree.
+- Stripe webhook endpoint `/api/stripe-webhook` must subscribe to `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `customer.subscription.*`, `charge.refunded`, `charge.dispute.created`, `charge.dispute.closed`, `transfer.failed`, `payout.failed` and `account.updated` (Connect).
+- Pro checkout grants a 3-day trial (`subscription_data[trial_period_days]`) only to accounts that have never had a subscription.
+
 ## Local development
 
 Start the API and frontend in separate terminals:

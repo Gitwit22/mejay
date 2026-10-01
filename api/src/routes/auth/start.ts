@@ -1,6 +1,5 @@
 import {
   CODE_TTL_MS,
-  LOCKOUT_MS,
   MAX_ATTEMPTS,
   addMsIso,
   normalizeEmail,
@@ -9,13 +8,15 @@ import {
   readJson,
   sha256Hex,
 } from '../_auth'
+import {applyRateLimit, getClientIp, isDevEnvironment} from '../_security'
 
 type Purpose = 'signup_verify' | 'password_reset'
 
 type Env = {
   DB: any
   AUTH_CODE_PEPPER?: string
-  // Optional safety switch: allow dev-only behavior outside localhost.
+  NODE_ENV?: string
+  // Optional safety switch: allow dev-only behavior (returning codes) outside development.
   ALLOW_DEV_ENDPOINTS?: string
 
   // Email (Resend) for login codes
@@ -39,63 +40,13 @@ const json = (body: unknown, init?: ResponseInit) =>
     },
   })
 
-function isLocalHost(req: Request) {
-  const host = new URL(req.url).hostname
-  return host === '127.0.0.1' || host === 'localhost'
-}
-
-function getClientIp(req: Request): string {
-  const cf = (req.headers.get('cf-connecting-ip') || '').trim()
-  if (cf) return cf
-  const xff = (req.headers.get('x-forwarded-for') || '').trim()
-  if (xff) return xff.split(',')[0].trim()
-  return 'unknown'
-}
-
 function parsePurpose(raw: unknown): Purpose {
   if (raw === 'password_reset') return 'password_reset'
   return 'signup_verify'
 }
 
-async function applyIpRateLimit(args: {env: Env; request: Request; purpose: Purpose; kind: 'start' | 'verify'}) {
-  const {env, request, purpose, kind} = args
-  const ip = getClientIp(request)
-  const now = nowIso()
-  const windowSeconds = 10 * 60
-  const maxPerWindow = kind === 'start' ? 8 : 20
-
-  const row = (await env.DB
-    .prepare('SELECT window_start, count, locked_until FROM auth_ip_rates WHERE ip = ?1 AND purpose = ?2 AND kind = ?3')
-    .bind(ip, purpose, kind)
-    .first()) as {window_start: string; count: number; locked_until: string | null} | null
-
-  if (row?.locked_until && row.locked_until > now) {
-    return {ok: false as const}
-  }
-
-  const windowStart = row?.window_start ?? now
-  const shouldReset = row?.window_start ? (Date.parse(now) - Date.parse(row.window_start) > windowSeconds * 1000) : true
-  const nextWindowStart = shouldReset ? now : windowStart
-  const nextCount = (shouldReset ? 0 : (row?.count ?? 0)) + 1
-  const lockedUntil = nextCount > maxPerWindow ? addMsIso(LOCKOUT_MS) : null
-
-  await env.DB
-    .prepare(
-      [
-        'INSERT INTO auth_ip_rates (ip, purpose, kind, window_start, count, locked_until)',
-        'VALUES (?1, ?2, ?3, ?4, ?5, ?6)',
-        'ON CONFLICT(ip, purpose, kind) DO UPDATE SET',
-        'window_start=excluded.window_start,',
-        'count=excluded.count,',
-        'locked_until=excluded.locked_until',
-      ].join(' '),
-    )
-    .bind(ip, purpose, kind, nextWindowStart, nextCount, lockedUntil)
-    .run()
-
-  if (lockedUntil) return {ok: false as const}
-  return {ok: true as const}
-}
+/** Max codes issued per email+purpose per hour, independent of caller IP. */
+const MAX_CODES_PER_EMAIL_PER_HOUR = 5
 
 async function sendLoginCodeEmail(args: {env: Env; to: string; code: string; origin: string}) {
   const {env, to, code, origin} = args
@@ -209,8 +160,19 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
       return json({ok: false, error: 'invalid_email'}, {status: 400})
     }
 
-    const ipLimit = await applyIpRateLimit({env, request, purpose, kind: 'start'})
+    const ipLimit = await applyRateLimit({db: env.DB, key: getClientIp(request), purpose, kind: 'start', maxPerWindow: 8})
     if (!ipLimit.ok) {
+      return json({ok: false, error: 'rate_limited'}, {status: 429})
+    }
+    const emailLimit = await applyRateLimit({
+      db: env.DB,
+      key: `email:${email}`,
+      purpose,
+      kind: 'start',
+      maxPerWindow: MAX_CODES_PER_EMAIL_PER_HOUR,
+      windowSeconds: 60 * 60,
+    })
+    if (!emailLimit.ok) {
       return json({ok: false, error: 'rate_limited'}, {status: 429})
     }
 
@@ -223,13 +185,11 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
       return json({ok: false, error: 'locked'}, {status: 429})
     }
 
-    // Reset attempts if previously locked and lock expired.
-    if (existing?.attempts && existing.attempts >= MAX_ATTEMPTS && (!existing.locked_until || existing.locked_until <= nowIso())) {
-      await env.DB
-        .prepare('UPDATE email_codes SET attempts = 0, locked_until = NULL WHERE email = ?1 AND purpose = ?2')
-        .bind(email, purpose)
-        .run()
-    }
+    // Failed-attempt counters carry over to the new code so reissuing a code can't be used to
+    // reset the guess budget. They only reset once a lockout has fully expired.
+    const lockExpired = Boolean(existing?.attempts && existing.attempts >= MAX_ATTEMPTS)
+      && (!existing?.locked_until || existing.locked_until <= nowIso())
+    const carriedAttempts = lockExpired ? 0 : Number(existing?.attempts ?? 0)
 
     const code = random6DigitCode()
     const pepper = env.AUTH_CODE_PEPPER || 'dev-pepper-change-me'
@@ -239,18 +199,18 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
       .prepare(
         [
           'INSERT INTO email_codes (email, purpose, code_hash, expires_at, attempts, locked_until)',
-          'VALUES (?1, ?2, ?3, ?4, 0, NULL)',
+          'VALUES (?1, ?2, ?3, ?4, ?5, NULL)',
           'ON CONFLICT(email, purpose) DO UPDATE SET',
           'code_hash = excluded.code_hash,',
           'expires_at = excluded.expires_at,',
-          'attempts = 0,',
+          'attempts = excluded.attempts,',
           'locked_until = NULL',
         ].join(' '),
       )
-      .bind(email, purpose, codeHash, addMsIso(CODE_TTL_MS))
+      .bind(email, purpose, codeHash, addMsIso(CODE_TTL_MS), carriedAttempts)
       .run()
 
-    const allowDevReturn = isLocalHost(request) || env.ALLOW_DEV_ENDPOINTS === 'true'
+    const allowDevReturn = isDevEnvironment(env)
 
     const origin = new URL(request.url).origin
     const sent = await sendLoginCodeEmail({env, to: email, code, origin})

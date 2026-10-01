@@ -67,3 +67,24 @@ export async function persistSubscriptionState(args: {
     )
     .run()
 }
+/**
+ * Revoke a one-time Full Program purchase after a full refund or a lost dispute.
+ * Users who still hold a live Pro subscription fall back to Pro; everyone else to free.
+ * Returns true when an entitlement row was downgraded.
+ */
+export async function revokeFullProgramAccess(args: {db: any; userId: string}): Promise<boolean> {
+  const {db, userId} = args
+  const result = await db
+    .prepare(
+      [
+        'UPDATE entitlements SET',
+        "access_type = CASE WHEN subscription_status IN ('active', 'trialing') THEN 'pro' ELSE 'free' END,",
+        "has_full_access = CASE WHEN subscription_status IN ('active', 'trialing') THEN 1 ELSE 0 END,",
+        'updated_at = CURRENT_TIMESTAMP',
+        "WHERE user_id = ?1 AND access_type IN ('full', 'full_program')",
+      ].join(' '),
+    )
+    .bind(userId)
+    .run()
+  return Number(result?.meta?.changes ?? 0) > 0
+}

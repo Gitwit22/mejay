@@ -13,6 +13,7 @@ import {
 } from '../_auth'
 import {parseAccountIntent} from '../../marketplace/onboarding'
 import {claimMarketplaceAccess} from '../../marketplace/staff-access'
+import {isDevEnvironment} from '../_security'
 
 type PreparedQuery = {
   bind: (...values: unknown[]) => {
@@ -32,13 +33,9 @@ type Env = {
   SESSION_PEPPER?: string
   AUTH_TOKEN_SECRET?: string
   COOKIE_SAME_SITE?: 'lax' | 'none' | 'strict'
-  // Optional safety switch: allow dev-only behavior outside localhost.
+  NODE_ENV?: string
+  // Optional safety switch: allow dev-only debug detail outside development.
   ALLOW_DEV_ENDPOINTS?: string
-}
-
-function isLocalHost(req: Request) {
-  const host = new URL(req.url).hostname
-  return host === '127.0.0.1' || host === 'localhost'
 }
 
 const json = (body: unknown, init?: ResponseInit) =>
@@ -166,7 +163,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
     console.error('/api/auth/set-password threw', {errorId, err})
     const message = err instanceof Error ? err.message : String(err)
     const lower = message.toLowerCase()
-    const allowDebug = isLocalHost(request) || env.ALLOW_DEV_ENDPOINTS === 'true'
+    const allowDebug = isDevEnvironment(env)
     if (lower.includes('no such table') || lower.includes('no such column')) {
       return json({ok: false, error: 'db_schema_out_of_date', errorId}, {status: 500})
     }

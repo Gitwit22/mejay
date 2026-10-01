@@ -22,7 +22,14 @@ export function normalizeEmail(email: string) {
 }
 
 export function random6DigitCode() {
-  return String(Math.floor(100000 + Math.random() * 900000))
+  // Cryptographically secure, unbiased draw in [100000, 999999].
+  const range = 900000
+  const limit = Math.floor(0x100000000 / range) * range
+  const buf = new Uint32Array(1)
+  do {
+    crypto.getRandomValues(buf)
+  } while (buf[0] >= limit)
+  return String(100000 + (buf[0] % range))
 }
 
 export async function sha256Hex(input: string) {

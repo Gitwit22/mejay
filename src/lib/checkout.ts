@@ -96,7 +96,10 @@ export async function startCheckout(plan: 'pro' | 'full_program', intent?: 'tria
       const data = (await res
         .clone()
         .json()
-        .catch(() => null)) as null | {error?: unknown; message?: unknown}
+        .catch(() => null)) as null | {error?: unknown; message?: unknown; code?: unknown}
+      if (res.status === 409 && data?.code === 'subscription_exists') {
+        throw new Error('You already have a Pro subscription. Open Billing to update your payment method or manage it.')
+      }
       const msg =
         typeof data?.error === 'string'
           ? data.error
@@ -203,7 +206,10 @@ export async function openBillingPortal() {
       const data = (await res
         .clone()
         .json()
-        .catch(() => null)) as null | {error?: unknown; message?: unknown}
+        .catch(() => null)) as null | {error?: unknown; message?: unknown; code?: unknown}
+      if (res.status === 409 && data?.code === 'subscription_exists') {
+        throw new Error('You already have a Pro subscription. Open Billing to update your payment method or manage it.')
+      }
       const msg =
         typeof data?.message === 'string'
           ? data.message
