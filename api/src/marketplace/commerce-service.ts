@@ -1,4 +1,4 @@
-import {allocateProviderProceeds, calculateSaleAmounts, estimateStripeFeeMinor, refundLedgerEntries, saleLedgerEntries, type TrackSplitInput} from './commerce-money'
+import {allocateProviderProceeds, calculateSaleAmounts, DEFAULT_PLATFORM_FEE_BPS, estimateStripeFeeMinor, refundLedgerEntries, saleLedgerEntries, type TrackSplitInput} from './commerce-money'
 import {allocateCumulativeRefunds, buildReportingEvents, buildReportingEventsForTrackAmounts, insertReportingEvents} from './industry-reporting'
 import {MarketplaceError} from './service'
 import {stripeRequest} from '../services/stripe'
@@ -182,7 +182,7 @@ export class CommerceService {
   constructor(
     private readonly database: Database,
     private readonly secretKey: string,
-    private readonly platformFeeBps = 1000,
+    private readonly platformFeeBps = DEFAULT_PLATFORM_FEE_BPS,
   ) {}
 
   async createCheckout(userId: string, productId: string, frontendOrigin: string): Promise<{url: string; sessionId: string}> {

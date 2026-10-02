@@ -18,6 +18,9 @@ export type SplitAllocation = SplitInput & {
   amountMinor: number
 }
 
+/** MEJay's default cut of each store sale, in basis points (2000 = 20%). */
+export const DEFAULT_PLATFORM_FEE_BPS = 2000
+
 export type SaleAmounts = {
   grossAmountMinor: number
   /**

@@ -271,6 +271,10 @@ export function createProviderRights(input: {releaseId?: string; trackId?: strin
   return request('/api/marketplace/rights-declarations', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
 }
 
+/** Mirrors the API's marketplace pricing policy (sale-policy.ts / commerce-money.ts). */
+export const MINIMUM_RELEASE_PRICE_USD = 3
+export const MEJAY_FEE_RATE = 0.2
+
 /** Create or update the release's price in one atomic request. */
 export async function createProviderPricing(releaseId: string, title: string, amountMinor: number): Promise<void> {
   await request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}/price`, {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({name: title, amountMinor})})

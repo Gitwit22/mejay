@@ -496,8 +496,8 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
 
     it('sets and replaces a release price atomically', async () => {
       const {userId, release} = await createProviderFixture('Pricing')
-      await service.setReleasePrice(userId, release.id, {name: 'Pricing Download', amountMinor: 199})
-      await service.setReleasePrice(userId, release.id, {name: 'Pricing Download', amountMinor: 299})
+      await service.setReleasePrice(userId, release.id, {name: 'Pricing Download', amountMinor: 399})
+      await service.setReleasePrice(userId, release.id, {name: 'Pricing Download', amountMinor: 499})
       const rows = await pool.query<{products: number; active_prices: number; amount: number}>(
         `SELECT COUNT(DISTINCT product.id)::integer AS products,
           COUNT(price.id) FILTER (WHERE price.active)::integer AS active_prices,
@@ -506,7 +506,7 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
          WHERE product.release_id = $1`,
         [release.id],
       )
-      expect(rows.rows[0]).toEqual({products: 1, active_prices: 1, amount: 299})
+      expect(rows.rows[0]).toEqual({products: 1, active_prices: 1, amount: 499})
     })
 
     it('publishes due scheduled releases and restores takedowns to approved', async () => {

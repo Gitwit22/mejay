@@ -1,6 +1,6 @@
 import type {DiscoveryFeaturesInput, ProviderAdminCommand, ReleaseAdminCommand, SplitDisputeInput} from './admin-schemas'
 import {MarketplaceError} from './service'
-import {getReleaseSaleReadiness} from './sale-policy'
+import {formatMinimumPrice, getReleaseSaleReadiness} from './sale-policy'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -464,7 +464,7 @@ export class MarketplaceAdminService {
       if (['schedule', 'publish_now', 'publish_due'].includes(command.action)) {
         const sale = await getReleaseSaleReadiness(db, release.id)
         const unmet = [
-          ...(!sale.hasMinimumPrice ? ['active release product priced at least $1.00 USD'] : []),
+          ...(!sale.hasMinimumPrice ? [`active release product priced at least ${formatMinimumPrice()} USD`] : []),
           ...(!sale.stripeReady ? ['completed Stripe payout setup'] : []),
         ]
         if (unmet.length > 0) {

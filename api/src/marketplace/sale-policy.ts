@@ -5,7 +5,12 @@ type Statement = {
 
 type Database = {prepare: (sql: string) => Statement}
 
-export const MINIMUM_RELEASE_PRICE_MINOR = 100
+/** Lowest price a release can be sold for ($3.00), so every sale clears card fees for everyone. */
+export const MINIMUM_RELEASE_PRICE_MINOR = 300
+
+export function formatMinimumPrice(): string {
+  return `$${(MINIMUM_RELEASE_PRICE_MINOR / 100).toFixed(2)}`
+}
 
 export type ReleaseSaleReadiness = {
   hasMinimumPrice: boolean
@@ -20,7 +25,7 @@ export async function getReleaseSaleReadiness(database: Database, releaseId: str
         -- product.active is not required: unpublish/takedown deactivate products and publishing
         -- re-activates them, so requiring it would block re-publishing forever.
         WHERE product.release_id = release.id AND price.active = TRUE
-          AND price.currency = 'USD' AND price.amount_minor >= 100
+          AND price.currency = 'USD' AND price.amount_minor >= ?2
           AND price.effective_from <= CURRENT_TIMESTAMP
           AND (price.effective_until IS NULL OR price.effective_until > CURRENT_TIMESTAMP)
       ) AS has_minimum_price,
@@ -29,7 +34,7 @@ export async function getReleaseSaleReadiness(database: Database, releaseId: str
      FROM releases release
      JOIN provider_profiles provider ON provider.id = release.provider_profile_id
      WHERE release.id = ?1`,
-  ).bind(releaseId).first<{has_minimum_price: boolean; stripe_ready: boolean}>()
+  ).bind(releaseId, MINIMUM_RELEASE_PRICE_MINOR).first<{has_minimum_price: boolean; stripe_ready: boolean}>()
 
   return {
     hasMinimumPrice: Boolean(readiness?.has_minimum_price),

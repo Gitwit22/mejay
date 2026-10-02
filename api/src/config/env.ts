@@ -21,6 +21,7 @@ export type AppConfig = NodeJS.ProcessEnv & {
 }
 
 import {readIsrcGenerationConfig} from '../marketplace/isrc'
+import {DEFAULT_PLATFORM_FEE_BPS} from '../marketplace/commerce-money'
 
 const developmentSecrets = {
   SESSION_PEPPER: 'dev-session-pepper',
@@ -83,7 +84,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     STRIPE_PRICE_FULL_PROGRAM: production
       ? requireValue(env, 'STRIPE_PRICE_FULL_PROGRAM')
       : env.STRIPE_PRICE_FULL_PROGRAM?.trim() || '',
-    MARKETPLACE_PLATFORM_FEE_BPS: env.MARKETPLACE_PLATFORM_FEE_BPS?.trim() || '1000',
+    MARKETPLACE_PLATFORM_FEE_BPS: env.MARKETPLACE_PLATFORM_FEE_BPS?.trim() || String(DEFAULT_PLATFORM_FEE_BPS),
     ISRC_PREFIX: isrc?.prefix ?? '',
     ISRC_COUNTRY_CODE: isrc?.countryCode ?? '',
     ISRC_REGISTRANT_CODE: isrc?.registrantCode ?? '',

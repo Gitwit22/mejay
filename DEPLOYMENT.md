@@ -40,6 +40,7 @@ For cookie authentication, `FRONTEND_URL` must exactly match the Pages origin. M
 - Dev admin (`/api/dev-admin/*`) requires **both** `ALLOW_DEV_ADMIN=true` and a non-empty `DEV_ADMIN_EMAILS` allowlist in every environment.
 - `ALLOW_FULL_PROGRAM_CHECKOUT` (API) and `VITE_ENABLE_FULL_PROGRAM_CHECKOUT` (frontend) must agree.
 - Stripe webhook endpoint `/api/stripe-webhook` must subscribe to `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `customer.subscription.*`, `charge.refunded`, `charge.dispute.created`, `charge.dispute.closed`, `transfer.failed`, `payout.failed` and `account.updated` (Connect).
+- Marketplace pricing: MEJay keeps `MARKETPLACE_PLATFORM_FEE_BPS` of each store sale (default `2000` = 20%); the artist's share also covers Stripe's processing fee. Releases must be priced at least $3.00. If Render has `MARKETPLACE_PLATFORM_FEE_BPS` set explicitly, that value overrides the default. Past orders keep the rate they were sold at.
 - Pro checkout grants a 3-day trial (`subscription_data[trial_period_days]`) only to accounts that have never had a subscription.
 
 ## Local development

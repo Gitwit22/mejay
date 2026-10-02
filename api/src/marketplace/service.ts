@@ -21,7 +21,7 @@ import type {
   TransitionInput,
   UploadInitInput,
 } from './schemas'
-import {getReleaseSaleReadiness} from './sale-policy'
+import {formatMinimumPrice, getReleaseSaleReadiness, MINIMUM_RELEASE_PRICE_MINOR} from './sale-policy'
 import {inspectUpload, validateInspectedUpload, isTruncatedJpegHeader} from './upload-validation'
 
 type Statement = {
@@ -1025,7 +1025,7 @@ export class MarketplaceService {
           EXISTS (
             SELECT 1 FROM products p JOIN prices pr ON pr.product_id = p.id
             WHERE p.release_id = ?1 AND p.active = TRUE AND pr.active = TRUE
-              AND pr.currency = 'USD' AND pr.amount_minor >= 100
+              AND pr.currency = 'USD' AND pr.amount_minor >= ?2
               AND pr.effective_from <= CURRENT_TIMESTAMP
               AND (pr.effective_until IS NULL OR pr.effective_until > CURRENT_TIMESTAMP)
           ) AS has_price,
@@ -1033,8 +1033,8 @@ export class MarketplaceService {
             SELECT 1 FROM revenue_split_sets s WHERE s.track_id = t.id AND s.active = TRUE
               AND (SELECT COALESCE(SUM(e.share_bps), 0) FROM revenue_split_entries e WHERE e.split_set_id = s.id) = 10000
           ))::integer AS missing_splits`,
-      ).bind(release.id).first<{has_price: boolean; missing_splits: number}>()
-      if (!pricing?.has_price || !sale.hasMinimumPrice) unmet.push('active release product priced at least $1.00 USD')
+      ).bind(release.id, MINIMUM_RELEASE_PRICE_MINOR).first<{has_price: boolean; missing_splits: number}>()
+      if (!pricing?.has_price || !sale.hasMinimumPrice) unmet.push(`active release product priced at least ${formatMinimumPrice()} USD`)
       if (!sale.stripeReady) unmet.push('completed Stripe payout setup')
       if (pricing?.missing_splits !== 0) unmet.push('active revenue splits totaling 10000 basis points for every track')
     }

@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest'
 
-import {allocateProviderProceeds, assertBalancedLedger, calculateSaleAmounts, estimateStripeFeeMinor, refundLedgerEntries, saleLedgerEntries} from './commerce-money'
+import {allocateProviderProceeds, assertBalancedLedger, calculateSaleAmounts, DEFAULT_PLATFORM_FEE_BPS, estimateStripeFeeMinor, refundLedgerEntries, saleLedgerEntries} from './commerce-money'
 
 describe('marketplace commerce money', () => {
   it('calculates the configured platform fee in integer minor units', () => {
@@ -20,6 +20,18 @@ describe('marketplace commerce money', () => {
       platformFeeMinor: 43,
       processingFeeMinor: 33,
       providerProceedsMinor: 57,
+    })
+  })
+
+  it('splits a $3 minimum-price sale with the default 20% MEJay cut', () => {
+    expect(DEFAULT_PLATFORM_FEE_BPS).toBe(2000)
+    const stripeFee = estimateStripeFeeMinor(300)
+    expect(stripeFee).toBe(39)
+    expect(calculateSaleAmounts(300, DEFAULT_PLATFORM_FEE_BPS, stripeFee)).toEqual({
+      grossAmountMinor: 300,
+      platformFeeMinor: 99,
+      processingFeeMinor: 39,
+      providerProceedsMinor: 201,
     })
   })
 

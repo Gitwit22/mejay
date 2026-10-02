@@ -1,5 +1,6 @@
 import {z} from 'zod'
 import {externalIsrcProblem} from './isrc'
+import {formatMinimumPrice, MINIMUM_RELEASE_PRICE_MINOR} from './sale-policy'
 
 const id = z.string().trim().min(1).max(128)
 const nonEmpty = z.string().trim().min(1).max(300)
@@ -183,7 +184,7 @@ export const productSchema = z.object({
 })
 
 export const priceSchema = z.object({
-  amountMinor: z.number().int().min(100, 'Marketplace releases must cost at least $1.00'),
+  amountMinor: z.number().int().min(MINIMUM_RELEASE_PRICE_MINOR, `Marketplace releases must cost at least ${formatMinimumPrice()}`),
   currency: z.literal('USD'),
   effectiveFrom: z.string().datetime({offset: true}).optional(),
   effectiveUntil: z.string().datetime({offset: true}).optional(),
@@ -224,7 +225,7 @@ export type AssetInput = z.infer<typeof assetSchema>
 export type RightsDeclarationInput = z.infer<typeof rightsDeclarationSchema>
 export const releasePriceSchema = z.object({
   name: nonEmpty,
-  amountMinor: z.number().int().min(100).max(100_000_00),
+  amountMinor: z.number().int().min(MINIMUM_RELEASE_PRICE_MINOR, `Marketplace releases must cost at least ${formatMinimumPrice()}`).max(100_000_00),
 }).strict()
 
 export type ReleasePriceInput = z.infer<typeof releasePriceSchema>

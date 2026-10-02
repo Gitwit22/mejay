@@ -1,3 +1,4 @@
+import {DEFAULT_PLATFORM_FEE_BPS} from '../marketplace/commerce-money'
 import {cadenceFromPrice, persistSubscriptionState, revokeFullProgramAccess, stripeTimestampToIso, type SubscriptionState, upsertPurchasedEntitlement} from '../services/billing'
 import {CommerceService} from '../marketplace/commerce-service'
 import {ConnectService} from '../marketplace/connect-service'
@@ -209,7 +210,7 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
       const meta = session?.metadata
       if (meta?.kind === 'marketplace_purchase') {
         if (session?.payment_status !== 'paid') return json({ok: true, ignored: true})
-        const result = await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).fulfillPaidSession(session)
+        const result = await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || DEFAULT_PLATFORM_FEE_BPS)).fulfillPaidSession(session)
         return json({ok: true, orderId: result.orderId})
       }
       const userId = getUserIdFromMetadata(meta)
@@ -260,12 +261,12 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     }
 
     if (type === 'checkout.session.async_payment_succeeded' && obj?.metadata?.kind === 'marketplace_purchase') {
-      const result = await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).fulfillPaidSession(obj)
+      const result = await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || DEFAULT_PLATFORM_FEE_BPS)).fulfillPaidSession(obj)
       return json({ok: true, orderId: result.orderId})
     }
 
     if (type === 'charge.refunded') {
-      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).handleRefund(obj)
+      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || DEFAULT_PLATFORM_FEE_BPS)).handleRefund(obj)
       // One-time Full Program purchases: a full refund revokes access. (Pro refunds are handled
       // by the subscription lifecycle events.)
       if (obj?.refunded === true && !obj?.invoice) {
@@ -277,12 +278,12 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     }
 
     if (type === 'charge.dispute.created') {
-      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).handleDispute(obj, true, eventId)
+      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || DEFAULT_PLATFORM_FEE_BPS)).handleDispute(obj, true, eventId)
       return json({ok: true})
     }
 
     if (type === 'charge.dispute.closed') {
-      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).handleDispute(obj, false, eventId)
+      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || DEFAULT_PLATFORM_FEE_BPS)).handleDispute(obj, false, eventId)
       if (obj?.status === 'lost') {
         const paymentIntentId = typeof obj?.payment_intent === 'string' ? obj.payment_intent : null
         const userId = await fullProgramUserForPaymentIntent(secretKey, paymentIntentId)
@@ -292,7 +293,7 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     }
 
     if (type === 'transfer.failed') {
-      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).handleTransferFailed(obj, eventId)
+      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || DEFAULT_PLATFORM_FEE_BPS)).handleTransferFailed(obj, eventId)
       return json({ok: true})
     }
 

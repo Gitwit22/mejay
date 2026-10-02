@@ -1,3 +1,4 @@
+import {DEFAULT_PLATFORM_FEE_BPS} from '../../marketplace/commerce-money'
 import {getSessionUserId, sha256Hex} from '../_auth'
 import {getClientIp} from '../_security'
 import {CommerceService} from '../../marketplace/commerce-service'
@@ -17,7 +18,7 @@ function json(body: unknown, status = 200): Response {
 function commerceService(context: Context): CommerceService {
   const secretKey = String(context.env.STRIPE_SECRET_KEY || '').trim()
   if (!secretKey) throw new MarketplaceError(503, 'stripe_not_configured', 'Marketplace checkout is not configured')
-  const feeBps = Number(context.env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)
+  const feeBps = Number(context.env.MARKETPLACE_PLATFORM_FEE_BPS || DEFAULT_PLATFORM_FEE_BPS)
   if (!Number.isInteger(feeBps) || feeBps < 0 || feeBps > 10000) {
     throw new MarketplaceError(500, 'platform_fee_invalid', 'Marketplace platform fee configuration is invalid')
   }

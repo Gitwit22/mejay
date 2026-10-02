@@ -1,3 +1,4 @@
+import {DEFAULT_PLATFORM_FEE_BPS} from '../../marketplace/commerce-money'
 import {ZodError} from 'zod'
 
 import {MarketplaceAdminService} from '../../marketplace/admin-service'
@@ -10,7 +11,7 @@ type AdminEnv = EnvWithDb & {STRIPE_SECRET_KEY?: string; MARKETPLACE_PLATFORM_FE
 
 function commerceFor(env: AdminEnv): CommerceService | null {
   const secretKey = env.STRIPE_SECRET_KEY?.trim()
-  return secretKey ? new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)) : null
+  return secretKey ? new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || DEFAULT_PLATFORM_FEE_BPS)) : null
 }
 
 function json(body: unknown, init?: ResponseInit): Response {
