@@ -54,6 +54,40 @@ function distributeByWeights<T extends {id: string}>(amountMinor: number, values
   return new Map(rows.map((row) => [row.value.id, row.amount]))
 }
 
+/**
+ * The configured platform commission (MARKETPLACE_PLATFORM_FEE_BPS), validated. Every service that
+ * prices a sale reads the rate through here so checkout, webhooks, and estimates cannot diverge.
+ */
+export function resolvePlatformFeeBps(env: {MARKETPLACE_PLATFORM_FEE_BPS?: string}): number {
+  const raw = String(env.MARKETPLACE_PLATFORM_FEE_BPS ?? '').trim()
+  const value = raw ? Number(raw) : DEFAULT_PLATFORM_FEE_BPS
+  if (!Number.isInteger(value) || value < 0 || value > 10000) {
+    throw new Error('MARKETPLACE_PLATFORM_FEE_BPS must be an integer between 0 and 10000')
+  }
+  return value
+}
+
+export type SaleEstimate = {
+  grossAmountMinor: number
+  platformCommissionMinor: number
+  estimatedProcessingFeeMinor: number
+  estimatedArtistProceedsMinor: number
+}
+
+/**
+ * Artist-facing estimate for one sale. It runs the exact calculation fulfillment uses when Stripe has
+ * not yet reported the real fee; the final processing fee comes from Stripe's balance transaction.
+ */
+export function estimateSale(grossAmountMinor: number, platformFeeBps: number): SaleEstimate {
+  const amounts = calculateSaleAmounts(grossAmountMinor, platformFeeBps, estimateStripeFeeMinor(grossAmountMinor))
+  return {
+    grossAmountMinor: amounts.grossAmountMinor,
+    platformCommissionMinor: amounts.platformFeeMinor - amounts.processingFeeMinor,
+    estimatedProcessingFeeMinor: amounts.processingFeeMinor,
+    estimatedArtistProceedsMinor: amounts.providerProceedsMinor,
+  }
+}
+
 /** Conservative estimate of Stripe's standard US card fee (2.9% + 30¢) when the real fee is unknown. */
 export function estimateStripeFeeMinor(grossAmountMinor: number): number {
   requireMinorUnits(grossAmountMinor, 'grossAmountMinor')

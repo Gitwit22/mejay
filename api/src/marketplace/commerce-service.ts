@@ -1,7 +1,7 @@
 import {allocateProviderProceeds, calculateSaleAmounts, DEFAULT_PLATFORM_FEE_BPS, estimateStripeFeeMinor, refundLedgerEntries, saleLedgerEntries, type TrackSplitInput} from './commerce-money'
 import {allocateCumulativeRefunds, buildReportingEvents, buildReportingEventsForTrackAmounts, insertReportingEvents} from './industry-reporting'
 import {MarketplaceError} from './service'
-import {stripeRequest} from '../services/stripe'
+import {stripeRequest, StripeRequestError} from '../services/stripe'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -88,6 +88,7 @@ type StripeCheckoutSession = {
   currency?: string
   customer_details?: {email?: string | null}
   customer_email?: string | null
+  livemode?: boolean
   metadata?: Record<string, string | undefined>
 }
 
@@ -325,11 +326,24 @@ export class CommerceService {
     params.set('customer_creation', 'always')
     params.set('customer_email', user.email)
     params.set('client_reference_id', userId)
-    params.set('metadata[kind]', 'marketplace_purchase')
-    params.set('metadata[attemptId]', attemptId)
-    params.set('metadata[userId]', userId)
-    params.set('metadata[productId]', product.product_id)
+    // Reconciliation identifiers only; no buyer PII goes into metadata.
+    const reconciliation: Record<string, string> = {
+      marketplace: 'mejay',
+      kind: 'marketplace_purchase',
+      attemptId,
+      userId,
+      productId: product.product_id,
+      releaseId: product.release_id,
+      providerId: product.provider_profile_id,
+    }
+    for (const [key, value] of Object.entries(reconciliation)) {
+      params.set(`metadata[${key}]`, value)
+      params.set(`payment_intent_data[metadata][${key}]`, value)
+    }
     params.set('payment_intent_data[transfer_group]', transferGroup)
+    // Stripe emails the buyer a receipt for the amount paid; downloads live in Purchased Music.
+    params.set('payment_intent_data[receipt_email]', user.email)
+    params.set('payment_intent_data[description]', `MEJay: ${product.release_title} by ${product.artist_name}. Download it from Purchased Music in MEJay.`.slice(0, 1000))
     params.set('success_url', `${frontendOrigin}/app/purchased?checkout=success&session_id={CHECKOUT_SESSION_ID}`)
     params.set('cancel_url', `${frontendOrigin}/app/store/${encodeURIComponent(product.release_id)}?checkout=cancel`)
     try {
@@ -402,8 +416,8 @@ export class CommerceService {
           (id, buyer_user_id, provider_profile_id, checkout_attempt_id, buyer_email, buyer_country_code, currency,
             gross_amount_minor, platform_fee_minor, provider_proceeds_minor, stripe_fee_minor,
             stripe_checkout_session_id, stripe_payment_intent_id, stripe_charge_id, stripe_balance_transaction_id,
-            stripe_destination_account_id, payment_status, paid_at)
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 'paid', ?17)
+            stripe_destination_account_id, payment_status, paid_at, platform_fee_bps, livemode)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 'paid', ?17, ?18, ?19)
          RETURNING *`,
       ).bind(
         orderId, userId, attempt.provider_profile_id, attempt.id,
@@ -411,7 +425,8 @@ export class CommerceService {
         paymentCountry(intent),
         attempt.currency, amounts.grossAmountMinor, amounts.platformFeeMinor, amounts.providerProceedsMinor,
         charge.stripeFeeMinor, session.id, intentId, charge.chargeId, charge.balanceTransactionId,
-        attempt.stripe_destination_account_id, paidAt,
+        attempt.stripe_destination_account_id, paidAt, attempt.platform_fee_bps,
+        typeof session.livemode === 'boolean' ? session.livemode : null,
       ).first<OrderRow>()
       if (!insertedOrder) throw new Error('Order insert failed')
 
@@ -501,8 +516,55 @@ export class CommerceService {
       return insertedOrder
     })
 
-    await this.ensureProviderTransfer(order)
+    // The buyer's purchase is already committed. A transfer error must not fail the webhook (Stripe
+    // would retry fulfillment for days); record it and let the transfer retry job pay it out.
+    try {
+      await this.ensureProviderTransfer(order)
+    } catch (error) {
+      await this.recordTransferFailure(order, error)
+    }
     return {orderId: order.id}
+  }
+
+  /**
+   * Close the checkout attempt behind a Checkout Session that will never be paid. Grants nothing;
+   * the attempt row is the record that the payment failed or the session expired.
+   */
+  async closeCheckoutAttempt(session: StripeCheckoutSession, outcome: 'payment_failed' | 'expired'): Promise<void> {
+    const attemptId = session.metadata?.attemptId
+    if (!attemptId || session.metadata?.kind !== 'marketplace_purchase') return
+    await this.database.prepare(
+      `UPDATE marketplace_checkout_attempts SET status = ?1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?2 AND stripe_checkout_session_id = ?3 AND status IN ('pending', 'checkout_created')`,
+    ).bind(outcome, attemptId, session.id).run()
+  }
+
+  /** Mark a pending transfer failed once, with an operational incident describing why. */
+  private async recordTransferFailure(order: OrderRow, error: unknown): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error)
+    console.error('[marketplace] provider transfer failed', {orderId: order.id, error: message})
+    // Only a Stripe rejection proves no transfer exists. A network or database error may follow a
+    // transfer Stripe already created, so the order stays pending and the retry job replays the same
+    // idempotency key instead.
+    if (!(error instanceof StripeRequestError)) return
+    const marked = await this.database.prepare(
+      `UPDATE marketplace_orders SET transfer_status = 'failed', updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?1 AND transfer_status = 'pending' RETURNING id`,
+    ).bind(order.id).first<{id: string}>()
+    if (!marked) return
+    await this.database.prepare(
+      `INSERT INTO marketplace_operational_incidents
+        (id, provider_profile_id, order_id, incident_type, details)
+       VALUES (?1, ?2, ?3, 'transfer_failed', ?4)`,
+    ).bind(
+      crypto.randomUUID(), order.provider_profile_id, order.id,
+      JSON.stringify({
+        source: 'transfer_create',
+        code: error.code ?? null,
+        status: error.status,
+        message: message.slice(0, 500),
+      }),
+    ).run()
   }
 
   /**
@@ -527,7 +589,9 @@ export class CommerceService {
         transferred += 1
       } catch (error) {
         failed += 1
-        console.error('[marketplace] provider transfer retry failed', {orderId: order.id, error: error instanceof Error ? error.message : error})
+        await this.recordTransferFailure(order, error).catch((recordError) => {
+          console.error('[marketplace] could not record transfer failure', {orderId: order.id, recordError})
+        })
       }
     }
     return {attempted: results.length, transferred, failed}

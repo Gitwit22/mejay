@@ -250,3 +250,49 @@ export function resolveIndustryReportingBatch(batchId: string, status: 'accepted
     method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({status, reason}),
   })
 }
+export type MarketplaceFinanceFilters = {from?: string; to?: string; providerId?: string; releaseId?: string; status?: string}
+
+export type MarketplaceFinanceSummary = {
+  currency: 'USD'
+  totals: {
+    orders: number
+    grossSalesMinor: number
+    stripeFeesMinor: number
+    ordersWithUnknownStripeFee: number
+    platformCommissionMinor: number
+    processingFeesRecoveredMinor: number
+    artistAllocationMinor: number
+    artistEarningsAfterAdjustmentsMinor: number
+    refundsMinor: number
+    refundedOrders: number
+    netPlatformRevenueMinor: number
+    disputes: {open: number; won: number; lost: number; openAmountMinor: number; lostAmountMinor: number}
+    failedPayments: number
+    pendingTransfers: {count: number; amountMinor: number}
+    failedTransfers: {count: number; amountMinor: number}
+  }
+  transactions: Array<{
+    orderId: string
+    paidAt: string
+    providerName: string | null
+    releaseTitle: string
+    artistName: string
+    grossMinor: number
+    platformCommissionMinor: number
+    stripeFeeMinor: number | null
+    artistAllocationMinor: number
+    refundedMinor: number
+    paymentStatus: string
+    transferStatus: string
+    disputeStatus: string
+    livemode: boolean | null
+  }>
+}
+
+/** Read-only marketplace finance totals and transactions (marketplace admins only). */
+export function getMarketplaceFinance(filters: MarketplaceFinanceFilters): Promise<MarketplaceFinanceSummary> {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(filters)) if (value) params.set(key, value)
+  const query = params.size ? `?${params.toString()}` : ''
+  return request(`/api/marketplace-admin/finance${query}`)
+}

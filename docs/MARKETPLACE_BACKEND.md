@@ -99,11 +99,11 @@ Release-owned tracks, assets, rights, ISRCs, products, prices, and splits are lo
 | `METADATA_COMPLETE` | Required release metadata, primary artist, one or more tracks, ready release artwork, ready audio for every track |
 | `RIGHTS_COMPLETE` | Distribution rights total 10000 bps; master and composition rights each total 10000 bps for every track |
 | `ISRC_COMPLETE` | Every track has one active, globally unique ISRC |
-| `PRICING_COMPLETE` | Active release product priced at least $1.00 USD, completed Stripe payout setup, and active 10000-bps split set for every track |
+| `PRICING_COMPLETE` | Active release product priced at least the minimum ($3.00 USD by default), completed Stripe payout setup, and active 10000-bps split set for every track |
 | `SUBMITTED` | All prior prerequisites are rechecked |
 | `UNDER_REVIEW`, `APPROVED` | Separate marketplace reviewer/admin |
 | `SCHEDULED` | Future `scheduled_release_at` |
-| `LIVE` | No future schedule remains; the $1.00 USD minimum and Stripe payout readiness are rechecked |
+| `LIVE` | No future schedule remains; the minimum price and Stripe payout readiness are rechecked |
 
 Every successful mutation and transition writes an append-only `marketplace_audit_events` row in the same transaction.
 
@@ -122,7 +122,9 @@ The consumer Marketplace reads directly from the publishing catalog:
 
 List, detail, and media queries independently require `releases.status = 'LIVE'`. Publishing an approved release therefore makes it appear automatically, while unpublishing or taking it down removes both catalog metadata and future media access. Store assets remain private in R2 and are streamed with `Cache-Control: private, no-store`; audio responses are limited to the first 5 MB of the uploaded master.
 
-Catalog purchases use authenticated Stripe Checkout sessions that are separate from plan billing. Verified Stripe webhooks create the Neon order, immutable ledger entries, equal-per-track payee allocations, and download entitlement. MEJay retains 10% of gross and transfers the remaining provider proceeds to the provider's Stripe Connect Express account using separate charges and transfers.
+Catalog purchases use authenticated Stripe Checkout sessions that are separate from plan billing. One Checkout Session buys one release from one artist account; there is no multi-seller cart. Verified Stripe webhooks create the Neon order, immutable ledger entries, equal-per-track payee allocations, and download entitlement. MEJay retains `MARKETPLACE_PLATFORM_FEE_BPS` of gross (default 20%) plus recovery of Stripe's processing fee, and transfers the remaining provider proceeds to the provider's Stripe Connect account using separate charges and transfers with `source_transaction`. The commission rate is snapshotted on each order, so changing the setting never alters past sales.
+
+New connected accounts are created with controller properties equivalent to Express (platform-liable for losses and fees, Stripe-collected requirements, Express Dashboard) and onboard only through Stripe-hosted Account Links. `GET /api/marketplace/connect` re-reads the account from Stripe, and `account.updated` keeps it in sync; the onboarding return URL is never treated as proof of completion. `GET /api/marketplace/pricing-policy?amountMinor=` returns the minimum price, commission, and the per-sale estimate from the fulfillment calculator. `GET /api/marketplace-admin/finance` gives marketplace admins read-only totals (gross, Stripe fees, commission, artist allocations, net revenue, refunds, disputes, failed payments, pending transfers) filtered by `from`, `to`, `providerId`, `releaseId`, and `status`.
 
 ## Music discovery
 
@@ -136,7 +138,7 @@ Marketplace admins maintain ordered release and artist picks through one atomic 
 
 Publishing does not insert or synchronize feed rows. The existing atomic transition to `LIVE` sets `published_at` and activates the product; both Store and Music read that same state on their next no-store request. Unpublish and takedown transitions therefore remove releases from both surfaces without a second write path.
 
-Providers connect Stripe from the Provider Portal. Every uploaded release is a paid marketplace release: its active USD price must be at least $1.00, and submission/publication is blocked until Stripe reports submitted details, enabled payouts, and an active transfers capability. Full refunds revoke downloads and reverse the provider transfer; open disputes suspend downloads until Stripe resolves them.
+Providers connect Stripe from the Provider Portal. Every uploaded release is a paid marketplace release: its active USD price must be at least the configured minimum ($3.00 by default), and submission/publication is blocked until Stripe reports submitted details, enabled payouts, and an active transfers capability. Full refunds revoke downloads and reverse the provider transfer; open disputes suspend downloads until Stripe resolves them.
 
 Purchased source files remain private in R2. `GET /api/store/purchases/:entitlementId/files/:fileId/download` requires the owning session and an active entitlement, supports byte ranges, and never exposes the storage key. Sprint 4 temporarily fulfills the original WAV/FLAC upload; standardized consumer derivatives are deferred.
 

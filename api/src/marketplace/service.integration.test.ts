@@ -5,6 +5,8 @@ import {runMigrations} from '../db/migrations'
 import {AccountDeletionService} from '../account/deletion'
 import {MarketplaceAdminService} from './admin-service'
 import {CommerceService} from './commerce-service'
+import {ConnectService} from './connect-service'
+import {MarketplaceFinanceService} from './finance-service'
 import {claimStripeWebhookEvent} from './webhook-events'
 import {MarketplaceService} from './service'
 
@@ -432,7 +434,7 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       return calls
     }
 
-    async function buyLiveRelease(label: string, stripeFee: number) {
+    async function startCheckout(label: string, stripeFee: number) {
       await resetIsrcState()
       const fixture = await prepareLiveRelease(label)
       const product = await pool.query<{id: string}>('SELECT id FROM products WHERE release_id = $1', [fixture.release.id])
@@ -442,16 +444,23 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       const commerce = new CommerceService(new Database(connectionString!, pool) as never, 'sk_test', 1000)
       const checkout = await commerce.createCheckout(buyerId, product.rows[0].id, 'https://app.test')
       const attempt = await pool.query<{id: string}>('SELECT id FROM marketplace_checkout_attempts WHERE stripe_checkout_session_id = $1', [checkout.sessionId])
-      const {orderId} = await commerce.fulfillPaidSession({
+      const session = {
         id: checkout.sessionId,
         payment_status: 'paid',
         payment_intent: `pi_${crypto.randomUUID()}`,
         amount_total: 999,
         currency: 'usd',
+        livemode: false,
         metadata: {kind: 'marketplace_purchase', attemptId: attempt.rows[0].id, userId: buyerId, productId: product.rows[0].id},
-      })
+      }
+      return {fixture, commerce, calls, buyerId, session, productId: product.rows[0].id}
+    }
+
+    async function buyLiveRelease(label: string, stripeFee: number) {
+      const started = await startCheckout(label, stripeFee)
+      const {orderId} = await started.commerce.fulfillPaidSession(started.session)
       const order = await pool.query('SELECT * FROM marketplace_orders WHERE id = $1', [orderId])
-      return {commerce, calls, order: order.rows[0], buyerId}
+      return {...started, order: order.rows[0]}
     }
 
     it('charges the Stripe fee to the provider and reverses the provider share of partial refunds', async () => {
@@ -477,6 +486,148 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       expect(final.rows[0]).toEqual({transfer_reversed_minor: 840, transfer_status: 'reversed'})
       const purchases = await commerce.listPurchases(buyerId) as Array<{entitlement_status: string}>
       expect(purchases[0].entitlement_status).toBe('revoked')
+    })
+
+    it('fulfills a verified paid session exactly once, snapshotting commission and mode', async () => {
+      const {commerce, calls, order, buyerId, session} = await buyLiveRelease('Once', 59)
+      expect(order).toMatchObject({platform_fee_bps: 1000, livemode: false, payment_status: 'paid'})
+      const checkoutCall = calls.find((call) => call.url.endsWith('/v1/checkout/sessions'))
+      expect(checkoutCall?.body?.get('metadata[marketplace]')).toBe('mejay')
+      expect(checkoutCall?.body?.get('payment_intent_data[metadata][attemptId]')).toBe(session.metadata.attemptId)
+      expect(checkoutCall?.body?.get('line_items[0][price_data][unit_amount]')).toBe('999')
+
+      // A duplicate webhook delivery (or the async-success event after completion) must not
+      // create a second order, entitlement, ledger posting, or transfer.
+      const again = await commerce.fulfillPaidSession(session)
+      expect(again.orderId).toBe(order.id)
+      const counts = await pool.query<{orders: number; entitlements: number; sales: number}>(
+        `SELECT (SELECT COUNT(*)::integer FROM marketplace_orders WHERE stripe_checkout_session_id = $1) AS orders,
+          (SELECT COUNT(*)::integer FROM download_entitlements WHERE order_id = $2) AS entitlements,
+          (SELECT COUNT(*)::integer FROM marketplace_ledger_transactions WHERE order_id = $2 AND transaction_type = 'sale') AS sales`,
+        [session.id, order.id],
+      )
+      expect(counts.rows[0]).toEqual({orders: 1, entitlements: 1, sales: 1})
+      expect(calls.filter((call) => call.url.endsWith('/v1/transfers'))).toHaveLength(1)
+      const purchases = await commerce.listPurchases(buyerId) as Array<{entitlement_status: string}>
+      expect(purchases.map((purchase) => purchase.entitlement_status)).toEqual(['active'])
+    })
+
+    it('grants nothing from the success redirect, an unpaid session, or a failed payment', async () => {
+      const {commerce, buyerId, session} = await startCheckout('Unpaid', 59)
+      // The success_url only polls status; no order exists until a verified webhook fulfills it.
+      const status = await commerce.getOrderStatus(buyerId, session.id) as {order_id: string | null; status: string}
+      expect(status.order_id).toBeNull()
+      await expect(commerce.listPurchases(buyerId)).resolves.toEqual([])
+
+      await expect(commerce.fulfillPaidSession({...session, payment_status: 'unpaid'})).rejects.toMatchObject({code: 'payment_not_paid'})
+      await commerce.closeCheckoutAttempt(session, 'payment_failed')
+      const attempt = await pool.query<{status: string}>('SELECT status FROM marketplace_checkout_attempts WHERE id = $1', [session.metadata.attemptId])
+      expect(attempt.rows[0].status).toBe('payment_failed')
+      await expect(commerce.listPurchases(buyerId)).resolves.toEqual([])
+    })
+
+    it('rejects a paid session whose amount differs from the server-priced snapshot', async () => {
+      const {commerce, buyerId, session} = await startCheckout('Tamper', 59)
+      await expect(commerce.fulfillPaidSession({...session, amount_total: 1})).rejects.toMatchObject({code: 'checkout_amount_mismatch'})
+      await expect(commerce.listPurchases(buyerId)).resolves.toEqual([])
+    })
+
+    it('keeps the sale-time commission when the configured rate changes later', async () => {
+      const {order} = await buyLiveRelease('Rate', 59)
+      const laterRate = new CommerceService(new Database(connectionString!, pool) as never, 'sk_test', 3000)
+      await laterRate.handleRefund({id: order.stripe_charge_id, amount: 999, amount_refunded: 999})
+      const after = await pool.query('SELECT gross_amount_minor, platform_fee_minor, provider_proceeds_minor, platform_fee_bps, payment_status FROM marketplace_orders WHERE id = $1', [order.id])
+      expect(after.rows[0]).toEqual({gross_amount_minor: 999, platform_fee_minor: 159, provider_proceeds_minor: 840, platform_fee_bps: 1000, payment_status: 'refunded'})
+      const ledger = await pool.query<{transaction_type: string}>('SELECT transaction_type FROM marketplace_ledger_transactions WHERE order_id = $1 ORDER BY occurred_at, transaction_type', [order.id])
+      expect(ledger.rows.map((row) => row.transaction_type)).toEqual(expect.arrayContaining(['sale', 'provider_transfer', 'refund', 'transfer_reversal']))
+    })
+
+    it('records a transfer Stripe rejects, still fulfills the buyer, and pays it on retry', async () => {
+      await resetIsrcState()
+      const fixture = await prepareLiveRelease('Reject')
+      const product = await pool.query<{id: string}>('SELECT id FROM products WHERE release_id = $1', [fixture.release.id])
+      const buyerId = crypto.randomUUID()
+      await pool.query(`INSERT INTO users (id, email, account_intent) VALUES ($1, $2, 'consumer')`, [buyerId, `reject-${buyerId.slice(0, 8)}@example.test`])
+      let rejectTransfers = true
+      let transferCalls = 0
+      vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+        const url = String(input)
+        const reply = (data: unknown, status = 200) => new Response(JSON.stringify(data), {status})
+        if (url.includes('/v1/checkout/sessions')) return reply({id: `cs_${crypto.randomUUID()}`, url: 'https://checkout.stripe.test'})
+        if (url.includes('/v1/payment_intents/')) return reply({id: 'pi_reject', status: 'succeeded', latest_charge: {id: `ch_${crypto.randomUUID()}`, balance_transaction: {id: 'txn_1', fee: 59}}})
+        if (url.endsWith('/v1/transfers')) {
+          transferCalls += 1
+          return rejectTransfers
+            ? reply({error: {message: 'Insufficient capabilities for transfer', code: 'insufficient_capabilities_for_transfer'}}, 400)
+            : reply({id: `tr_${crypto.randomUUID()}`})
+        }
+        throw new Error(`Unexpected Stripe call ${url}`)
+      }))
+      const commerce = new CommerceService(new Database(connectionString!, pool) as never, 'sk_test', 1000)
+      const checkout = await commerce.createCheckout(buyerId, product.rows[0].id, 'https://app.test')
+      const attempt = await pool.query<{id: string}>('SELECT id FROM marketplace_checkout_attempts WHERE stripe_checkout_session_id = $1', [checkout.sessionId])
+      const {orderId} = await commerce.fulfillPaidSession({
+        id: checkout.sessionId, payment_status: 'paid', payment_intent: 'pi_reject', amount_total: 999, currency: 'usd',
+        metadata: {kind: 'marketplace_purchase', attemptId: attempt.rows[0].id, userId: buyerId, productId: product.rows[0].id},
+      })
+      const failed = await pool.query<{transfer_status: string}>('SELECT transfer_status FROM marketplace_orders WHERE id = $1', [orderId])
+      expect(failed.rows[0].transfer_status).toBe('failed')
+      const incidents = await pool.query<{details: {code: string}}>(`SELECT details FROM marketplace_operational_incidents WHERE order_id = $1 AND incident_type = 'transfer_failed'`, [orderId])
+      expect(incidents.rows).toHaveLength(1)
+      expect(incidents.rows[0].details.code).toBe('insufficient_capabilities_for_transfer')
+      const purchases = await commerce.listPurchases(buyerId) as Array<{entitlement_status: string}>
+      expect(purchases[0].entitlement_status).toBe('active')
+
+      // A second failing retry does not duplicate the incident; a successful one pays out.
+      await commerce.retryPendingTransfers({providerId: fixture.provider.id})
+      rejectTransfers = false
+      const retry = await commerce.retryPendingTransfers({providerId: fixture.provider.id})
+      expect(retry).toEqual({attempted: 1, transferred: 1, failed: 0})
+      const paid = await pool.query<{transfer_status: string}>('SELECT transfer_status FROM marketplace_orders WHERE id = $1', [orderId])
+      expect(paid.rows[0].transfer_status).toBe('transferred')
+      const incidentCount = await pool.query<{count: number}>(`SELECT COUNT(*)::integer AS count FROM marketplace_operational_incidents WHERE order_id = $1`, [orderId])
+      expect(incidentCount.rows[0].count).toBe(1)
+      expect(transferCalls).toBe(3)
+    })
+
+    it('blocks checkout while the artist Stripe account cannot receive transfers', async () => {
+      await resetIsrcState()
+      const fixture = await prepareLiveRelease('Restricted')
+      const product = await pool.query<{id: string}>('SELECT id FROM products WHERE release_id = $1', [fixture.release.id])
+      const buyerId = crypto.randomUUID()
+      await pool.query(`INSERT INTO users (id, email, account_intent) VALUES ($1, $2, 'consumer')`, [buyerId, `restricted-${buyerId.slice(0, 8)}@example.test`])
+      await pool.query(`UPDATE provider_profiles SET stripe_payouts_enabled = FALSE, stripe_transfers_status = 'inactive' WHERE id = $1`, [fixture.provider.id])
+      const calls = stubStripe(59)
+      const commerce = new CommerceService(new Database(connectionString!, pool) as never, 'sk_test', 1000)
+      await expect(commerce.createCheckout(buyerId, product.rows[0].id, 'https://app.test')).rejects.toMatchObject({code: 'provider_payout_not_ready'})
+      expect(calls).toHaveLength(0)
+    })
+
+    it('authorizes downloads only for the owner of an active purchase', async () => {
+      const {commerce, order, buyerId} = await buyLiveRelease('Download', 59)
+      const [purchase] = await commerce.listPurchases(buyerId) as Array<{entitlement_id: string; files: Array<{id: string}>}>
+      const fileId = purchase.files[0].id
+      await expect(commerce.getDownload(buyerId, purchase.entitlement_id, fileId)).resolves.toMatchObject({mimeType: 'audio/wav'})
+      await expect(commerce.getDownload(crypto.randomUUID(), purchase.entitlement_id, fileId)).rejects.toMatchObject({code: 'download_not_found'})
+      await commerce.handleRefund({id: order.stripe_charge_id, amount: 999, amount_refunded: 999})
+      await expect(commerce.getDownload(buyerId, purchase.entitlement_id, fileId)).rejects.toMatchObject({code: 'download_not_found'})
+    })
+
+    it('reports reconciled marketplace finances to admins only', async () => {
+      const {order, fixture} = await buyLiveRelease('Finance', 59)
+      const finance = new MarketplaceFinanceService(new Database(connectionString!, pool) as never)
+      await expect(finance.getSummary(reviewerUserId, {})).rejects.toMatchObject({code: 'marketplace_admin_required'})
+      const summary = await finance.getSummary(adminUserId, {providerId: fixture.provider.id})
+      expect(summary.totals).toMatchObject({
+        orders: 1, grossSalesMinor: 999, platformCommissionMinor: 100, processingFeesRecoveredMinor: 59,
+        artistAllocationMinor: 840, stripeFeesMinor: 59, netPlatformRevenueMinor: 100, refundsMinor: 0,
+      })
+      expect(summary.transactions[0]).toMatchObject({orderId: order.id, grossMinor: 999, platformCommissionMinor: 100})
+      const today = new Date().toISOString().slice(0, 10)
+      const filtered = await finance.getSummary(adminUserId, {providerId: fixture.provider.id, from: '2000-01-01', to: '2000-01-02'})
+      expect(filtered.totals.orders).toBe(0)
+      const dated = await finance.getSummary(adminUserId, {providerId: fixture.provider.id, from: today, to: today, paymentStatus: 'paid'})
+      expect(dated.totals.orders).toBe(1)
     })
 
     it('pays out held transfers once a suspended provider is reinstated', async () => {
@@ -554,6 +705,40 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       const second = await commerce.createCheckout(buyerId, product.rows[0].id, 'https://app.test')
       expect(second.sessionId).toBe(first.sessionId)
       expect(created).toBe(1)
+    })
+
+    it('creates Connect accounts with controller properties for the signed-in artist only', async () => {
+      const {userId, provider} = await createProviderFixture('Onboard')
+      await pool.query(`UPDATE provider_profiles SET stripe_account_id = NULL, stripe_details_submitted = FALSE,
+        stripe_payouts_enabled = FALSE, stripe_transfers_status = 'inactive' WHERE id = $1`, [provider.id])
+      const bodies: URLSearchParams[] = []
+      vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+        const url = String(input)
+        if (init?.body instanceof URLSearchParams) bodies.push(init.body)
+        if (url.endsWith('/v1/accounts')) return new Response(JSON.stringify({id: `acct_new_${provider.id.slice(0, 8)}`, details_submitted: false, capabilities: {transfers: 'inactive'}}), {status: 200})
+        if (url.endsWith('/v1/account_links')) return new Response(JSON.stringify({url: 'https://connect.stripe.test/onboarding'}), {status: 200})
+        throw new Error(`Unexpected Stripe call ${url}`)
+      }))
+      const connect = new ConnectService(new Database(connectionString!, pool) as never, 'sk_test')
+      const result = await connect.createOnboardingLink(userId, 'https://app.test')
+      expect(result.url).toBe('https://connect.stripe.test/onboarding')
+      expect(result.status.onboardingStatus).toBe('onboarding_required')
+      const account = bodies[0]
+      expect(account.get('type')).toBeNull()
+      expect(account.get('controller[stripe_dashboard][type]')).toBe('express')
+      expect(account.get('controller[losses][payments]')).toBe('application')
+      expect(account.get('capabilities[transfers][requested]')).toBe('true')
+      expect(bodies[1].get('return_url')).toBe('https://app.test/app/artist?section=payout&connect=return')
+      const audits = await pool.query<{action: string}>(`SELECT action FROM marketplace_audit_events WHERE provider_profile_id = $1 AND entity_type = 'stripe_account' ORDER BY occurred_at`, [provider.id])
+      expect(audits.rows.map((row) => row.action)).toEqual(expect.arrayContaining(['stripe_account.created', 'stripe_account.onboarding_started']))
+
+      // A viewer on the artist account cannot start onboarding; a user with no artist account has
+      // nothing to connect (no request can name another artist's account).
+      const viewerId = crypto.randomUUID()
+      await pool.query(`INSERT INTO users (id, email, account_intent) VALUES ($1, $2, 'provider')`, [viewerId, `viewer-${viewerId.slice(0, 8)}@example.test`])
+      await pool.query(`INSERT INTO provider_members (provider_profile_id, user_id, role) VALUES ($1, $2, 'viewer')`, [provider.id, viewerId])
+      await expect(connect.createOnboardingLink(viewerId, 'https://app.test')).rejects.toMatchObject({code: 'provider_admin_required'})
+      await expect(connect.createOnboardingLink(crypto.randomUUID(), 'https://app.test')).rejects.toMatchObject({code: 'provider_not_found'})
     })
 
     it('deletes a provider that only has abandoned checkouts', async () => {

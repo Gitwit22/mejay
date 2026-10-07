@@ -5,8 +5,28 @@ type Statement = {
 
 type Database = {prepare: (sql: string) => Statement}
 
-/** Lowest price a release can be sold for ($3.00), so every sale clears card fees for everyone. */
-export const MINIMUM_RELEASE_PRICE_MINOR = 300
+/** Default lowest price a release can be sold for ($3.00), so every sale clears card fees for everyone. */
+export const DEFAULT_MINIMUM_RELEASE_PRICE_MINOR = 300
+/** Floor enforced by the `prices_active_sale_policy_check` database constraint (migration 8). */
+const DATABASE_MINIMUM_PRICE_MINOR = 100
+const MAXIMUM_PRICE_MINOR = 100_000_00
+
+/**
+ * Reads MINIMUM_TRACK_PRICE_CENTS. The override can raise or lower the minimum, but never below
+ * the database floor, so a misconfiguration fails at startup instead of on the first price save.
+ */
+export function resolveMinimumReleasePriceMinor(env: Record<string, string | undefined>): number {
+  const raw = env.MINIMUM_TRACK_PRICE_CENTS?.trim()
+  if (!raw) return DEFAULT_MINIMUM_RELEASE_PRICE_MINOR
+  const value = Number(raw)
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < DATABASE_MINIMUM_PRICE_MINOR || value > MAXIMUM_PRICE_MINOR) {
+    throw new Error(`MINIMUM_TRACK_PRICE_CENTS must be an integer between ${DATABASE_MINIMUM_PRICE_MINOR} and ${MAXIMUM_PRICE_MINOR}`)
+  }
+  return value
+}
+
+/** The platform-wide minimum release price in USD cents (the single source for schemas, readiness, and UI). */
+export const MINIMUM_RELEASE_PRICE_MINOR = resolveMinimumReleasePriceMinor(process.env)
 
 export function formatMinimumPrice(): string {
   return `$${(MINIMUM_RELEASE_PRICE_MINOR / 100).toFixed(2)}`

@@ -1,5 +1,5 @@
-import {useState} from 'react'
-import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
+import {useEffect, useState} from 'react'
+import {keepPreviousData, useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {ArrowLeft, Check, ChevronRight, Disc3, Upload} from 'lucide-react'
 import {Link, useNavigate, useParams} from 'react-router-dom'
 
@@ -25,8 +25,7 @@ import {
   updateProviderRelease,
   updateProviderTrack,
   uploadProviderAsset,
-  MEJAY_FEE_RATE,
-  MINIMUM_RELEASE_PRICE_USD,
+  getMarketplacePricingPolicy,
 } from '@/lib/providerApi'
 
 const steps: Array<{id: ReleaseDraftStep; label: string}> = [
@@ -228,13 +227,39 @@ function RightsStep({detail}: {detail: ProviderReleaseDetail}) {
   return <><StepHeading title="Rights" detail="Affirm worldwide distribution, master, and composition ownership before submission." /><div className="space-y-5"><Field label="Rights holder"><Input value={holder} onChange={(event) => setHolder(event.target.value)} required /></Field><div className="border-y border-white/10 py-4 text-sm text-zinc-400">{missing.length === 0 ? <span className="text-emerald-400">All required rights are declared at 100%.</span> : `${missing.length} declarations will be recorded at 100% worldwide ownership.`}</div><Button disabled={!holder.trim() || missing.length === 0 || save.isPending} onClick={() => save.mutate()}>{save.isPending ? 'Saving...' : missing.length === 0 ? 'Rights complete' : 'Affirm and save rights'}</Button>{save.isError && <p className="text-sm text-red-400">{save.error.message}</p>}</div></>
 }
 
+const usd = (minor: number) => `$${(minor / 100).toFixed(2)}`
+
+/** Whole cents from a dollar string; null for anything that is not a non-negative amount with at most 2 decimals. */
+function parseUsdToMinor(value: string): number | null {
+  const trimmed = value.trim()
+  if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return null
+  const [dollars, cents = ''] = trimmed.split('.')
+  return Number(dollars) * 100 + Number(cents.padEnd(2, '0'))
+}
+
 function PricingStep({detail}: {detail: ProviderReleaseDetail}) {
   const queryClient = useQueryClient()
-  const [price, setPrice] = useState(detail.product?.amount_minor != null ? (detail.product.amount_minor / 100).toFixed(2) : MINIMUM_RELEASE_PRICE_USD.toFixed(2))
-  const numericPrice = Number(price)
+  const policy = useQuery({queryKey: ['marketplace', 'pricing-policy'], queryFn: () => getMarketplacePricingPolicy(), staleTime: 5 * 60_000})
+  const minimumMinor = policy.data?.minimumPriceMinor
+  const [price, setPrice] = useState(detail.product?.amount_minor != null ? (detail.product.amount_minor / 100).toFixed(2) : '')
+  // New releases start at the server-configured minimum once it is known.
+  useEffect(() => {
+    if (minimumMinor !== undefined && detail.product?.amount_minor == null) setPrice((current) => current || (minimumMinor / 100).toFixed(2))
+  }, [minimumMinor, detail.product?.amount_minor])
+  const amountMinor = parseUsdToMinor(price)
+  const meetsMinimum = amountMinor !== null && minimumMinor !== undefined && amountMinor >= minimumMinor
   const pricingEditable = ['DRAFT', 'METADATA_COMPLETE', 'RIGHTS_COMPLETE', 'ISRC_COMPLETE', 'PRICING_COMPLETE', 'CHANGES_REQUESTED'].includes(detail.release.status)
-  const save = useMutation({mutationFn: () => createProviderPricing(detail.release.id, detail.release.title, Math.round(Number(price) * 100)), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', detail.release.id]}); toast({title: 'Release price saved'})}})
-  return <><StepHeading title="Pricing" detail={`Every MEJay release is sold in USD for at least $${MINIMUM_RELEASE_PRICE_USD.toFixed(2)}.`} /><div className="max-w-sm space-y-5"><Field label="USD price"><Input type="number" min={MINIMUM_RELEASE_PRICE_USD} step="0.01" value={price} onChange={(event) => setPrice(event.target.value)} disabled={!pricingEditable} /></Field>{detail.product?.amount_minor != null && <p className="text-sm text-emerald-400">Current price: ${(Number(detail.product.amount_minor) / 100).toFixed(2)} USD</p>}{pricingEditable && <Button disabled={!Number.isFinite(numericPrice) || numericPrice < MINIMUM_RELEASE_PRICE_USD || save.isPending} onClick={() => save.mutate()}>{detail.product?.amount_minor != null ? 'Update price' : 'Save price'}</Button>}{Number.isFinite(numericPrice) && numericPrice >= MINIMUM_RELEASE_PRICE_USD && <PayoutEstimate amountMinor={Math.round(numericPrice * 100)} />}{save.isError && <p className="text-sm text-red-400">{save.error.message}</p>}</div></>
+  const save = useMutation({mutationFn: () => createProviderPricing(detail.release.id, detail.release.title, amountMinor!), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', detail.release.id]}); toast({title: 'Release price saved'})}})
+  const headline = minimumMinor === undefined ? 'Every MEJay release is sold in USD.' : `Every MEJay release is sold in USD for at least ${usd(minimumMinor)}.`
+  return <><StepHeading title="Pricing" detail={headline} /><div className="max-w-sm space-y-5">
+    <Field label="Track price (USD)"><Input type="number" inputMode="decimal" min={minimumMinor !== undefined ? minimumMinor / 100 : undefined} step="0.01" value={price} onChange={(event) => setPrice(event.target.value)} disabled={!pricingEditable} /></Field>
+    {policy.isError && <p className="text-sm text-red-400">Pricing rules are unavailable right now. Try again shortly.</p>}
+    {detail.product?.amount_minor != null && <p className="text-sm text-emerald-400">Current price: {usd(Number(detail.product.amount_minor))} USD</p>}
+    {amountMinor !== null && minimumMinor !== undefined && !meetsMinimum && <p className="text-sm text-amber-300">The minimum price is {usd(minimumMinor)} USD.</p>}
+    {pricingEditable && <Button disabled={!meetsMinimum || save.isPending} onClick={() => save.mutate()}>{detail.product?.amount_minor != null ? 'Update price' : 'Save price'}</Button>}
+    {meetsMinimum && <PayoutEstimate amountMinor={amountMinor!} />}
+    {save.isError && <p className="text-sm text-red-400">{save.error.message}</p>}
+  </div></>
 }
 
 function SplitsStep({detail}: {detail: ProviderReleaseDetail}) {
@@ -256,11 +281,26 @@ function ReviewStep({detail}: {detail: ProviderReleaseDetail}) {
   const latestFeedback = detail.reviewEvents.find((event) => event.note)?.note
   return <><StepHeading title="Review & Submit" detail="Confirm the release package before sending it to MEJay Publishing." />{latestFeedback && <div className="mb-5 border border-amber-400/30 bg-amber-400/5 p-4 text-sm text-amber-200"><p className="font-medium">Review feedback</p><p className="mt-1">{latestFeedback}</p></div>}<div className="divide-y divide-white/10 border-y border-white/10">{detail.prerequisites.length === 0 ? <div className="flex items-center gap-3 py-4 text-emerald-400"><Check className="h-4 w-4" />All submission requirements are complete</div> : detail.prerequisites.map((item) => <div key={item} className="py-3 text-sm text-zinc-400">Required: {item}</div>)}</div><Button className="mt-6 bg-emerald-400 text-zinc-950 hover:bg-emerald-300" disabled={!editable || detail.prerequisites.length > 0 || submit.isPending} onClick={() => submit.mutate()}>{submit.isPending ? 'Submitting...' : editable ? 'Submit to MEJay Review' : `Release is ${detail.release.status.replace(/_/g, ' ')}`}</Button>{submit.isError && <p className="mt-3 text-sm text-red-400">{submit.error.message}</p>}</>
 }
-/** Mirrors the API's default fee model: 20% MEJay commission plus Stripe's 2.9% + 30¢ processing fee. */
+/** Per-sale estimate computed by the API with the same calculator used when a sale is fulfilled. */
 function PayoutEstimate({amountMinor}: {amountMinor: number}) {
-  const commission = Math.round(amountMinor * MEJAY_FEE_RATE)
-  const processing = Math.round(amountMinor * 0.029) + 30
-  const payout = Math.max(0, amountMinor - commission - processing)
-  const format = (value: number) => `$${(value / 100).toFixed(2)}`
-  return <p className="text-xs text-zinc-400">Estimated payout per sale: <span className="text-zinc-200">{format(payout)}</span> after the {format(commission)} MEJay fee ({Math.round(MEJAY_FEE_RATE * 100)}%) and ~{format(processing)} Stripe processing fee (deducted from your share).</p>
+  const estimate = useQuery({
+    queryKey: ['marketplace', 'pricing-estimate', amountMinor],
+    queryFn: () => getMarketplacePricingPolicy(amountMinor),
+    placeholderData: keepPreviousData,
+    staleTime: 5 * 60_000,
+  })
+  if (estimate.isError) return <p className="text-xs text-red-400">The earnings estimate is unavailable right now.</p>
+  const policy = estimate.data
+  if (!policy?.estimate) return null
+  const {platformCommissionMinor, estimatedProcessingFeeMinor, estimatedArtistProceedsMinor, grossAmountMinor} = policy.estimate
+  const rows: Array<[string, string]> = [
+    ['Track price', `${usd(grossAmountMinor)} USD`],
+    [`MEJay commission (${(policy.platformFeeBps / 100).toFixed(policy.platformFeeBps % 100 === 0 ? 0 : 2)}%)`, `-${usd(platformCommissionMinor)}`],
+    ['Estimated Stripe processing', `-${usd(estimatedProcessingFeeMinor)}`],
+  ]
+  return <div className="border border-white/10 bg-white/[0.03] p-3 text-xs text-zinc-400" aria-live="polite">
+    <dl className="space-y-1">{rows.map(([label, value]) => <div key={label} className="flex justify-between gap-4"><dt>{label}</dt><dd className="tabular-nums text-zinc-300">{value}</dd></div>)}
+      <div className="flex justify-between gap-4 border-t border-white/10 pt-1 font-medium text-zinc-100"><dt>Estimated artist share</dt><dd className="tabular-nums">{usd(estimatedArtistProceedsMinor)}</dd></div></dl>
+    <p className="mt-2">Stripe sets the actual processing fee per payment (for example, international cards cost more), and it comes out of your share. Your exact earnings for each sale appear in Sales.</p>
+  </div>
 }

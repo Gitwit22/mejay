@@ -28,6 +28,7 @@ const report: ProviderSalesReport = {
   salesByTerritory: [{countryCode: 'US', units: 315, grossMinor: 50000, earningsMinor: 40000}],
   downloads: [{release_id: 'release-1', release_title: 'Night Drive', track_id: 'track-1', track_title: 'Getaway', download_count: 240}],
   refunds: [{orderId: 'order-1', saleDate: '2026-09-17T10:00:00.000Z', releaseId: 'release-1', releaseTitle: 'Night Drive', amountMinor: 1000, status: 'partially_refunded'}],
+  transactions: [{orderId: 'a1b2c3d4-0000-4000-8000-000000000001', saleDate: '2026-09-17T10:00:00.000Z', releaseId: 'release-1', releaseTitle: 'Night Drive', priceMinor: 299, earningsMinor: 201, status: 'paid', payoutStatus: 'transferred'}],
   recipientLiabilities: [{name: 'Producer', email: 'producer@example.com', role: 'producer', allocatedMinor: 30000, refundAdjustmentMinor: 2000, owedMinor: 28000}],
 }
 
@@ -57,6 +58,11 @@ describe('provider reporting views', () => {
     expect(screen.getByText('Sales by Territory')).toBeInTheDocument()
     expect(screen.getByRole('heading', {name: 'Downloads'})).toBeInTheDocument()
     expect(screen.getByRole('heading', {name: 'Refunds'})).toBeInTheDocument()
+    expect(screen.getByRole('heading', {name: 'Transactions'})).toBeInTheDocument()
+    expect(screen.getByText('A1B2C3D4')).toBeInTheDocument()
+    expect(screen.getByText('$2.99')).toBeInTheDocument()
+    expect(screen.getByText('$2.01')).toBeInTheDocument()
+    expect(screen.getByText('Paid out')).toBeInTheDocument()
     unmount()
 
     renderReporting(<ProviderEarningsReporting range="30d" onRangeChange={vi.fn()} />)

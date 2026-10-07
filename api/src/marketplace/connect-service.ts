@@ -32,7 +32,39 @@ type StripeAccount = {
   requirements?: Record<string, unknown>
 }
 
+/**
+ * Artist-facing lifecycle of the Stripe connected account, derived only from Stripe-reported state:
+ * - not_connected: no Stripe account yet
+ * - onboarding_required: account exists but Stripe-hosted onboarding was not submitted
+ * - restricted: Stripe disabled the account or requirements are past due
+ * - verification_required: Stripe needs more information or is verifying what was submitted
+ * - connected: verified, but payouts or transfers are not active yet
+ * - payouts_enabled: ready to sell (details submitted, payouts enabled, transfers active)
+ */
+export type ConnectOnboardingStatus =
+  | 'not_connected' | 'onboarding_required' | 'restricted' | 'verification_required' | 'connected' | 'payouts_enabled'
+
+function requirementList(requirements: Record<string, unknown>, key: string): string[] {
+  const value = requirements[key]
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+export function connectOnboardingStatus(row: Pick<ProviderRow,
+  'stripe_account_id' | 'stripe_details_submitted' | 'stripe_payouts_enabled' | 'stripe_transfers_status' | 'stripe_requirements'>): ConnectOnboardingStatus {
+  if (!row.stripe_account_id) return 'not_connected'
+  if (!row.stripe_details_submitted) return 'onboarding_required'
+  const requirements = row.stripe_requirements ?? {}
+  const disabledReason = typeof requirements.disabled_reason === 'string' && requirements.disabled_reason.trim() !== ''
+  if (disabledReason || requirementList(requirements, 'past_due').length > 0) return 'restricted'
+  if (row.stripe_payouts_enabled && row.stripe_transfers_status === 'active') return 'payouts_enabled'
+  if (requirementList(requirements, 'currently_due').length > 0 || requirementList(requirements, 'pending_verification').length > 0) {
+    return 'verification_required'
+  }
+  return 'connected'
+}
+
 export type ConnectStatus = {
+  onboardingStatus: ConnectOnboardingStatus
   connected: boolean
   accountId: string | null
   detailsSubmitted: boolean
@@ -46,6 +78,7 @@ export type ConnectStatus = {
 
 function status(row: ProviderRow): ConnectStatus {
   return {
+    onboardingStatus: connectOnboardingStatus(row),
     connected: Boolean(row.stripe_account_id),
     accountId: row.stripe_account_id,
     detailsSubmitted: row.stripe_details_submitted,
@@ -93,7 +126,13 @@ export class ConnectService {
     let provider = await this.provider(userId, true)
     if (!provider.stripe_account_id) {
       const params = new URLSearchParams()
-      params.set('type', 'express')
+      // Controller properties equivalent to an Express account (Stripe's current guidance; `type` is
+      // legacy). The platform carries negative-balance liability and fees, Stripe collects
+      // requirements, and the artist gets the Express Dashboard. Only new accounts are affected.
+      params.set('controller[losses][payments]', 'application')
+      params.set('controller[fees][payer]', 'application')
+      params.set('controller[requirement_collection]', 'stripe')
+      params.set('controller[stripe_dashboard][type]', 'express')
       params.set('capabilities[transfers][requested]', 'true')
       params.set('metadata[providerId]', provider.id)
       if (provider.country_code) params.set('country', provider.country_code)
@@ -114,6 +153,7 @@ export class ConnectService {
         `UPDATE provider_profiles SET stripe_account_id = ?1, stripe_account_synced_at = CURRENT_TIMESTAMP,
           updated_at = CURRENT_TIMESTAMP WHERE id = ?2 AND stripe_account_id IS NULL`,
       ).bind(account.id, provider.id).run()
+      await this.audit(provider.id, userId, account.id, 'stripe_account.created')
       await this.syncAccount(account)
       provider = await this.provider(userId, true)
     }
@@ -125,6 +165,7 @@ export class ConnectService {
     params.set('return_url', `${frontendOrigin}/app/artist?section=payout&connect=return`)
     const link = await stripeRequest<{url?: string}>({secretKey: this.secretKey, method: 'POST', path: '/v1/account_links', params})
     if (!link.url) throw new MarketplaceError(502, 'stripe_invalid_response', 'Stripe did not return an onboarding link')
+    await this.audit(provider.id, userId, provider.stripe_account_id!, 'stripe_account.onboarding_started')
     return {url: link.url, status: status(provider)}
   }
 
@@ -162,6 +203,14 @@ export class ConnectService {
       account.id,
     ).run()
     if (before) {
+      const statusOf = (data: Record<string, unknown>) => connectOnboardingStatus({
+        stripe_account_id: account.id,
+        stripe_details_submitted: data.stripe_details_submitted === true,
+        stripe_payouts_enabled: data.stripe_payouts_enabled === true,
+        stripe_transfers_status: data.stripe_transfers_status as ProviderRow['stripe_transfers_status'],
+        stripe_requirements: (typeof data.stripe_requirements === 'object' && data.stripe_requirements !== null
+          ? data.stripe_requirements : {}) as Record<string, unknown>,
+      })
       const after = {
         stripe_details_submitted: account.details_submitted === true,
         stripe_charges_enabled: account.charges_enabled === true,
@@ -169,12 +218,28 @@ export class ConnectService {
         stripe_transfers_status: transfersStatus,
         stripe_requirements: account.requirements ?? {},
       }
+      const previousStatus = statusOf(before)
+      const nextStatus = statusOf(after)
+      const action = previousStatus === nextStatus ? 'stripe_account.synced'
+        : nextStatus === 'payouts_enabled' ? 'stripe_account.connected'
+          : nextStatus === 'restricted' ? 'stripe_account.restricted'
+            : 'stripe_account.synced'
       await this.database.prepare(
         `INSERT INTO marketplace_audit_events
           (id, provider_profile_id, entity_type, entity_id, action, before_data, after_data, metadata)
-         VALUES (?1, ?2, 'stripe_account', ?3, 'stripe_account.synced', ?4, ?5, '{}'::jsonb)`,
-      ).bind(crypto.randomUUID(), before.id, account.id, JSON.stringify(before), JSON.stringify(after)).run()
+         VALUES (?1, ?2, 'stripe_account', ?3, ?4, ?5, ?6, ?7)`,
+      ).bind(
+        crypto.randomUUID(), before.id, account.id, action, JSON.stringify(before), JSON.stringify(after),
+        JSON.stringify({previousStatus, status: nextStatus}),
+      ).run()
     }
+  }
+
+  private async audit(providerId: string, actorUserId: string, accountId: string, action: string): Promise<void> {
+    await this.database.prepare(
+      `INSERT INTO marketplace_audit_events (id, provider_profile_id, actor_user_id, entity_type, entity_id, action, metadata)
+       VALUES (?1, ?2, ?3, 'stripe_account', ?4, ?5, '{}'::jsonb)`,
+    ).bind(crypto.randomUUID(), providerId, actorUserId, accountId, action).run()
   }
 
   async handlePayoutFailed(accountId: string | null, payout: {id?: string; failure_code?: string; failure_message?: string}, stripeEventId: string): Promise<void> {

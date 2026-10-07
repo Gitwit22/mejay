@@ -30,6 +30,8 @@ export type ProviderSalesReport = {
   salesByTerritory: Array<{countryCode: string | null; units: number; grossMinor: number; earningsMinor: number}>
   downloads: Array<{release_id: string; release_title: string; track_id: string | null; track_title: string; download_count: number}>
   refunds: Array<{orderId: string; saleDate: string; releaseId: string; releaseTitle: string; amountMinor: number; status: string}>
+  /** Optional so reports from an older API still render. orderId is an internal reference, never buyer data. */
+  transactions?: Array<{orderId: string; saleDate: string; releaseId: string; releaseTitle: string; priceMinor: number; earningsMinor: number; status: string; payoutStatus: string}>
   recipientLiabilities: Array<{name: string; email: string | null; role: string | null; allocatedMinor: number; refundAdjustmentMinor: number; owedMinor: number}>
 }
 
@@ -271,9 +273,26 @@ export function createProviderRights(input: {releaseId?: string; trackId?: strin
   return request('/api/marketplace/rights-declarations', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
 }
 
-/** Mirrors the API's marketplace pricing policy (sale-policy.ts / commerce-money.ts). */
-export const MINIMUM_RELEASE_PRICE_USD = 3
-export const MEJAY_FEE_RATE = 0.2
+export type MarketplacePricingPolicy = {
+  currency: 'USD'
+  minimumPriceMinor: number
+  platformFeeBps: number
+  estimate: {
+    grossAmountMinor: number
+    platformCommissionMinor: number
+    estimatedProcessingFeeMinor: number
+    estimatedArtistProceedsMinor: number
+  } | null
+}
+
+/**
+ * The server's marketplace sale policy (minimum price, commission) and, for an amount, the per-sale
+ * estimate from the same calculator fulfillment uses. The UI keeps no copy of the fee model.
+ */
+export function getMarketplacePricingPolicy(amountMinor?: number): Promise<MarketplacePricingPolicy> {
+  const query = amountMinor === undefined ? '' : `?amountMinor=${encodeURIComponent(String(amountMinor))}`
+  return request(`/api/marketplace/pricing-policy${query}`)
+}
 
 /** Create or update the release's price in one atomic request. */
 export async function createProviderPricing(releaseId: string, title: string, amountMinor: number): Promise<void> {

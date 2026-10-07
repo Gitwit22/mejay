@@ -39,12 +39,13 @@ import {
   updateTrack,
   finalizeUpload,
 } from './marketplace'
-import {commandProvider as marketplaceAdminCommandProvider, commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview, recordSplitDispute, replaceDiscoveryFeatures, retryProviderPayouts} from './marketplace-admin'
+import {commandProvider as marketplaceAdminCommandProvider, commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview, recordSplitDispute, replaceDiscoveryFeatures, retryProviderPayouts, getFinanceSummary as marketplaceAdminFinance} from './marketplace-admin'
 import {createIndustryReportingBatch, createIndustryReportingCorrection, exportIndustryReportingBatch, getIndustryReporting, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting} from './marketplace-admin/reporting'
 import {onRequest as stripeWebhook} from './stripe-webhook'
 import {getCatalogAsset, getCatalogRelease, listCatalog, recordCatalogPreview} from './store'
 import {createConnectDashboard, createConnectOnboarding, getConnectStatus} from './marketplace/connect'
 import {getProviderReporting, getRecipientEarnings} from './marketplace/reporting'
+import {getPricingPolicy} from './marketplace/pricing'
 import {createStoreCheckout, downloadStorePurchase, getStoreOrderStatus, getStorePurchaseArtwork, listStorePurchases} from './store/commerce'
 import {getMusicDiscovery} from './music'
 import {CLIENT_IP_HEADER} from './_security'
@@ -84,6 +85,7 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'post', path: '/api/marketplace/connect/onboarding', handler: createConnectOnboarding},
   {method: 'post', path: '/api/marketplace/connect/dashboard', handler: createConnectDashboard},
   {method: 'get', path: '/api/marketplace/reporting', handler: getProviderReporting},
+  {method: 'get', path: '/api/marketplace/pricing-policy', handler: getPricingPolicy},
   {method: 'get', path: '/api/marketplace/recipient-earnings', handler: getRecipientEarnings},
   {method: 'post', path: '/api/marketplace/providers', handler: createProvider},
   {method: 'get', path: '/api/marketplace/dashboard', handler: getDashboard},
@@ -117,6 +119,7 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'post', path: '/api/marketplace-admin/split-disputes', handler: recordSplitDispute},
   {method: 'post', path: '/api/marketplace-admin/payouts/retry', handler: retryProviderPayouts},
   {method: 'get', path: '/api/marketplace-admin/overview', handler: marketplaceAdminOverview},
+  {method: 'get', path: '/api/marketplace-admin/finance', handler: marketplaceAdminFinance},
   {method: 'put', path: '/api/marketplace-admin/discovery/features', handler: replaceDiscoveryFeatures},
   {method: 'get', path: '/api/marketplace-admin/reporting', handler: getIndustryReporting},
   {method: 'post', path: '/api/marketplace-admin/reporting/validate', handler: validateIndustryReporting},

@@ -1,4 +1,4 @@
-import {DEFAULT_PLATFORM_FEE_BPS} from '../marketplace/commerce-money'
+import {resolvePlatformFeeBps} from '../marketplace/commerce-money'
 import {cadenceFromPrice, persistSubscriptionState, revokeFullProgramAccess, stripeTimestampToIso, type SubscriptionState, upsertPurchasedEntitlement} from '../services/billing'
 import {CommerceService} from '../marketplace/commerce-service'
 import {ConnectService} from '../marketplace/connect-service'
@@ -10,6 +10,8 @@ type Env = {
   DB: D1Database
   STRIPE_SECRET_KEY: string
   STRIPE_WEBHOOK_SECRET: string
+  /** Signing secret of the separate Connect ("connected accounts") endpoint, if one is configured. */
+  STRIPE_CONNECT_WEBHOOK_SECRET?: string
   STRIPE_PRICE_PRO: string
   STRIPE_PRICE_YEARLY: string
   MARKETPLACE_PLATFORM_FEE_BPS?: string
@@ -135,6 +137,25 @@ export async function verifyStripeWebhook(args: {payload: string; header: string
   return false
 }
 
+/**
+ * A payload is authentic if it verifies against any configured endpoint secret. Stripe signs
+ * platform events and connected-account events (account.updated, payout.failed) with the secret of
+ * the endpoint that received them, and those are two different endpoints.
+ */
+export async function verifyStripeWebhookWithAnySecret(args: {payload: string; header: string; secrets: string[]; nowSeconds?: number}): Promise<boolean> {
+  for (const secret of args.secrets) {
+    if (await verifyStripeWebhook({payload: args.payload, header: args.header, secret, nowSeconds: args.nowSeconds})) return true
+  }
+  return false
+}
+
+/** true for live keys, false for test keys, null when the key format is unrecognized. */
+export function stripeKeyLivemode(secretKey: string): boolean | null {
+  if (/^(sk|rk)_live_/.test(secretKey)) return true
+  if (/^(sk|rk)_test_/.test(secretKey)) return false
+  return null
+}
+
 function getUserIdFromMetadata(meta: any): string | null {
   const raw = meta?.userId
   if (typeof raw !== 'string') return null
@@ -182,15 +203,26 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
 
   try {
     const secretKey = getRequiredEnv(env, 'STRIPE_SECRET_KEY').trim()
-    const webhookSecret = getRequiredEnv(env, 'STRIPE_WEBHOOK_SECRET').trim()
+    const webhookSecrets = [
+      getRequiredEnv(env, 'STRIPE_WEBHOOK_SECRET').trim(),
+      String(env.STRIPE_CONNECT_WEBHOOK_SECRET ?? '').trim(),
+    ].filter(Boolean)
 
     const sigHeader = request.headers.get('stripe-signature') ?? ''
     const payload = await request.text()
 
-    const ok = await verifyStripeWebhook({payload, header: sigHeader, secret: webhookSecret})
+    const ok = await verifyStripeWebhookWithAnySecret({payload, header: sigHeader, secrets: webhookSecrets})
     if (!ok) return json({error: 'Invalid signature'}, {status: 400})
 
     const event = JSON.parse(payload) as any
+    // Never let a test-mode event touch live records (or the reverse). Acknowledge without claiming
+    // so a misconfigured endpoint is visible in logs but Stripe stops retrying.
+    const keyLivemode = stripeKeyLivemode(secretKey)
+    if (keyLivemode !== null && typeof event?.livemode === 'boolean' && event.livemode !== keyLivemode) {
+      console.error('[stripe-webhook] Event mode does not match STRIPE_SECRET_KEY mode; ignoring', {eventId: event?.id, type: event?.type, livemode: event.livemode})
+      return json({ok: true, ignored: true})
+    }
+    const commerce = () => new CommerceService(env.DB, secretKey, resolvePlatformFeeBps(env))
     const type = String(event?.type ?? '')
     const obj = event?.data?.object
     const eventCreatedAt = stripeTimestampToIso(event?.created) ?? new Date().toISOString()
@@ -210,7 +242,7 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
       const meta = session?.metadata
       if (meta?.kind === 'marketplace_purchase') {
         if (session?.payment_status !== 'paid') return json({ok: true, ignored: true})
-        const result = await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || DEFAULT_PLATFORM_FEE_BPS)).fulfillPaidSession(session)
+        const result = await commerce().fulfillPaidSession(session)
         return json({ok: true, orderId: result.orderId})
       }
       const userId = getUserIdFromMetadata(meta)
@@ -261,12 +293,24 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     }
 
     if (type === 'checkout.session.async_payment_succeeded' && obj?.metadata?.kind === 'marketplace_purchase') {
-      const result = await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || DEFAULT_PLATFORM_FEE_BPS)).fulfillPaidSession(obj)
+      const result = await commerce().fulfillPaidSession(obj)
       return json({ok: true, orderId: result.orderId})
     }
 
+    // Delayed payment methods that ultimately fail, and sessions that expire unpaid. Nothing was
+    // granted for these, so only the checkout attempt is closed.
+    if (type === 'checkout.session.async_payment_failed' && obj?.metadata?.kind === 'marketplace_purchase') {
+      await commerce().closeCheckoutAttempt(obj, 'payment_failed')
+      return json({ok: true})
+    }
+
+    if (type === 'checkout.session.expired' && obj?.metadata?.kind === 'marketplace_purchase') {
+      await commerce().closeCheckoutAttempt(obj, 'expired')
+      return json({ok: true})
+    }
+
     if (type === 'charge.refunded') {
-      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || DEFAULT_PLATFORM_FEE_BPS)).handleRefund(obj)
+      await commerce().handleRefund(obj)
       // One-time Full Program purchases: a full refund revokes access. (Pro refunds are handled
       // by the subscription lifecycle events.)
       if (obj?.refunded === true && !obj?.invoice) {
@@ -278,12 +322,12 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     }
 
     if (type === 'charge.dispute.created') {
-      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || DEFAULT_PLATFORM_FEE_BPS)).handleDispute(obj, true, eventId)
+      await commerce().handleDispute(obj, true, eventId)
       return json({ok: true})
     }
 
     if (type === 'charge.dispute.closed') {
-      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || DEFAULT_PLATFORM_FEE_BPS)).handleDispute(obj, false, eventId)
+      await commerce().handleDispute(obj, false, eventId)
       if (obj?.status === 'lost') {
         const paymentIntentId = typeof obj?.payment_intent === 'string' ? obj.payment_intent : null
         const userId = await fullProgramUserForPaymentIntent(secretKey, paymentIntentId)
@@ -293,7 +337,7 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     }
 
     if (type === 'transfer.failed') {
-      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || DEFAULT_PLATFORM_FEE_BPS)).handleTransferFailed(obj, eventId)
+      await commerce().handleTransferFailed(obj, eventId)
       return json({ok: true})
     }
 

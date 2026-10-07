@@ -1,9 +1,10 @@
-import {DEFAULT_PLATFORM_FEE_BPS} from '../../marketplace/commerce-money'
+import {resolvePlatformFeeBps} from '../../marketplace/commerce-money'
 import {ZodError} from 'zod'
 
 import {MarketplaceAdminService} from '../../marketplace/admin-service'
 import {discoveryFeaturesSchema, providerAdminCommandSchema, releaseAdminCommandSchema, splitDisputeSchema} from '../../marketplace/admin-schemas'
 import {CommerceService} from '../../marketplace/commerce-service'
+import {MarketplaceFinanceService, normalizeFinanceFilters} from '../../marketplace/finance-service'
 import {MarketplaceError} from '../../marketplace/service'
 import {getSessionUserId, readJson, type EnvWithDb} from '../_auth'
 
@@ -11,7 +12,7 @@ type AdminEnv = EnvWithDb & {STRIPE_SECRET_KEY?: string; MARKETPLACE_PLATFORM_FE
 
 function commerceFor(env: AdminEnv): CommerceService | null {
   const secretKey = env.STRIPE_SECRET_KEY?.trim()
-  return secretKey ? new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || DEFAULT_PLATFORM_FEE_BPS)) : null
+  return secretKey ? new CommerceService(env.DB, secretKey, resolvePlatformFeeBps(env)) : null
 }
 
 function json(body: unknown, init?: ResponseInit): Response {
@@ -121,6 +122,28 @@ export const retryProviderPayouts = async (context: {request: Request; env: Admi
   } catch (error) {
     if (error instanceof MarketplaceError) return json({ok: false, error: error.code, message: error.message}, {status: error.status})
     console.error('[marketplace-admin] payout retry failed', error)
+    return json({ok: false, error: 'server_error'}, {status: 500})
+  }
+}
+
+export const getFinanceSummary = async (context: {request: Request; env: EnvWithDb}): Promise<Response> => {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+  const userId = await getSessionUserId(context.request, context.env)
+  if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+  try {
+    const params = new URL(context.request.url).searchParams
+    const filters = normalizeFinanceFilters({
+      from: params.get('from') ?? undefined,
+      to: params.get('to') ?? undefined,
+      providerId: params.get('providerId') ?? undefined,
+      releaseId: params.get('releaseId') ?? undefined,
+      status: params.get('status') ?? undefined,
+    })
+    const data = await new MarketplaceFinanceService(context.env.DB).getSummary(userId, filters)
+    return json({ok: true, data})
+  } catch (error) {
+    if (error instanceof MarketplaceError) return json({ok: false, error: error.code, message: error.message}, {status: error.status})
+    console.error('[marketplace-admin] finance summary failed', error)
     return json({ok: false, error: 'server_error'}, {status: 500})
   }
 }

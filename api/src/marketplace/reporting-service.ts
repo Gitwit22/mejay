@@ -66,6 +66,11 @@ export type ProviderSalesReport = {
   salesByTerritory: Array<{countryCode: string | null; units: number; grossMinor: number; earningsMinor: number}>
   downloads: DownloadRow[]
   refunds: Array<{orderId: string; saleDate: string; releaseId: string; releaseTitle: string; amountMinor: number; status: string}>
+  /**
+   * One row per sale, newest first. orderId is MEJay's internal order reference (no buyer details);
+   * earningsMinor is the artist share after refunds and lost disputes.
+   */
+  transactions: Array<{orderId: string; saleDate: string; releaseId: string; releaseTitle: string; priceMinor: number; earningsMinor: number; status: string; payoutStatus: string}>
   recipientLiabilities: Array<{name: string; email: string | null; role: string | null; allocatedMinor: number; refundAdjustmentMinor: number; owedMinor: number}>
 }
 
@@ -201,6 +206,16 @@ export function buildProviderSalesReport(
     salesByTerritory: [...territories.values()].sort((left, right) => right.units - left.units || right.grossMinor - left.grossMinor || (left.countryCode ?? '').localeCompare(right.countryCode ?? '')),
     downloads: [...downloads].sort((left, right) => Number(right.download_count) - Number(left.download_count) || left.track_title.localeCompare(right.track_title)),
     refunds: orders.filter((order) => Number(order.refunded_amount_minor) > 0).map((order) => ({orderId: order.id, saleDate: order.paid_at, releaseId: order.release_id, releaseTitle: order.release_title, amountMinor: Number(order.refunded_amount_minor), status: order.payment_status})).sort((left, right) => right.saleDate.localeCompare(left.saleDate)),
+    transactions: orders.map((order) => ({
+      orderId: order.id,
+      saleDate: order.paid_at,
+      releaseId: order.release_id,
+      releaseTitle: order.release_title,
+      priceMinor: Number(order.gross_amount_minor),
+      earningsMinor: reportingOrderAmounts(moneyFor(order)).earningsMinor,
+      status: order.dispute_status === 'open' || order.dispute_status === 'lost' ? `dispute_${order.dispute_status}` : order.payment_status,
+      payoutStatus: order.transfer_status,
+    })).sort((left, right) => right.saleDate.localeCompare(left.saleDate)).slice(0, 200),
     recipientLiabilities: [...liabilities.values()].sort((left, right) => right.owedMinor - left.owedMinor || left.name.localeCompare(right.name)),
   }
 }

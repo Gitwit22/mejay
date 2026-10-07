@@ -2,7 +2,13 @@ import {apiFetch, apiUrl} from './api'
 
 type Envelope<T> = {ok: true; data: T} | {ok: false; error: string; message?: string}
 
+/** Derived by the API from Stripe-reported account state; never from the onboarding return URL. */
+export type ConnectOnboardingStatus =
+  | 'not_connected' | 'onboarding_required' | 'restricted' | 'verification_required' | 'connected' | 'payouts_enabled'
+
 export type ConnectStatus = {
+  /** Optional so an older API response still renders. */
+  onboardingStatus?: ConnectOnboardingStatus
   connected: boolean
   accountId: string | null
   detailsSubmitted: boolean
@@ -13,6 +19,7 @@ export type ConnectStatus = {
   requirements: {
     currently_due?: string[]
     eventually_due?: string[]
+    past_due?: string[]
     disabled_reason?: string | null
   }
   syncedAt: string | null
