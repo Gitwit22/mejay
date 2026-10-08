@@ -1,5 +1,6 @@
 import {MarketplaceError} from '../../marketplace/service'
 import {previewByteLimit, resolvePreviewRange, StoreService} from '../../marketplace/store-service'
+import {ArtistProfileService} from '../../marketplace/artist-profile-service'
 import type {PrivateBucket} from '../../services/r2'
 import {getSessionUserId, readJson} from '../_auth'
 import {applyRateLimit, getClientIp} from '../_security'
@@ -29,6 +30,17 @@ export async function listCatalog(context: Context): Promise<Response> {
   if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, 500)
   try {
     return json({ok: true, data: await new StoreService(context.env.DB).listCatalog()})
+  } catch (error) {
+    return marketplaceError(error)
+  }
+}
+
+export async function getPublicArtist(context: Context): Promise<Response> {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, 500)
+  const slug = context.params?.slug?.trim().toLowerCase()
+  if (!slug || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug) || slug.length > 80) return json({ok: false, error: 'not_found'}, 404)
+  try {
+    return json({ok: true, data: await new ArtistProfileService(context.env.DB as never).getPublicArtist(slug)})
   } catch (error) {
     return marketplaceError(error)
   }

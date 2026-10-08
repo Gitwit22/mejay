@@ -113,6 +113,9 @@ export class AccountDeletionService {
         await db.prepare(
           'UPDATE marketplace_operational_incidents SET provider_profile_id = NULL WHERE provider_profile_id = ?1',
         ).bind(membership.provider_profile_id).run()
+        // Release certifications are immutable; deleting the whole account is the one sanctioned
+        // purge, enabled for this transaction only.
+        await db.prepare("SELECT set_config('mejay.allow_certification_purge', 'on', true)").first()
         await db.prepare('DELETE FROM releases WHERE provider_profile_id = ?1').bind(membership.provider_profile_id).run()
         await db.prepare('DELETE FROM artists WHERE provider_profile_id = ?1').bind(membership.provider_profile_id).run()
         await db.prepare('DELETE FROM provider_members WHERE provider_profile_id = ?1').bind(membership.provider_profile_id).run()

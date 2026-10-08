@@ -14,6 +14,10 @@ export const releaseAdminCommandSchema = z.discriminatedUnion('action', [
   z.object({action: z.literal('unpublish'), expectedVersion}),
   z.object({action: z.literal('takedown'), expectedVersion, note}),
   z.object({action: z.literal('restore'), expectedVersion, note}),
+  // Rights review: clearing records the reviewer's decision on documented/uncertain third-party
+  // material; flagging returns the release to the artist with the rights problem.
+  z.object({action: z.literal('clear_rights'), expectedVersion, note}),
+  z.object({action: z.literal('flag_rights'), expectedVersion, note}),
 ])
 
 export type ReleaseAdminCommand = z.infer<typeof releaseAdminCommandSchema>

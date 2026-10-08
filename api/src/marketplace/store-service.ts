@@ -52,10 +52,11 @@ export function resolvePreviewRange(rangeHeader: string | null, limit: number): 
 export class StoreService {
   constructor(private readonly database: Database) {}
 
-  async listCatalog(): Promise<unknown[]> {
+  /** Public LIVE catalog; `artistId` narrows it to one artist's primary releases (artist pages). */
+  async listCatalog(artistId?: string): Promise<unknown[]> {
     const {results} = await this.database.prepare(
       `SELECT r.id, r.title, r.release_type, r.genre, r.original_release_date, r.published_at,
-        artist.id AS artist_id, artist.name AS artist_name,
+        artist.id AS artist_id, artist.name AS artist_name, artist.slug AS artist_slug,
         artwork.id AS artwork_asset_id,
         offer.product_id, offer.amount_minor, offer.currency,
         (provider.suspended_at IS NULL AND provider.stripe_details_submitted AND provider.stripe_payouts_enabled
@@ -82,11 +83,11 @@ export class StoreService {
        LEFT JOIN tracks track ON track.release_id = r.id
        LEFT JOIN marketplace_assets preview ON preview.track_id = track.id
          AND preview.kind = 'audio' AND preview.processing_status = 'ready'
-       WHERE r.status = 'LIVE'
+       WHERE r.status = 'LIVE' AND (?1 = '' OR artist.id = ?1)
       GROUP BY r.id, artist.id, artist.name, artwork.id, offer.product_id, offer.amount_minor, offer.currency,
         provider.suspended_at, provider.stripe_details_submitted, provider.stripe_payouts_enabled, provider.stripe_transfers_status
        ORDER BY r.published_at DESC, r.updated_at DESC`,
-    ).all()
+    ).bind(artistId ?? '').all()
     return results
   }
 
@@ -94,7 +95,7 @@ export class StoreService {
     const release = await this.database.prepare(
       `SELECT r.id, r.title, r.version_title, r.release_type, r.genre, r.subgenre,
         r.original_release_date, r.published_at, r.label_name,
-        artist.id AS artist_id, artist.name AS artist_name,
+        artist.id AS artist_id, artist.name AS artist_name, artist.slug AS artist_slug,
         artwork.id AS artwork_asset_id,
         offer.product_id, offer.amount_minor, offer.currency,
         (provider.suspended_at IS NULL AND provider.stripe_details_submitted AND provider.stripe_payouts_enabled
@@ -167,11 +168,18 @@ export class StoreService {
 
   async getAsset(assetId: string): Promise<StoreAsset> {
     const asset = await this.database.prepare(
+      // Only public kinds: release artwork and audio previews of LIVE releases, and profile imagery
+      // of artists who have a LIVE release. Rights documents are never served from here.
       `SELECT asset.storage_key, asset.mime_type, asset.byte_size, track.duration_ms
        FROM marketplace_assets asset
        LEFT JOIN tracks track ON track.id = asset.track_id
-       JOIN releases r ON r.id = COALESCE(asset.release_id, track.release_id)
-       WHERE asset.id = ?1 AND asset.processing_status = 'ready' AND r.status = 'LIVE'`,
+       WHERE asset.id = ?1 AND asset.processing_status = 'ready' AND (
+         (asset.kind IN ('artwork', 'audio') AND EXISTS (
+           SELECT 1 FROM releases r WHERE r.id = COALESCE(asset.release_id, track.release_id) AND r.status = 'LIVE'))
+         OR (asset.kind IN ('artist_photo', 'artist_banner') AND EXISTS (
+           SELECT 1 FROM release_artists credit JOIN releases r ON r.id = credit.release_id
+           WHERE credit.artist_id = asset.artist_id AND credit.is_primary = TRUE AND r.status = 'LIVE'))
+       )`,
     ).bind(assetId).first<{storage_key: string; mime_type: string; byte_size: number | string; duration_ms: number | null}>()
     if (!asset || !asset.storage_key.startsWith(MARKETPLACE_STORAGE_PREFIX)) {
       throw new MarketplaceError(404, 'not_found', 'Catalog asset was not found')

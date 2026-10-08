@@ -24,6 +24,8 @@ import type {
 } from './schemas'
 import {formatMinimumPrice, getReleaseSaleReadiness, MINIMUM_RELEASE_PRICE_MINOR} from './sale-policy'
 import {inspectUpload, validateInspectedUpload, isTruncatedJpegHeader} from './upload-validation'
+import {slugifyArtistName} from './artist-profile'
+import {releaseCertificationProblems, snapshotReleaseCertification, type RequestMeta} from './release-submission-service'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -32,12 +34,12 @@ type Statement = {
   run: () => Promise<unknown>
 }
 
-type Database = {
+export type Database = {
   prepare: (sql: string) => Statement
   transaction: <T>(callback: (database: Database) => Promise<T>) => Promise<T>
 }
 
-type ProviderContext = {
+export type ProviderContext = {
   providerId: string
   role: 'owner' | 'admin' | 'editor' | 'viewer'
 }
@@ -130,7 +132,7 @@ function nowIso(): string {
   return new Date().toISOString()
 }
 
-async function providerContext(db: Database, userId: string, mutate = true): Promise<ProviderContext> {
+export async function providerContext(db: Database, userId: string, mutate = true): Promise<ProviderContext> {
   if (mutate && !(await userHasArtistPortalAccess(db, userId))) {
     throw new MarketplaceError(403, 'pro_subscription_required', 'An active Pro subscription is required for Artist access')
   }
@@ -148,7 +150,7 @@ async function providerContext(db: Database, userId: string, mutate = true): Pro
   return {providerId: row.provider_profile_id, role: row.role}
 }
 
-async function assertOwned(db: Database, table: 'artists' | 'releases' | 'tracks' | 'products', id: string, providerId: string): Promise<void> {
+export async function assertOwned(db: Database, table: 'artists' | 'releases' | 'tracks' | 'products', id: string, providerId: string): Promise<void> {
   const row = await db
     .prepare(`SELECT id FROM ${table} WHERE id = ?1 AND provider_profile_id = ?2`)
     .bind(id, providerId)
@@ -187,7 +189,7 @@ function assertMutableStatus(status: ReleaseStatus): void {
   }
 }
 
-async function assertReleaseMutable(db: Database, releaseId: string, providerId: string): Promise<void> {
+export async function assertReleaseMutable(db: Database, releaseId: string, providerId: string): Promise<void> {
   const release = await db.prepare(
     'SELECT status FROM releases WHERE id = ?1 AND provider_profile_id = ?2',
   ).bind(releaseId, providerId).first<{status: ReleaseStatus}>()
@@ -195,7 +197,7 @@ async function assertReleaseMutable(db: Database, releaseId: string, providerId:
   assertMutableStatus(release.status)
 }
 
-async function assertTrackMutable(db: Database, trackId: string, providerId: string): Promise<void> {
+export async function assertTrackMutable(db: Database, trackId: string, providerId: string): Promise<void> {
   const release = await db.prepare(
     `SELECT r.status FROM tracks t JOIN releases r ON r.id = t.release_id
      WHERE t.id = ?1 AND t.provider_profile_id = ?2`,
@@ -204,7 +206,8 @@ async function assertTrackMutable(db: Database, trackId: string, providerId: str
   assertMutableStatus(release.status)
 }
 
-async function loadTrackIsrcContext(db: Database, trackId: string, providerId: string): Promise<TrackIsrcContext> {
+/** `requireMutable` guards artist edits; approval-time assignment runs after the release is locked. */
+async function loadTrackIsrcContext(db: Database, trackId: string, providerId: string, requireMutable = true): Promise<TrackIsrcContext> {
   const track = await db.prepare(
     `SELECT
       t.id,
@@ -224,7 +227,7 @@ async function loadTrackIsrcContext(db: Database, trackId: string, providerId: s
      WHERE t.id = ?1 AND t.provider_profile_id = ?2`,
   ).bind(trackId, providerId).first<TrackIsrcContext>()
   if (!track) throw new MarketplaceError(404, 'not_found', 'Marketplace resource was not found')
-  assertMutableStatus(track.status)
+  if (requireMutable) assertMutableStatus(track.status)
   return track
 }
 
@@ -245,7 +248,7 @@ async function assertProductMutable(db: Database, productId: string, providerId:
   assertMutableStatus(release.status)
 }
 
-async function audit(db: Database, args: {
+export async function audit(db: Database, args: {
   providerId: string
   actorUserId: string
   entityType: string
@@ -270,6 +273,112 @@ async function audit(db: Database, args: {
     args.after === undefined ? null : JSON.stringify(args.after),
     JSON.stringify(args.metadata ?? {}),
   ).run()
+}
+
+/** First free slug among base, base-2 … base-50, then a random suffix. */
+export async function uniqueArtistSlug(db: Database, base: string, excludeArtistId?: string): Promise<string> {
+  for (let attempt = 1; attempt <= 50; attempt += 1) {
+    const candidate = attempt === 1 ? base : `${base.slice(0, 70)}-${attempt}`
+    const taken = await db.prepare('SELECT id FROM artists WHERE slug = ?1 AND id <> ?2')
+      .bind(candidate, excludeArtistId ?? '').first<{id: string}>()
+    if (!taken) return candidate
+  }
+  return `${base.slice(0, 60)}-${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`
+}
+
+/**
+ * Allocate the next MEJay ISRC for a track and record its registry entry, rights attestation and
+ * active assignment. Callers must hold the transaction and have verified the track has no ISRC.
+ * Shared by artist-requested generation and assignment at release approval.
+ */
+export async function insertGeneratedIsrc(db: Database, args: {
+  trackId: string
+  providerId: string
+  assignedByUserId: string
+  /** The rights holder who attested (the certifying artist user at approval). */
+  attestedByUserId: string
+  config: IsrcGenerationConfig
+  attestation: {controlsRecording: true; neverAssignedIsrc: true; authorizeAssignment: true}
+}): Promise<any> {
+  const config = args.config
+  const input = args.attestation
+  const track = await loadTrackIsrcContext(db, args.trackId, args.providerId, false)
+      const assignmentYear = new Date().getUTCFullYear() % 100
+      await db.prepare(
+        `INSERT INTO isrc_sequences (prefix, assignment_year, next_number)
+         VALUES (?1, ?2, 1)
+         ON CONFLICT (prefix, assignment_year) DO NOTHING`,
+      ).bind(config.prefix, assignmentYear).run()
+      // The counter row stays locked for the rest of this transaction, so concurrent generators
+      // serialize here. Skip designations that are already registered (e.g. legacy rows or
+      // externally registered codes) instead of failing on the unique constraint forever.
+      let counter: {reserved_number: number} | null = null
+      for (;;) {
+        counter = await db.prepare(
+          `UPDATE isrc_sequences
+           SET next_number = next_number + 1, updated_at = CURRENT_TIMESTAMP
+           WHERE isrc_sequences.prefix = ?1 AND isrc_sequences.assignment_year = ?2
+             AND isrc_sequences.next_number <= 99999
+           RETURNING isrc_sequences.next_number - 1 AS reserved_number`,
+        ).bind(config.prefix, assignmentYear).first<{reserved_number: number}>()
+        if (!counter || counter.reserved_number < 1 || counter.reserved_number > 99999) {
+          throw new MarketplaceError(409, 'isrc_range_exhausted', `The ${assignmentYear} ISRC range is exhausted`)
+        }
+        const taken = await db.prepare(
+          'SELECT 1 AS taken FROM isrc_registry WHERE isrc = ?1',
+        ).bind(buildGeneratedIsrc(config.prefix, assignmentYear, counter.reserved_number)).first()
+        if (!taken) break
+      }
+
+      const isrc = buildGeneratedIsrc(config.prefix, assignmentYear, counter.reserved_number)
+      const id = crypto.randomUUID()
+      await db.prepare(
+        `INSERT INTO isrc_registry
+          (id, isrc, track_id, provider_profile_id, artist_id, rights_owner_id, prefix, country_code, registrant_code,
+           assignment_year, designation, source, assignment_type, status, original_track_id, assigned_by_user_id,
+           track_title, artist_name, provider_name, rights_owner_name)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?4, ?6, ?7, ?8, ?9, ?10, 'agency', 'MEJAY_ASSIGNED', 'ASSIGNED', ?3, ?11, ?12, ?13, ?14, ?14)`,
+      ).bind(
+        id,
+        isrc,
+        args.trackId,
+        args.providerId,
+        track.artist_id,
+        config.prefix,
+        config.countryCode,
+        config.registrantCode,
+        assignmentYear,
+        counter.reserved_number,
+        args.assignedByUserId,
+        track.title,
+        track.artist_name,
+        track.provider_name,
+      ).run()
+      const certificationId = crypto.randomUUID()
+      await db.prepare(
+        `INSERT INTO isrc_rights_certifications
+          (id, provider_profile_id, track_id, attested_by_user_id, controls_recording, never_assigned_isrc, authorize_assignment)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      ).bind(
+        certificationId,
+        args.providerId,
+        args.trackId,
+        args.attestedByUserId,
+        input.controlsRecording,
+        input.neverAssignedIsrc,
+        input.authorizeAssignment,
+      ).run()
+      await db.prepare(
+        `UPDATE isrc_registry
+         SET rights_certification_id = ?2, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?1`,
+      ).bind(id, certificationId).run()
+      const row = await inserted<any>(db.prepare(
+        `INSERT INTO isrc_assignments (id, provider_profile_id, track_id, isrc, source, assigned_by_user_id, registry_id)
+         VALUES (?1, ?2, ?3, ?4, 'agency', ?5, ?1) RETURNING *`,
+      ).bind(id, args.providerId, args.trackId, isrc, args.assignedByUserId))
+      await audit(db, {providerId: args.providerId, actorUserId: args.assignedByUserId, entityType: 'isrc_assignment', entityId: id, action: 'isrc.generated', after: row})
+  return row
 }
 
 async function inserted<T>(statement: {first: <R>() => Promise<R | null>}): Promise<T> {
@@ -342,7 +451,11 @@ export class MarketplaceService {
     if (!release) throw new MarketplaceError(404, 'not_found', 'Release was not found')
 
     const {results: tracks} = await this.database.prepare(
-      `SELECT t.*, a.name AS primary_artist_name, i.isrc
+      `SELECT t.*, a.name AS primary_artist_name, i.isrc,
+        COALESCE((SELECT json_agg(json_build_object('name', c.name, 'role', c.role, 'publisherName', c.publisher_name) ORDER BY c.created_at, c.id)
+          FROM track_contributors c WHERE c.track_id = t.id), '[]'::json) AS contributors,
+        COALESCE((SELECT json_agg(fa.artist_id ORDER BY fa.artist_id) FROM track_artists fa
+          WHERE fa.track_id = t.id AND fa.role = 'featured'), '[]'::json) AS featured_artist_ids
        FROM tracks t
        LEFT JOIN track_artists ta ON ta.track_id = t.id AND ta.provider_profile_id = t.provider_profile_id AND ta.is_primary = TRUE
        LEFT JOIN artists a ON a.id = ta.artist_id AND a.provider_profile_id = t.provider_profile_id
@@ -460,10 +573,11 @@ export class MarketplaceService {
     return this.database.transaction(async (db: Database) => {
       const context = await providerContext(db, userId)
       const id = crypto.randomUUID()
+      const slug = await uniqueArtistSlug(db, slugifyArtistName(input.name))
       const row = await inserted<any>(db.prepare(
-        `INSERT INTO artists (id, provider_profile_id, name, sort_name, country_code, metadata)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6) RETURNING *`,
-      ).bind(id, context.providerId, input.name, input.sortName ?? null, input.countryCode ?? null, JSON.stringify(input.metadata)))
+        `INSERT INTO artists (id, provider_profile_id, name, sort_name, country_code, metadata, slug)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING *`,
+      ).bind(id, context.providerId, input.name, input.sortName ?? null, input.countryCode ?? null, JSON.stringify(input.metadata), slug))
       await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'artist', entityId: id, action: 'artist.created', after: row})
       return row
     })
@@ -562,8 +676,10 @@ export class MarketplaceService {
     if (!bucket) throw new MarketplaceError(503, 'storage_unavailable', 'Private upload storage is not configured')
     return this.database.transaction(async (db: Database) => {
       const context = await providerContext(db, userId)
-      if (input.kind === 'artwork') await assertReleaseMutable(db, input.releaseId, context.providerId)
-      else await assertTrackMutable(db, input.trackId, context.providerId)
+      if (input.kind === 'artwork' || input.kind === 'rights_document') await assertReleaseMutable(db, input.releaseId, context.providerId)
+      else if (input.kind === 'audio') await assertTrackMutable(db, input.trackId, context.providerId)
+      // Profile imagery belongs to the artist identity, which stays editable after release.
+      else await assertOwned(db, 'artists', input.artistId, context.providerId)
       await db.prepare('SELECT id FROM provider_profiles WHERE id = ?1 FOR UPDATE').bind(context.providerId).first()
       const storage = await db.prepare(
         `SELECT COALESCE(SUM(byte_size), 0)::bigint AS used_bytes FROM marketplace_assets
@@ -576,21 +692,24 @@ export class MarketplaceService {
       const id = crypto.randomUUID()
       const extension = input.mimeType.includes('png') ? 'png'
         : input.mimeType.includes('webp') ? 'webp'
-          : input.mimeType.includes('flac') ? 'flac'
-            : input.mimeType.includes('wav') ? 'wav' : 'jpg'
-      const targetId = input.kind === 'artwork' ? input.releaseId : input.trackId
+          : input.mimeType.includes('pdf') ? 'pdf'
+            : input.mimeType.includes('flac') ? 'flac'
+              : input.mimeType.includes('wav') ? 'wav' : 'jpg'
+      const releaseId = input.kind === 'artwork' || input.kind === 'rights_document' ? input.releaseId : null
+      const trackId = input.kind === 'audio' ? input.trackId : null
+      const artistId = input.kind === 'artist_photo' || input.kind === 'artist_banner' ? input.artistId : null
+      const targetId = releaseId ?? trackId ?? artistId
       const storageKey = `marketplace/${context.providerId}/${input.kind}/${targetId}/${id}.${extension}`
-      const metadata = input.kind === 'artwork'
+      const metadata = 'width' in input
         ? {fileName: input.fileName, width: input.width, height: input.height}
         : {fileName: input.fileName}
       const uploadUrl = await bucket.createUploadUrl(storageKey, input.mimeType, input.byteSize)
       const row = await inserted<any>(db.prepare(
         `INSERT INTO marketplace_assets
-          (id, provider_profile_id, release_id, track_id, kind, storage_key, mime_type, byte_size, processing_status, metadata)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9) RETURNING *`,
+          (id, provider_profile_id, release_id, track_id, artist_id, kind, storage_key, mime_type, byte_size, processing_status, metadata)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10) RETURNING *`,
       ).bind(
-        id, context.providerId, input.kind === 'artwork' ? input.releaseId : null,
-        input.kind === 'audio' ? input.trackId : null, input.kind, storageKey, input.mimeType,
+        id, context.providerId, releaseId, trackId, artistId, input.kind, storageKey, input.mimeType,
         input.byteSize, JSON.stringify(metadata),
       ))
       await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'asset', entityId: id, action: 'asset.upload_initiated', after: row})
@@ -714,84 +833,12 @@ export class MarketplaceService {
     if (!config) throw new MarketplaceError(503, 'isrc_generation_unavailable', 'MEJay ISRC generation is not configured')
     return this.database.transaction(async (db: Database) => {
       const context = await providerContext(db, userId)
-      const track = await loadTrackIsrcContext(db, trackId, context.providerId)
+      await loadTrackIsrcContext(db, trackId, context.providerId)
       await assertTrackHasNoIsrc(db, trackId)
-      const assignmentYear = new Date().getUTCFullYear() % 100
-      await db.prepare(
-        `INSERT INTO isrc_sequences (prefix, assignment_year, next_number)
-         VALUES (?1, ?2, 1)
-         ON CONFLICT (prefix, assignment_year) DO NOTHING`,
-      ).bind(config.prefix, assignmentYear).run()
-      // The counter row stays locked for the rest of this transaction, so concurrent generators
-      // serialize here. Skip designations that are already registered (e.g. legacy rows or
-      // externally registered codes) instead of failing on the unique constraint forever.
-      let counter: {reserved_number: number} | null = null
-      for (;;) {
-        counter = await db.prepare(
-          `UPDATE isrc_sequences
-           SET next_number = next_number + 1, updated_at = CURRENT_TIMESTAMP
-           WHERE isrc_sequences.prefix = ?1 AND isrc_sequences.assignment_year = ?2
-             AND isrc_sequences.next_number <= 99999
-           RETURNING isrc_sequences.next_number - 1 AS reserved_number`,
-        ).bind(config.prefix, assignmentYear).first<{reserved_number: number}>()
-        if (!counter || counter.reserved_number < 1 || counter.reserved_number > 99999) {
-          throw new MarketplaceError(409, 'isrc_range_exhausted', `The ${assignmentYear} ISRC range is exhausted`)
-        }
-        const taken = await db.prepare(
-          'SELECT 1 AS taken FROM isrc_registry WHERE isrc = ?1',
-        ).bind(buildGeneratedIsrc(config.prefix, assignmentYear, counter.reserved_number)).first()
-        if (!taken) break
-      }
-
-      const isrc = buildGeneratedIsrc(config.prefix, assignmentYear, counter.reserved_number)
-      const id = crypto.randomUUID()
-      await db.prepare(
-        `INSERT INTO isrc_registry
-          (id, isrc, track_id, provider_profile_id, artist_id, rights_owner_id, prefix, country_code, registrant_code,
-           assignment_year, designation, source, assignment_type, status, original_track_id, assigned_by_user_id,
-           track_title, artist_name, provider_name, rights_owner_name)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?4, ?6, ?7, ?8, ?9, ?10, 'agency', 'MEJAY_ASSIGNED', 'ASSIGNED', ?3, ?11, ?12, ?13, ?14, ?14)`,
-      ).bind(
-        id,
-        isrc,
-        trackId,
-        context.providerId,
-        track.artist_id,
-        config.prefix,
-        config.countryCode,
-        config.registrantCode,
-        assignmentYear,
-        counter.reserved_number,
-        userId,
-        track.title,
-        track.artist_name,
-        track.provider_name,
-      ).run()
-      const certificationId = crypto.randomUUID()
-      await db.prepare(
-        `INSERT INTO isrc_rights_certifications
-          (id, provider_profile_id, track_id, attested_by_user_id, controls_recording, never_assigned_isrc, authorize_assignment)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-      ).bind(
-        certificationId,
-        context.providerId,
-        trackId,
-        userId,
-        input.controlsRecording,
-        input.neverAssignedIsrc,
-        input.authorizeAssignment,
-      ).run()
-      await db.prepare(
-        `UPDATE isrc_registry
-         SET rights_certification_id = ?2, updated_at = CURRENT_TIMESTAMP
-         WHERE id = ?1`,
-      ).bind(id, certificationId).run()
-      const row = await inserted<any>(db.prepare(
-        `INSERT INTO isrc_assignments (id, provider_profile_id, track_id, isrc, source, assigned_by_user_id, registry_id)
-         VALUES (?1, ?2, ?3, ?4, 'agency', ?5, ?1) RETURNING *`,
-      ).bind(id, context.providerId, trackId, isrc, userId))
-      await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'isrc_assignment', entityId: id, action: 'isrc.generated', after: row})
-      return row
+      return insertGeneratedIsrc(db, {
+        trackId, providerId: context.providerId, assignedByUserId: userId, attestedByUserId: userId, config,
+        attestation: input,
+      })
     })
   }
 
@@ -961,6 +1008,7 @@ export class MarketplaceService {
 
       const unmet = await this.unmetPrerequisites(db, release, targetStatus)
       if (unmet.length > 0) throw new MarketplaceError(422, 'release_prerequisites_unmet', 'Release prerequisites are not complete', unmet)
+      if (targetStatus === 'SUBMITTED') await snapshotReleaseCertification(db, release, userId, null)
 
       const now = nowIso()
       const row = await inserted<any>(db.prepare(
@@ -983,7 +1031,7 @@ export class MarketplaceService {
     })
   }
 
-  async submitRelease(userId: string, releaseId: string, input: SubmitReleaseInput): Promise<unknown> {
+  async submitRelease(userId: string, releaseId: string, input: SubmitReleaseInput, meta: RequestMeta | null = null): Promise<unknown> {
     return this.database.transaction(async (db: Database) => {
       const context = await providerContext(db, userId)
       const release = await db.prepare(
@@ -1005,11 +1053,13 @@ export class MarketplaceService {
         throw new MarketplaceError(422, 'release_prerequisites_unmet', 'Release prerequisites are not complete', unmet)
       }
 
+      const certification = await snapshotReleaseCertification(db, release, userId, meta)
       const now = nowIso()
       const row = await inserted<any>(db.prepare(
         `UPDATE releases SET status = 'SUBMITTED', version = version + 1, submitted_at = ?1, updated_at = ?1
          WHERE id = ?2 AND version = ?3 RETURNING *`,
       ).bind(now, releaseId, input.expectedVersion))
+      row.certification_id = certification.certificationId
       await audit(db, {
         providerId: context.providerId,
         actorUserId: userId,
@@ -1073,13 +1123,8 @@ export class MarketplaceService {
       if (rights?.incomplete_tracks !== 0) unmet.push('master and composition rights totaling 10000 basis points for every track')
     }
 
-    if (shouldCheck('ISRC_COMPLETE')) {
-      const isrc = await db.prepare(
-        `SELECT COUNT(*)::integer AS missing FROM tracks t WHERE t.release_id = ?1 AND NOT EXISTS
-          (SELECT 1 FROM isrc_assignments i WHERE i.track_id = t.id AND i.revoked_at IS NULL)`,
-      ).bind(release.id).first<{missing: number}>()
-      if (isrc?.missing !== 0) unmet.push('active ISRC for every track')
-    }
+    // ISRCs are no longer a submission prerequisite: artists may register an existing ISRC, and
+    // MEJay assigns ISRCs to the remaining tracks when a reviewer approves the release.
 
     if (shouldCheck('PRICING_COMPLETE')) {
       const sale = await getReleaseSaleReadiness(db, release.id)
@@ -1101,6 +1146,8 @@ export class MarketplaceService {
       if (!sale.stripeReady) unmet.push('completed Stripe payout setup')
       if (pricing?.missing_splits !== 0) unmet.push('active revenue splits totaling 10000 basis points for every track')
     }
+
+    if (targetStatus === 'SUBMITTED') unmet.push(...await releaseCertificationProblems(db, release))
 
     return unmet
   }

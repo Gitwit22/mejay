@@ -9,6 +9,9 @@ import {ConnectService} from './connect-service'
 import {MarketplaceFinanceService} from './finance-service'
 import {MarketplaceReportingService} from './reporting-service'
 import {StoreService} from './store-service'
+import {ReleaseSubmissionService} from './release-submission-service'
+import {ArtistProfileService} from './artist-profile-service'
+import {CERTIFICATION_VERSION} from './release-certification'
 import {claimStripeWebhookEvent} from './webhook-events'
 import {MarketplaceService} from './service'
 
@@ -105,7 +108,15 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
     return {userId, provider, artist, release, track}
   }
 
-  async function prepareLiveRelease(label: string, options: {songPriceMinor?: number} = {}) {
+  async function certifyRelease(userId: string, releaseId: string, thirdPartyMaterial: 'none' | 'licensed' | 'unsure' = 'none') {
+    await new ReleaseSubmissionService(new Database(connectionString!, pool) as never).saveCertification(userId, releaseId, {
+      version: CERTIFICATION_VERSION,
+      thirdPartyMaterial,
+      accepted: ['original_recording', 'beat_rights', 'distribution_rights', 'collaborators_authorized', 'information_accurate', 'platform_authorization', 'no_prior_isrc'],
+    })
+  }
+
+  async function prepareLiveRelease(label: string, options: {songPriceMinor?: number; skipIsrc?: boolean; stage?: 'pricing' | 'live'} = {}) {
     const fixture = await createProviderFixture(label)
     await service.createAsset(fixture.userId, {
       releaseId: fixture.release.id,
@@ -141,11 +152,13 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
         territories: ['WORLD'],
       })
     }
-    await service.assignGeneratedIsrc(fixture.userId, fixture.track.id, {
-      controlsRecording: true,
-      neverAssignedIsrc: true,
-      authorizeAssignment: true,
-    }, {prefix: 'QTA3L', countryCode: 'QT', registrantCode: 'A3L'})
+    if (!options.skipIsrc) {
+      await service.assignGeneratedIsrc(fixture.userId, fixture.track.id, {
+        controlsRecording: true,
+        neverAssignedIsrc: true,
+        authorizeAssignment: true,
+      }, {prefix: 'QTA3L', countryCode: 'QT', registrantCode: 'A3L'})
+    }
     const product = await service.createProduct(fixture.userId, {
       releaseId: fixture.release.id,
       name: `${label} Download`,
@@ -161,10 +174,14 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       await service.setTrackPrice(fixture.userId, fixture.track.id, {amountMinor: options.songPriceMinor})
     }
     let version = fixture.release.version
-    for (const targetStatus of ['METADATA_COMPLETE', 'RIGHTS_COMPLETE', 'ISRC_COMPLETE', 'PRICING_COMPLETE', 'SUBMITTED'] as const) {
+    for (const targetStatus of ['METADATA_COMPLETE', 'RIGHTS_COMPLETE', 'ISRC_COMPLETE', 'PRICING_COMPLETE'] as const) {
       const transitioned = await service.transitionRelease(fixture.userId, fixture.release.id, {targetStatus, expectedVersion: version}) as {version: number}
       version = transitioned.version
     }
+    if (options.stage === 'pricing') return {...fixture, version}
+    await certifyRelease(fixture.userId, fixture.release.id)
+    const submitted = await service.transitionRelease(fixture.userId, fixture.release.id, {targetStatus: 'SUBMITTED', expectedVersion: version}) as {version: number}
+    version = submitted.version
     for (const [actor, action] of [[reviewerUserId, 'start_review'], [reviewerUserId, 'approve'], [adminUserId, 'publish_now']] as const) {
       const commanded = await adminService().commandRelease(actor, fixture.release.id, {action, expectedVersion: version}) as {version: number}
       version = commanded.version
@@ -855,6 +872,191 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       expect(Array.isArray(storageKeys)).toBe(true)
       const remaining = await pool.query<{count: number}>('SELECT COUNT(*)::integer AS count FROM provider_profiles WHERE id = $1', [fixture.provider.id])
       expect(remaining.rows[0].count).toBe(0)
+    })
+  })
+  describe('artist profiles and release certification', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    const submission = () => new ReleaseSubmissionService(new Database(connectionString!, pool) as never)
+    const profiles = () => new ArtistProfileService(new Database(connectionString!, pool) as never)
+    const isrcConfig = {prefix: 'QTA3L', countryCode: 'QT', registrantCode: 'A3L'} as const
+    const CORE_KEYS = ['original_recording', 'beat_rights', 'distribution_rights', 'collaborators_authorized', 'information_accurate', 'platform_authorization'] as const
+
+    async function review(releaseId: string, version: number) {
+      return adminService().commandRelease(reviewerUserId, releaseId, {action: 'start_review', expectedVersion: version}) as Promise<{version: number}>
+    }
+
+    it('blocks submission until every certification is accepted, then snapshots it immutably', async () => {
+      await resetIsrcState()
+      const fixture = await prepareLiveRelease('Cert', {stage: 'pricing'})
+      await expect(service.submitRelease(fixture.userId, fixture.release.id, {expectedVersion: fixture.version}))
+        .rejects.toMatchObject({code: 'release_prerequisites_unmet', details: expect.arrayContaining(['rights certification'])})
+      await expect(submission().saveCertification(fixture.userId, fixture.release.id, {version: CERTIFICATION_VERSION, thirdPartyMaterial: 'none', accepted: ['original_recording', 'beat_rights']}))
+        .rejects.toMatchObject({code: 'certification_incomplete'})
+
+      await certifyRelease(fixture.userId, fixture.release.id)
+      const submitted = await service.submitRelease(fixture.userId, fixture.release.id, {expectedVersion: fixture.version}, {ipHash: 'hash', userAgent: 'vitest'}) as {status: string; certification_id: string}
+      expect(submitted.status).toBe('SUBMITTED')
+      const certification = await pool.query('SELECT * FROM release_certifications WHERE id = $1', [submitted.certification_id])
+      expect(certification.rows[0]).toMatchObject({
+        certification_version: CERTIFICATION_VERSION, third_party_material: 'none', rights_status: 'CERTIFIED_ORIGINAL',
+        certified_by_user_id: fixture.userId, primary_artist_id: fixture.artist.id, ip_hash: 'hash', user_agent: 'vitest',
+      })
+      // The track already has an ISRC, so the ISRC statement is not part of this certification.
+      expect(certification.rows[0].accepted_certifications.map((statement: {key: string}) => statement.key)).toEqual([...CORE_KEYS])
+      expect(certification.rows[0].accepted_certifications[0].text).toContain('no unauthorized samples')
+      expect(certification.rows[0].release_snapshot.primaryArtist.name).toBe('Cert Artist')
+      const release = await pool.query('SELECT rights_status, certification_draft FROM releases WHERE id = $1', [fixture.release.id])
+      expect(release.rows[0]).toEqual({rights_status: 'CERTIFIED_ORIGINAL', certification_draft: null})
+
+      await expect(pool.query(`UPDATE release_certifications SET rights_status = 'RIGHTS_CLEARED' WHERE id = $1`, [submitted.certification_id])).rejects.toThrow(/immutable/)
+      await expect(pool.query('DELETE FROM release_certifications WHERE id = $1', [submitted.certification_id])).rejects.toThrow(/immutable/)
+      // Later profile edits never rewrite the historical snapshot.
+      await profiles().updateProfile(fixture.userId, fixture.artist.id, {name: 'Renamed Artist', genres: [], links: {}})
+      const unchanged = await pool.query('SELECT release_snapshot FROM release_certifications WHERE id = $1', [submitted.certification_id])
+      expect(unchanged.rows[0].release_snapshot.primaryArtist.name).toBe('Cert Artist')
+    })
+
+    it('requires an explicit rights decision before approving licensed material without documents', async () => {
+      await resetIsrcState()
+      const fixture = await prepareLiveRelease('Licensed', {stage: 'pricing'})
+      await expect(certifyRelease(fixture.userId, fixture.release.id, 'licensed')).rejects.toMatchObject({code: 'certification_incomplete'})
+      await submission().addRightsMaterial(fixture.userId, fixture.release.id, {
+        materialType: 'leased_beat', licensorName: 'Beat Co', description: 'Non-exclusive lease of the instrumental', licenseType: 'non_exclusive_lease',
+      })
+      await certifyRelease(fixture.userId, fixture.release.id, 'licensed')
+      const submitted = await service.submitRelease(fixture.userId, fixture.release.id, {expectedVersion: fixture.version}) as {version: number; rights_status: string}
+      const rights = await pool.query('SELECT rights_status FROM releases WHERE id = $1', [fixture.release.id])
+      expect(rights.rows[0].rights_status).toBe('RIGHTS_REVIEW_REQUIRED')
+
+      const reviewing = await review(fixture.release.id, submitted.version)
+      await expect(adminService().commandRelease(reviewerUserId, fixture.release.id, {action: 'approve', expectedVersion: reviewing.version}))
+        .rejects.toMatchObject({code: 'rights_review_required'})
+      const cleared = await adminService().commandRelease(reviewerUserId, fixture.release.id, {action: 'clear_rights', expectedVersion: reviewing.version, note: 'Lease agreement reviewed'}) as {version: number; status: string; rights_status: string}
+      expect(cleared).toMatchObject({status: 'UNDER_REVIEW', rights_status: 'RIGHTS_CLEARED'})
+      const approved = await adminService().commandRelease(reviewerUserId, fixture.release.id, {action: 'approve', expectedVersion: cleared.version}) as {status: string}
+      expect(approved.status).toBe('APPROVED')
+      const events = await pool.query<{decision: string}>('SELECT decision FROM release_review_events WHERE release_id = $1 ORDER BY created_at', [fixture.release.id])
+      expect(events.rows.map((row) => row.decision)).toEqual(['review_started', 'rights_cleared', 'approved'])
+    })
+
+    it('returns flagged rights to the artist and requires a fresh certification', async () => {
+      await resetIsrcState()
+      const fixture = await prepareLiveRelease('Unsure', {stage: 'pricing'})
+      await certifyRelease(fixture.userId, fixture.release.id, 'unsure')
+      const submitted = await service.submitRelease(fixture.userId, fixture.release.id, {expectedVersion: fixture.version}) as {version: number}
+      const reviewing = await review(fixture.release.id, submitted.version)
+      const flagged = await adminService().commandRelease(reviewerUserId, fixture.release.id, {action: 'flag_rights', expectedVersion: reviewing.version, note: 'The hook samples a commercial recording'}) as {version: number; status: string; rights_status: string}
+      expect(flagged).toMatchObject({status: 'CHANGES_REQUESTED', rights_status: 'RIGHTS_ISSUE_FLAGGED'})
+
+      await expect(service.submitRelease(fixture.userId, fixture.release.id, {expectedVersion: flagged.version}))
+        .rejects.toMatchObject({code: 'release_prerequisites_unmet', details: expect.arrayContaining(['rights certification'])})
+      await certifyRelease(fixture.userId, fixture.release.id, 'none')
+      await service.submitRelease(fixture.userId, fixture.release.id, {expectedVersion: flagged.version})
+      const history = await pool.query<{third_party_material: string; rights_status: string}>(
+        'SELECT third_party_material, rights_status FROM release_certifications WHERE release_id = $1 ORDER BY certified_at', [fixture.release.id])
+      expect(history.rows).toEqual([
+        {third_party_material: 'unsure', rights_status: 'RIGHTS_REVIEW_REQUIRED'},
+        {third_party_material: 'none', rights_status: 'CERTIFIED_ORIGINAL'},
+      ])
+    })
+
+    it('assigns MEJay ISRCs at approval for tracks submitted without one', async () => {
+      await resetIsrcState()
+      const fixture = await prepareLiveRelease('NoIsrc', {stage: 'pricing', skipIsrc: true})
+      await expect(submission().saveCertification(fixture.userId, fixture.release.id, {version: CERTIFICATION_VERSION, thirdPartyMaterial: 'none', accepted: [...CORE_KEYS]}))
+        .rejects.toMatchObject({code: 'certification_incomplete'})
+      await certifyRelease(fixture.userId, fixture.release.id)
+      const submitted = await service.submitRelease(fixture.userId, fixture.release.id, {expectedVersion: fixture.version}) as {version: number}
+      const reviewing = await review(fixture.release.id, submitted.version)
+      await expect(adminService().commandRelease(reviewerUserId, fixture.release.id, {action: 'approve', expectedVersion: reviewing.version}, {isrcConfig: null}))
+        .rejects.toMatchObject({code: 'isrc_generation_unavailable'})
+      const approved = await adminService().commandRelease(reviewerUserId, fixture.release.id, {action: 'approve', expectedVersion: reviewing.version}, {isrcConfig}) as {status: string}
+      expect(approved.status).toBe('APPROVED')
+      const assignment = await pool.query<{isrc: string; source: string; assigned_by_user_id: string; attested_by_user_id: string}>(
+        `SELECT assignment.isrc, assignment.source, assignment.assigned_by_user_id, attestation.attested_by_user_id
+         FROM isrc_assignments assignment
+         JOIN isrc_registry registry ON registry.id = assignment.registry_id
+         JOIN isrc_rights_certifications attestation ON attestation.id = registry.rights_certification_id
+         WHERE assignment.track_id = $1 AND assignment.revoked_at IS NULL`, [fixture.track.id])
+      expect(assignment.rows[0]).toMatchObject({source: 'agency', assigned_by_user_id: reviewerUserId, attested_by_user_id: fixture.userId})
+      expect(assignment.rows[0].isrc).toMatch(/^QTA3L\d{7}$/)
+    })
+
+    it('never lets one artist account touch another account\'s profile, release, credits, or uploads', async () => {
+      const owner = await createProviderFixture('OwnerA')
+      const intruder = await createProviderFixture('OwnerB')
+      const profileInput = {name: 'Hijacked', genres: [], links: {}}
+      await expect(profiles().getProfile(intruder.userId, owner.artist.id)).rejects.toMatchObject({code: 'not_found'})
+      await expect(profiles().updateProfile(intruder.userId, owner.artist.id, profileInput)).rejects.toMatchObject({code: 'not_found'})
+      await expect(submission().saveCertification(intruder.userId, owner.release.id, {version: CERTIFICATION_VERSION, thirdPartyMaterial: 'none', accepted: [...CORE_KEYS, 'no_prior_isrc']}))
+        .rejects.toMatchObject({code: 'not_found'})
+      await expect(submission().addRightsMaterial(intruder.userId, owner.release.id, {materialType: 'sample', licensorName: 'X', description: 'Y', licenseType: 'sample_clearance'}))
+        .rejects.toMatchObject({code: 'not_found'})
+      await expect(submission().replaceTrackCredits(intruder.userId, owner.track.id, {featuredArtistIds: [], contributors: []})).rejects.toMatchObject({code: 'not_found'})
+      // Linking another account's artist as a featured artist is refused too.
+      await expect(submission().replaceTrackCredits(owner.userId, owner.track.id, {featuredArtistIds: [intruder.artist.id], contributors: []})).rejects.toMatchObject({code: 'not_found'})
+      const bucket = {createUploadUrl: async () => 'https://upload.test', head: async () => null, getExact: async () => null}
+      await expect(service.initiateUpload(intruder.userId, {kind: 'artist_photo', artistId: owner.artist.id, fileName: 'me.jpg', byteSize: 1000, mimeType: 'image/jpeg', width: 800, height: 800}, bucket as never))
+        .rejects.toMatchObject({code: 'not_found'})
+      // A ready photo that belongs to the owner cannot be attached to the intruder's artist.
+      const photoId = crypto.randomUUID()
+      await pool.query(
+        `INSERT INTO marketplace_assets (id, provider_profile_id, artist_id, kind, storage_key, mime_type, byte_size, processing_status)
+         VALUES ($1, $2, $3, 'artist_photo', $4, 'image/jpeg', 1000, 'ready')`,
+        [photoId, owner.provider.id, owner.artist.id, `marketplace/${owner.provider.id}/artist_photo/${photoId}.jpg`],
+      )
+      await expect(profiles().updateProfile(intruder.userId, intruder.artist.id, {...profileInput, profilePhotoAssetId: photoId}))
+        .rejects.toMatchObject({code: 'invalid_profile_image'})
+      const ownerSlug = await pool.query<{slug: string}>('SELECT slug FROM artists WHERE id = $1', [owner.artist.id])
+      await expect(profiles().updateProfile(intruder.userId, intruder.artist.id, {...profileInput, slug: ownerSlug.rows[0].slug}))
+        .rejects.toMatchObject({code: 'slug_taken'})
+
+      // The owner can do all of it.
+      await submission().replaceTrackCredits(owner.userId, owner.track.id, {featuredArtistIds: [], contributors: [{name: 'Pen Writer', role: 'writer', publisherName: 'Pen Publishing'}]})
+      const updated = await profiles().updateProfile(owner.userId, owner.artist.id, {name: 'OwnerA Artist', tagline: 'Hello', genres: ['House'], links: {instagram: 'https://instagram.com/ownera'}, profilePhotoAssetId: photoId})
+      expect(updated).toMatchObject({tagline: 'Hello', profile_photo_asset_id: photoId, links: {instagram: 'https://instagram.com/ownera'}})
+    })
+
+    it('shows a public artist page only while the artist has LIVE music, and never exposes rights documents', async () => {
+      await resetIsrcState()
+      const draft = await prepareLiveRelease('Hidden', {stage: 'pricing'})
+      const hiddenSlug = (await pool.query<{slug: string}>('SELECT slug FROM artists WHERE id = $1', [draft.artist.id])).rows[0].slug
+      await expect(profiles().getPublicArtist(hiddenSlug)).rejects.toMatchObject({code: 'not_found'})
+
+      const live = await prepareLiveRelease('Shown')
+      const slug = (await pool.query<{slug: string}>('SELECT slug FROM artists WHERE id = $1', [live.artist.id])).rows[0].slug
+      await profiles().updateProfile(live.userId, live.artist.id, {name: 'Shown Artist', tagline: 'Live now', bio: 'Full biography', location: 'Detroit', genres: ['House'], links: {instagram: 'https://instagram.com/shown'}})
+      // A second, unpublished release of the same artist must not appear.
+      await service.createRelease(live.userId, {title: 'Unreleased Draft', releaseType: 'single', primaryArtistId: live.artist.id})
+      const page = await profiles().getPublicArtist(slug)
+      expect(page.artist).toMatchObject({name: 'Shown Artist', tagline: 'Live now', verified: true, links: {instagram: 'https://instagram.com/shown'}})
+      expect(page.artist).not.toHaveProperty('provider_profile_id')
+      expect((page.releases as Array<{id: string; artist_slug: string}>).map((release) => release.id)).toEqual([live.release.id])
+      expect((page.releases as Array<{artist_slug: string}>)[0].artist_slug).toBe(slug)
+
+      const store = new StoreService(new Database(connectionString!, pool) as never)
+      const documentId = crypto.randomUUID()
+      await pool.query(
+        `INSERT INTO marketplace_assets (id, provider_profile_id, release_id, kind, storage_key, mime_type, byte_size, processing_status)
+         VALUES ($1, $2, $3, 'rights_document', $4, 'application/pdf', 1000, 'ready')`,
+        [documentId, live.provider.id, live.release.id, `marketplace/${live.provider.id}/rights_document/${documentId}.pdf`],
+      )
+      await expect(store.getAsset(documentId)).rejects.toMatchObject({code: 'not_found'})
+      const photoId = crypto.randomUUID()
+      await pool.query(
+        `INSERT INTO marketplace_assets (id, provider_profile_id, artist_id, kind, storage_key, mime_type, byte_size, processing_status)
+         VALUES ($1, $2, $3, 'artist_photo', $4, 'image/jpeg', 1000, 'ready')`,
+        [photoId, live.provider.id, live.artist.id, `marketplace/${live.provider.id}/artist_photo/${photoId}.jpg`],
+      )
+      await expect(store.getAsset(photoId)).resolves.toMatchObject({mimeType: 'image/jpeg'})
+
+      // Taking the only LIVE release down removes the page and its imagery.
+      await adminService().commandRelease(adminUserId, live.release.id, {action: 'takedown', expectedVersion: live.version, note: 'Rights claim'})
+      await expect(profiles().getPublicArtist(slug)).rejects.toMatchObject({code: 'not_found'})
+      await expect(store.getAsset(photoId)).rejects.toMatchObject({code: 'not_found'})
     })
   })
 })

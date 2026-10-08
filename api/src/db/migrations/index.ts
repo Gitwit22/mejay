@@ -14,6 +14,7 @@ import {productionHardeningMigration} from './0011-production-hardening'
 import {isrcRegistryMigration} from './0012-isrc-registry'
 import {marketplacePayoutIntegrityMigration} from './0013-marketplace-payout-integrity'
 import {marketplacePaymentSnapshotsMigration} from './0014-marketplace-payment-snapshots'
+import {artistProfilesReleaseCertificationMigration} from './0015-artist-profiles-release-certification'
 import type {Migration} from './types'
 
 export const migrations: readonly Migration[] = [
@@ -31,6 +32,7 @@ export const migrations: readonly Migration[] = [
   isrcRegistryMigration,
   marketplacePayoutIntegrityMigration,
   marketplacePaymentSnapshotsMigration,
+  artistProfilesReleaseCertificationMigration,
 ]
 
 const MIGRATION_LOCK_ID = 764_329_101

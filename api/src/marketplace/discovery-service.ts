@@ -6,7 +6,7 @@ type Database = {prepare: (sql: string) => Statement}
 
 const releaseProjection = `
   SELECT r.id, r.title, r.release_type, r.genre, r.original_release_date, r.published_at,
-    artist.id AS artist_id, artist.name AS artist_name,
+    artist.id AS artist_id, artist.name AS artist_name, artist.slug AS artist_slug,
     artwork.id AS artwork_asset_id,
     offer.product_id, offer.amount_minor, offer.currency,
     (provider.suspended_at IS NULL AND provider.stripe_details_submitted AND provider.stripe_payouts_enabled
@@ -103,7 +103,7 @@ export class DiscoveryService {
 
   private async featuredArtists(): Promise<DiscoveryArtist[]> {
     const {results} = await this.database.prepare(
-      `SELECT artist.id, artist.name, latest_artwork.artwork_asset_id,
+      `SELECT artist.id, artist.name, artist.slug, latest_artwork.artwork_asset_id,
         COUNT(DISTINCT release_credit.release_id)::integer AS release_count
        FROM marketplace_discovery_features feature
        JOIN artists artist ON artist.id = feature.artist_id

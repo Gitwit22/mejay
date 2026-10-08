@@ -8,7 +8,16 @@ function uint24le(bytes: Uint8Array, offset: number): number {
   return bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16)
 }
 
+/** Minimum pixel dimensions for artist profile imagery (checked at upload start and after upload). */
+export const ARTIST_IMAGE_RULES = {
+  artist_photo: {minWidth: 400, minHeight: 400},
+  artist_banner: {minWidth: 1200, minHeight: 300},
+} as const
+
+export type UploadKind = 'artwork' | 'audio' | 'artist_photo' | 'artist_banner' | 'rights_document'
+
 export function inspectUpload(bytes: Uint8Array): InspectedUpload | null {
+  if (bytes.length >= 5 && ascii(bytes, 0, 5) === '%PDF-') return {mimeType: 'application/pdf'}
   if (bytes.length >= 24 && bytes.slice(0, 8).every((value, index) => value === [137, 80, 78, 71, 13, 10, 26, 10][index])) {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
     return {mimeType: 'image/png', width: view.getUint32(16), height: view.getUint32(20)}
@@ -51,7 +60,7 @@ export function isTruncatedJpegHeader(bytes: Uint8Array): boolean {
 
 export function validateInspectedUpload(args: {
   declaredMimeType: string
-  kind: 'artwork' | 'audio'
+  kind: UploadKind
   metadata: {width?: number; height?: number}
   inspected: InspectedUpload | null
 }): string[] {
@@ -63,6 +72,14 @@ export function validateInspectedUpload(args: {
     if (!inspected.width || !inspected.height) return ['artwork_dimensions_missing']
     if (inspected.width !== inspected.height || inspected.width < 3000) return ['artwork_dimensions_invalid']
     if (metadata.width !== inspected.width || metadata.height !== inspected.height) return ['artwork_dimensions_mismatch']
+  }
+  if (kind === 'artist_photo' || kind === 'artist_banner') {
+    if (!inspected.mimeType.startsWith('image/')) return ['file_type_mismatch']
+    if (!inspected.width || !inspected.height) return ['image_dimensions_missing']
+    const rules = ARTIST_IMAGE_RULES[kind]
+    if (inspected.width < rules.minWidth || inspected.height < rules.minHeight) return ['image_dimensions_too_small']
+    if (kind === 'artist_banner' && inspected.width <= inspected.height) return ['banner_aspect_invalid']
+    if (metadata.width !== inspected.width || metadata.height !== inspected.height) return ['image_dimensions_mismatch']
   }
   return []
 }

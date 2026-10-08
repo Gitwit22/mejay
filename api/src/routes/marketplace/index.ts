@@ -21,7 +21,12 @@ import {
   uploadFinalizeSchema,
   uploadInitSchema,
 } from '../../marketplace/schemas'
-import {getSessionUserId, readJson} from '../_auth'
+import {getSessionUserId, readJson, sha256Hex} from '../_auth'
+import {getClientIp} from '../_security'
+import {ReleaseSubmissionService, trackCreditsSchema} from '../../marketplace/release-submission-service'
+import {certificationDraftSchema, rightsMaterialSchema} from '../../marketplace/release-certification'
+import {artistProfileSchema} from '../../marketplace/artist-profile'
+import {ArtistProfileService} from '../../marketplace/artist-profile-service'
 
 type Context = {
   request: Request
@@ -167,6 +172,79 @@ export const replaceRevenueSplits = handler(revenueSplitsSchema, (service, userI
 export const transitionRelease = handler(transitionSchema, async (service, userId, input, params) =>
   service.transitionRelease(userId, requiredParam(params, 'releaseId'), input),
 )
-export const submitRelease = handler(submitReleaseSchema, async (service, userId, input, params) =>
-  service.submitRelease(userId, requiredParam(params, 'releaseId'), input),
-200)
+/** Submission records hashed request metadata on the immutable certification, like download events. */
+export const submitRelease = async (context: Context): Promise<Response> => {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+  const userId = await getSessionUserId(context.request, context.env)
+  if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+  try {
+    const input = submitReleaseSchema.parse(await readJson(context.request))
+    const clientIp = getClientIp(context.request)
+    const pepper = String(context.env.SESSION_PEPPER || 'dev-session-pepper')
+    const meta = {
+      ipHash: clientIp === 'unknown' ? null : await sha256Hex(`certification:${clientIp}:${pepper}`),
+      userAgent: context.request.headers.get('user-agent'),
+    }
+    const data = await new MarketplaceService(context.env.DB).submitRelease(userId, requiredParam(context.params ?? {}, 'releaseId'), input, meta)
+    return json({ok: true, data}, {status: 200})
+  } catch (error) {
+    if (error instanceof ZodError) return json({ok: false, error: 'invalid_request', issues: error.issues}, {status: 400})
+    return errorResponse(error)
+  }
+}
+
+function submissionHandler<Schema extends z.ZodTypeAny>(
+  schema: Schema | null,
+  operation: (service: ReleaseSubmissionService, userId: string, input: z.output<Schema>, params: Record<string, string | undefined>) => Promise<unknown>,
+  status = 200,
+) {
+  return async (context: Context): Promise<Response> => {
+    if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+    const userId = await getSessionUserId(context.request, context.env)
+    if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+    try {
+      const input = schema ? schema.parse(await readJson(context.request)) : undefined
+      const data = await operation(new ReleaseSubmissionService(context.env.DB), userId, input as z.output<Schema>, context.params ?? {})
+      return json({ok: true, data}, {status})
+    } catch (error) {
+      if (error instanceof ZodError) return json({ok: false, error: 'invalid_request', issues: error.issues}, {status: 400})
+      return errorResponse(error)
+    }
+  }
+}
+
+export const replaceTrackCredits = submissionHandler(trackCreditsSchema, (service, userId, input, params) =>
+  service.replaceTrackCredits(userId, requiredParam(params, 'trackId'), input))
+export const getReleaseCertification = submissionHandler(null, (service, userId, _input, params) =>
+  service.getCertification(userId, requiredParam(params, 'releaseId')))
+export const saveReleaseCertification = submissionHandler(certificationDraftSchema, (service, userId, input, params) =>
+  service.saveCertification(userId, requiredParam(params, 'releaseId'), input))
+export const addRightsMaterial = submissionHandler(rightsMaterialSchema, (service, userId, input, params) =>
+  service.addRightsMaterial(userId, requiredParam(params, 'releaseId'), input), 201)
+export const deleteRightsMaterial = submissionHandler(null, (service, userId, _input, params) =>
+  service.deleteRightsMaterial(userId, requiredParam(params, 'materialId')))
+
+export const getArtistProfile = async (context: Context): Promise<Response> => {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+  const userId = await getSessionUserId(context.request, context.env)
+  if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+  try {
+    return json({ok: true, data: await new ArtistProfileService(context.env.DB).getProfile(userId, requiredParam(context.params ?? {}, 'artistId'))})
+  } catch (error) {
+    return errorResponse(error)
+  }
+}
+
+export const updateArtistProfile = async (context: Context): Promise<Response> => {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+  const userId = await getSessionUserId(context.request, context.env)
+  if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+  try {
+    const input = artistProfileSchema.parse(await readJson(context.request))
+    const data = await new ArtistProfileService(context.env.DB).updateProfile(userId, requiredParam(context.params ?? {}, 'artistId'), input)
+    return json({ok: true, data})
+  } catch (error) {
+    if (error instanceof ZodError) return json({ok: false, error: 'invalid_request', issues: error.issues}, {status: 400})
+    return errorResponse(error)
+  }
+}

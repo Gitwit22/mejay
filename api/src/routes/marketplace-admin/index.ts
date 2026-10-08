@@ -2,6 +2,8 @@ import {resolvePlatformFeeBps} from '../../marketplace/commerce-money'
 import {ZodError} from 'zod'
 
 import {MarketplaceAdminService} from '../../marketplace/admin-service'
+import {readIsrcGenerationConfig} from '../../marketplace/isrc'
+import type {PrivateBucket} from '../../services/r2'
 import {discoveryFeaturesSchema, providerAdminCommandSchema, releaseAdminCommandSchema, splitDisputeSchema} from '../../marketplace/admin-schemas'
 import {CommerceService} from '../../marketplace/commerce-service'
 import {MarketplaceFinanceService, normalizeFinanceFilters} from '../../marketplace/finance-service'
@@ -27,7 +29,10 @@ export const commandRelease = async (context: {request: Request; env: EnvWithDb;
   if (!releaseId) return json({ok: false, error: 'missing_parameter'}, {status: 400})
   try {
     const command = releaseAdminCommandSchema.parse(await readJson(context.request))
-    const data = await new MarketplaceAdminService(context.env.DB).commandRelease(userId, releaseId, command)
+    const data = await new MarketplaceAdminService(context.env.DB).commandRelease(userId, releaseId, command, {
+      // Read only for approval, so an ISRC misconfiguration cannot block unrelated admin actions.
+      isrcConfig: command.action === 'approve' ? readIsrcGenerationConfig(context.env as unknown as NodeJS.ProcessEnv) : null,
+    })
     return json({ok: true, data})
   } catch (error) {
     if (error instanceof ZodError) return json({ok: false, error: 'invalid_request', issues: error.issues}, {status: 400})
@@ -144,6 +149,50 @@ export const getFinanceSummary = async (context: {request: Request; env: EnvWith
   } catch (error) {
     if (error instanceof MarketplaceError) return json({ok: false, error: error.code, message: error.message}, {status: error.status})
     console.error('[marketplace-admin] finance summary failed', error)
+    return json({ok: false, error: 'server_error'}, {status: 500})
+  }
+}
+
+export const getReleaseReview = async (context: {request: Request; env: EnvWithDb; params: Record<string, string | undefined>}): Promise<Response> => {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+  const userId = await getSessionUserId(context.request, context.env)
+  if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+  const releaseId = context.params.releaseId?.trim()
+  if (!releaseId) return json({ok: false, error: 'missing_parameter'}, {status: 400})
+  try {
+    return json({ok: true, data: await new MarketplaceAdminService(context.env.DB).getReleaseReview(userId, releaseId)})
+  } catch (error) {
+    if (error instanceof MarketplaceError) return json({ok: false, error: error.code, message: error.message}, {status: error.status})
+    console.error('[marketplace-admin] release review failed', error)
+    return json({ok: false, error: 'server_error'}, {status: 500})
+  }
+}
+
+/** Streams a private submission file (artwork or rights document) to marketplace staff only. */
+export const getReviewAsset = async (context: {request: Request; env: EnvWithDb & {DOWNLOADS?: PrivateBucket}; params: Record<string, string | undefined>}): Promise<Response> => {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+  if (!context.env.DOWNLOADS) return json({ok: false, error: 'storage_unavailable'}, {status: 503})
+  const userId = await getSessionUserId(context.request, context.env)
+  if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+  const assetId = context.params.assetId?.trim()
+  if (!assetId) return json({ok: false, error: 'missing_parameter'}, {status: 400})
+  try {
+    const asset = await new MarketplaceAdminService(context.env.DB).getReviewAsset(userId, assetId)
+    const object = await context.env.DOWNLOADS.getExact(asset.storageKey)
+    if (!object) return json({ok: false, error: 'not_found'}, {status: 404})
+    return new Response(object.body, {
+      status: 200,
+      headers: {
+        'content-type': asset.mimeType,
+        'content-disposition': `inline; filename="${asset.fileName}"`,
+        'cache-control': 'private, no-store, max-age=0',
+        'x-content-type-options': 'nosniff',
+        ...(object.contentLength !== undefined ? {'content-length': String(object.contentLength)} : {}),
+      },
+    })
+  } catch (error) {
+    if (error instanceof MarketplaceError) return json({ok: false, error: error.code, message: error.message}, {status: error.status})
+    console.error('[marketplace-admin] review asset failed', error)
     return json({ok: false, error: 'server_error'}, {status: 500})
   }
 }
