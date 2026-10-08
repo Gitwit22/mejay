@@ -299,7 +299,7 @@ export async function insertGeneratedIsrc(db: Database, args: {
   attestedByUserId: string
   config: IsrcGenerationConfig
   attestation: {controlsRecording: true; neverAssignedIsrc: true; authorizeAssignment: true}
-}): Promise<any> {
+}): Promise<Record<string, unknown>> {
   const config = args.config
   const input = args.attestation
   const track = await loadTrackIsrcContext(db, args.trackId, args.providerId, false)
@@ -413,7 +413,9 @@ export class MarketplaceService {
   async listArtists(userId: string): Promise<unknown> {
     const context = await providerContext(this.database, userId, false)
     const {results} = await this.database.prepare(
-      `SELECT a.*, COUNT(DISTINCT ra.release_id)::integer AS release_count
+      `SELECT a.*, COUNT(DISTINCT ra.release_id)::integer AS release_count,
+        (SELECT COUNT(*)::integer FROM release_artists live_credit JOIN releases live ON live.id = live_credit.release_id
+          WHERE live_credit.artist_id = a.id AND live_credit.is_primary = TRUE AND live.status = 'LIVE') AS live_release_count
        FROM artists a
        LEFT JOIN release_artists ra ON ra.artist_id = a.id AND ra.provider_profile_id = a.provider_profile_id
        WHERE a.provider_profile_id = ?1

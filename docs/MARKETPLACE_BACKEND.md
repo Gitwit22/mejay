@@ -72,6 +72,11 @@ All endpoints require the `mejay_session` cookie and JSON request bodies.
 | POST | `/api/marketplace/tracks/:trackId/isrc-assignments/generated` | Atomically assign the next MEJay QTA3L ISRC |
 | POST | `/api/marketplace/products` | Create a release or track product |
 | POST | `/api/marketplace/products/:productId/prices` | Add an effective-dated price in minor currency units |
+| GET/PUT | `/api/marketplace/artists/:artistId/profile` | Read or edit the artist's public profile (own account only) |
+| PUT | `/api/marketplace/tracks/:trackId/credits` | Replace featured artists (same account) and writer/composer/producer credits |
+| GET/PUT | `/api/marketplace/releases/:releaseId/certification` | Read or save the rights certification draft |
+| POST | `/api/marketplace/releases/:releaseId/rights-materials` | Declare third-party material (optional rights document) |
+| DELETE | `/api/marketplace/rights-materials/:materialId` | Remove a declared material while the release is editable |
 | PUT | `/api/marketplace/tracks/:trackId/price` | Optionally sell one song on its own (`{"amountMinor": 349}`, same minimum as releases) |
 | DELETE | `/api/marketplace/tracks/:trackId/price` | Stop selling the song on its own; it stays included in the release |
 | PUT | `/api/marketplace/tracks/:trackId/revenue-splits` | Atomically replace the track's complete split set |
@@ -284,3 +289,21 @@ npm run db:migrate
 ```
 
 The integration test creates and drops an isolated PostgreSQL schema, then proves the full provider, artist, release, track, asset, rights, ISRC, product, price, split, review, and publication flow. Never point destructive test setup at production.
+
+## Artist profiles
+
+Public artist identity is the existing `artists` row (an artist account can manage several artists). Migration 15 adds a unique URL `slug` (backfilled for existing artists), tagline, biography, location, up to five genres, domain-checked social/DSP links, Spotify/Apple Music artist IDs, and profile photo and banner assets. Images upload through the same signed R2 flow as release media (`kind: artist_photo | artist_banner`, JPG/PNG/WebP, signature and dimensions verified server-side).
+
+`GET /api/store/artists/:slug` is public and returns the profile plus the artist's releases from the same LIVE catalog query as the marketplace. An artist resolves only while their account is unsuspended and at least one release they are primary on is LIVE; drafts, rejected, unpublished and taken-down releases never appear. The frontend page is `/artist/:slug`, and store artist names link to it.
+
+## Release certification
+
+The release wizard runs `Release Information → Artwork → Tracks → Track Metadata → Credits → Existing ISRCs → Rights → Pricing → Splits → Rights Certification → Review & Submit`. The certification step asks whether the recording contains third-party material (`none`, `licensed`, `unsure`), collects material details and optional documents for `licensed`, and requires every certification statement (plus an ISRC statement when a track has no ISRC). Submitting requires a complete certification and writes an immutable `release_certifications` row in the same transaction: version, exact statement wording, third-party answer, materials, document IDs, a snapshot of the release metadata and credits, and a hashed IP/user agent. The draft is consumed, so every resubmission re-certifies. Certifications cannot be updated or deleted except by the account-deletion transaction.
+
+`releases.rights_status` is set at submission: `CERTIFIED_ORIGINAL` (no third-party material), `RIGHTS_DOCUMENTATION_ATTACHED` (every declared material has a document), or `RIGHTS_REVIEW_REQUIRED` (unsure, or missing documents). Reviewers can only approve `CERTIFIED_ORIGINAL` or `RIGHTS_CLEARED` releases. `clear_rights` records an explicit reviewer decision (note required); `flag_rights` returns the release to the artist as `CHANGES_REQUESTED` with `RIGHTS_ISSUE_FLAGGED`. Releases submitted before certification existed are `NOT_CERTIFIED` and must be cleared or sent back.
+
+ISRCs are no longer a submission prerequisite. Artists may register a legitimately assigned existing ISRC; on approval, MEJay assigns QTA3L ISRCs to the remaining tracks, attested by the certifying artist.
+
+`releases.distribution_status` (`MEJAY_EXCLUSIVE`, `DSP_SCHEDULED`, `DSP_DELIVERED`) is reserved for the later DSP delivery phase and is not changed by any workflow yet.
+
+Staff endpoints: `GET /api/marketplace-admin/releases/:releaseId/review` (metadata, credits, certifications, materials, readiness, warnings) and `GET /api/marketplace-admin/assets/:assetId` (private artwork and rights documents, staff only). The public store asset endpoint never serves rights documents.

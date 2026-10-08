@@ -50,6 +50,49 @@ export type ProviderArtist = {
   country_code: string | null
   release_count: number
   created_at: string
+  /** Public URL slug; the page at /artist/:slug is public while live_release_count > 0. */
+  slug?: string
+  live_release_count?: number
+}
+
+export type ArtistLinks = Partial<Record<'website' | 'instagram' | 'tiktok' | 'youtube' | 'facebook' | 'x' | 'spotify' | 'appleMusic' | 'soundcloud' | 'bandcamp' | 'tidal' | 'amazonMusic' | 'deezer', string>>
+
+export type ArtistProfile = {
+  id: string
+  name: string
+  slug: string
+  tagline: string | null
+  bio: string | null
+  location: string | null
+  genres: string[]
+  links: ArtistLinks
+  spotify_artist_id: string | null
+  apple_music_artist_id: string | null
+  profile_photo_asset_id: string | null
+  banner_asset_id: string | null
+  liveReleaseCount?: number
+}
+
+export type ArtistProfileInput = {
+  name: string
+  slug?: string
+  tagline?: string | null
+  bio?: string | null
+  location?: string | null
+  genres: string[]
+  links: ArtistLinks
+  spotifyArtistId?: string | null
+  appleMusicArtistId?: string | null
+  profilePhotoAssetId?: string | null
+  bannerAssetId?: string | null
+}
+
+export function getArtistProfile(artistId: string): Promise<ArtistProfile> {
+  return request(`/api/marketplace/artists/${encodeURIComponent(artistId)}/profile`)
+}
+
+export function updateArtistProfile(artistId: string, input: ArtistProfileInput): Promise<ArtistProfile> {
+  return request(`/api/marketplace/artists/${encodeURIComponent(artistId)}/profile`, {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
 }
 
 export type ProviderRelease = {
@@ -58,6 +101,8 @@ export type ProviderRelease = {
   release_type: 'single' | 'ep' | 'album'
   status: string
   version: number
+  /** Rights review state set at submission (absent from older API responses). */
+  rights_status?: RightsStatus
   primary_artist_id: string
   primary_artist_name: string
   track_count: number
@@ -81,6 +126,59 @@ export type ProviderTrack = {
   instrumental?: boolean
   recording_year?: number | null
   recording_location?: string | null
+  contributors?: TrackContributor[]
+  featured_artist_ids?: string[]
+}
+
+export type ContributorRole = 'writer' | 'composer' | 'producer' | 'featured_artist' | 'remixer' | 'other'
+export type TrackContributor = {name: string; role: ContributorRole; publisherName?: string | null}
+
+export type RightsStatus = 'NOT_CERTIFIED' | 'CERTIFIED_ORIGINAL' | 'RIGHTS_DOCUMENTATION_ATTACHED' | 'RIGHTS_REVIEW_REQUIRED' | 'RIGHTS_CLEARED' | 'RIGHTS_ISSUE_FLAGGED'
+export type ThirdPartyMaterial = 'none' | 'licensed' | 'unsure'
+export type RightsMaterialType = 'sample' | 'interpolation' | 'leased_beat' | 'licensed_beat' | 'purchased_instrumental' | 'other'
+export type RightsLicenseType = 'exclusive_license' | 'non_exclusive_lease' | 'sample_clearance' | 'work_for_hire' | 'producer_agreement' | 'other'
+
+export type RightsMaterial = {
+  id: string
+  material_type: RightsMaterialType
+  licensor_name: string
+  description: string
+  license_type: RightsLicenseType
+  document_asset_id: string | null
+}
+
+export type ReleaseCertificationState = {
+  version: string
+  policy: string
+  statements: Array<{key: string; title: string; text: string}>
+  requiredKeys: string[]
+  tracksWithoutIsrc: number
+  rightsStatus: RightsStatus
+  thirdPartyMaterial: ThirdPartyMaterial | null
+  draft: {version: string; thirdPartyMaterial: ThirdPartyMaterial; accepted: string[]; savedAt: string} | null
+  materials: RightsMaterial[]
+  problems: string[]
+  history: Array<{id: string; certification_version: string; third_party_material: ThirdPartyMaterial; rights_status: RightsStatus; certified_at: string}>
+}
+
+export function replaceTrackCredits(trackId: string, input: {featuredArtistIds: string[]; contributors: TrackContributor[]}): Promise<unknown> {
+  return request(`/api/marketplace/tracks/${encodeURIComponent(trackId)}/credits`, {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
+}
+
+export function getReleaseCertification(releaseId: string): Promise<ReleaseCertificationState> {
+  return request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}/certification`)
+}
+
+export function saveReleaseCertification(releaseId: string, input: {version: string; thirdPartyMaterial: ThirdPartyMaterial; accepted: string[]}): Promise<unknown> {
+  return request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}/certification`, {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
+}
+
+export function addRightsMaterial(releaseId: string, input: {materialType: RightsMaterialType; licensorName: string; description: string; licenseType: RightsLicenseType; documentAssetId?: string | null}): Promise<RightsMaterial> {
+  return request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}/rights-materials`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
+}
+
+export function deleteRightsMaterial(materialId: string): Promise<unknown> {
+  return request(`/api/marketplace/rights-materials/${encodeURIComponent(materialId)}`, {method: 'DELETE'})
 }
 
 export type ProviderReleaseDetail = {
@@ -110,7 +208,7 @@ export type ProviderReleaseDetail = {
   prerequisites: string[]
 }
 
-export type ReleaseDraftStep = 'release-information' | 'artwork' | 'tracks' | 'track-metadata' | 'isrc' | 'rights' | 'pricing' | 'splits' | 'review'
+export type ReleaseDraftStep = 'release-information' | 'artwork' | 'tracks' | 'track-metadata' | 'credits' | 'isrc' | 'rights' | 'pricing' | 'splits' | 'certification' | 'review'
 
 type ApiEnvelope<T> = {ok: true; data: T} | {ok: false; error: string; message?: string}
 
@@ -221,11 +319,15 @@ export function createProviderTrack(releaseId: string, input: {
   })
 }
 
+type ImageMime = 'image/jpeg' | 'image/png' | 'image/webp'
 type UploadInput =
-  | {kind: 'artwork'; releaseId: string; fileName: string; mimeType: 'image/jpeg' | 'image/png' | 'image/webp'; byteSize: number; width: number; height: number}
+  | {kind: 'artwork'; releaseId: string; fileName: string; mimeType: ImageMime; byteSize: number; width: number; height: number}
   | {kind: 'audio'; trackId: string; fileName: string; mimeType: 'audio/wav' | 'audio/x-wav' | 'audio/flac' | 'audio/x-flac'; byteSize: number}
+  | {kind: 'artist_photo' | 'artist_banner'; artistId: string; fileName: string; mimeType: ImageMime; byteSize: number; width: number; height: number}
+  | {kind: 'rights_document'; releaseId: string; fileName: string; mimeType: 'application/pdf' | 'image/jpeg' | 'image/png'; byteSize: number}
 
-export async function uploadProviderAsset(input: UploadInput, file: File): Promise<void> {
+/** Signed upload: start, PUT to private storage, then server-side verification. Returns the ready asset id. */
+export async function uploadProviderAsset(input: UploadInput, file: File): Promise<string> {
   const initiated = await request<{asset: {id: string}; upload: {url: string; headers: Record<string, string>}}>('/api/marketplace/uploads', {
     method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input),
   })
@@ -234,6 +336,7 @@ export async function uploadProviderAsset(input: UploadInput, file: File): Promi
   await request('/api/marketplace/uploads/finalize', {
     method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({assetId: initiated.asset.id}),
   })
+  return initiated.asset.id
 }
 
 export function assignProviderIsrc(trackId: string, isrc: string): Promise<{isrc: string}> {

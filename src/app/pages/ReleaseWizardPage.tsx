@@ -3,8 +3,9 @@ import {keepPreviousData, useMutation, useQuery, useQueryClient} from '@tanstack
 import {ArrowLeft, Check, ChevronRight, Disc3, Upload} from 'lucide-react'
 import {Link, useNavigate, useParams} from 'react-router-dom'
 
+import {CertificationStep, CreditsStep} from '@/app/components/provider/ReleaseSubmissionSteps'
+
 import {Button} from '@/components/ui/button'
-import {Checkbox} from '@/components/ui/checkbox'
 import {Input} from '@/components/ui/input'
 import {Label} from '@/components/ui/label'
 import {Switch} from '@/components/ui/switch'
@@ -14,7 +15,6 @@ import {
   createProviderPricing,
   createProviderRights,
   createProviderTrack,
-  generateProviderIsrc,
   getProviderRelease,
   listProviderArtists,
   replaceProviderSplits,
@@ -35,10 +35,12 @@ const steps: Array<{id: ReleaseDraftStep; label: string}> = [
   {id: 'artwork', label: 'Upload Artwork'},
   {id: 'tracks', label: 'Upload Tracks'},
   {id: 'track-metadata', label: 'Track Metadata'},
-  {id: 'isrc', label: 'ISRC'},
+  {id: 'credits', label: 'Credits'},
+  {id: 'isrc', label: 'Existing ISRCs'},
   {id: 'rights', label: 'Rights'},
   {id: 'pricing', label: 'Pricing'},
   {id: 'splits', label: 'Splits'},
+  {id: 'certification', label: 'Rights Certification'},
   {id: 'review', label: 'Review & Submit'},
 ]
 
@@ -91,13 +93,15 @@ export default function ReleaseWizardPage() {
         {activeStep === 'artwork' && <ArtworkStep releaseId={releaseId} detail={detail.data} />}
         {activeStep === 'tracks' && <TracksStep releaseId={releaseId} detail={detail.data} />}
         {activeStep === 'track-metadata' && <MetadataStep detail={detail.data} />}
+        {activeStep === 'credits' && <CreditsStep detail={detail.data} />}
         {activeStep === 'isrc' && <IsrcStep detail={detail.data} />}
         {activeStep === 'rights' && <RightsStep detail={detail.data} />}
         {activeStep === 'pricing' && <PricingStep detail={detail.data} />}
         {activeStep === 'splits' && <SplitsStep detail={detail.data} />}
+        {activeStep === 'certification' && <CertificationStep detail={detail.data} onBack={() => navigate(`/app/artist/releases/${releaseId}/edit/splits`)} onContinue={() => advance.mutate('review')} />}
         {activeStep === 'review' && <ReviewStep detail={detail.data} />}
         {advance.isError && <p className="mt-5 text-sm text-red-400">{advance.error.message}</p>}
-        {next && <div className="mt-8 flex justify-end border-t border-white/10 pt-5"><Button onClick={() => advance.mutate(next)} disabled={advance.isPending} className="gap-2 bg-emerald-400 text-zinc-950 hover:bg-emerald-300">Save and continue <ChevronRight className="h-4 w-4" /></Button></div>}
+        {next && activeStep !== 'certification' && <div className="mt-8 flex justify-end border-t border-white/10 pt-5"><Button onClick={() => advance.mutate(next)} disabled={advance.isPending} className="gap-2 bg-emerald-400 text-zinc-950 hover:bg-emerald-300">Save and continue <ChevronRight className="h-4 w-4" /></Button></div>}
       </main>
     </div>
   </div>
@@ -163,25 +167,16 @@ function TrackMetadataForm({track, artistId, releaseId}: {track: ProviderTrack; 
 }
 
 function IsrcStep({detail}: {detail: ProviderReleaseDetail}) {
-  return <><StepHeading title="ISRC" detail="Register an existing ISRC or certify the recording so MEJay can permanently assign the next QTA3L code." /><div className="divide-y divide-white/10 border-y border-white/10">{detail.tracks.map((track) => <IsrcRow key={track.id} track={track} releaseId={detail.release.id} />)}</div>{detail.tracks.length === 0 && <p className="text-sm text-zinc-500">Add tracks before assigning ISRCs.</p>}</>
+  return <><StepHeading title="Existing ISRCs" detail="Already have an ISRC for a recording? Register it here. Tracks without one get a MeJay ISRC automatically after the release is approved." /><div className="divide-y divide-white/10 border-y border-white/10">{detail.tracks.map((track) => <IsrcRow key={track.id} track={track} releaseId={detail.release.id} />)}</div>{detail.tracks.length === 0 && <p className="text-sm text-zinc-500">Add tracks before assigning ISRCs.</p>}</>
 }
 
 function IsrcRow({track, releaseId}: {track: ProviderTrack; releaseId: string}) {
   const queryClient = useQueryClient()
   const [value, setValue] = useState('')
-  const [controlsRecording, setControlsRecording] = useState(false)
-  const [neverAssignedIsrc, setNeverAssignedIsrc] = useState(false)
-  const [authorizeAssignment, setAuthorizeAssignment] = useState(false)
-  const mejayReady = controlsRecording && neverAssignedIsrc && authorizeAssignment
   const assign = useMutation({
-    mutationFn: (generated: boolean) => generated
-      ? generateProviderIsrc(track.id, {controlsRecording: true, neverAssignedIsrc: true, authorizeAssignment: true})
-      : assignProviderIsrc(track.id, value),
+    mutationFn: () => assignProviderIsrc(track.id, value),
     onSuccess: async () => {
       setValue('')
-      setControlsRecording(false)
-      setNeverAssignedIsrc(false)
-      setAuthorizeAssignment(false)
       await queryClient.invalidateQueries({queryKey: ['provider', 'release', releaseId]})
     },
   })
@@ -189,28 +184,17 @@ function IsrcRow({track, releaseId}: {track: ProviderTrack; releaseId: string}) 
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
         <p className="font-medium">{track.track_number}. {track.title}</p>
-        <p className="mt-1 text-sm text-zinc-500">Does this recording already have an ISRC?</p>
+        <p className="mt-1 text-sm text-zinc-500">{track.isrc ? 'ISRC registered.' : 'No ISRC yet. Only enter one that was legitimately assigned to this recording.'}</p>
       </div>
       {track.isrc && <div className="text-right">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-400">ISRC Assigned</p>
         <p className="mt-1 font-mono text-sm text-emerald-300">{formatIsrc(track.isrc)}</p>
       </div>}
     </div>
-    {!track.isrc && <div className="grid gap-4 rounded-md border border-white/10 bg-[#141417] p-4 lg:grid-cols-2">
-      <div className="space-y-3">
-        <p className="text-sm font-medium text-zinc-100">Enter Existing ISRC</p>
-        <Input className="max-w-full font-mono" value={value} onChange={(event) => setValue(event.target.value)} placeholder="QT-A3L-YY-NNNNN" />
-        <Button variant="outline" disabled={!value.trim() || assign.isPending} onClick={() => assign.mutate(false)}>Register existing ISRC</Button>
-      </div>
-      <div className="space-y-3">
-        <p className="text-sm font-medium text-zinc-100">Have MEJay Assign One</p>
-        <div className="space-y-2 text-sm text-zinc-300">
-          <Label className="flex items-start gap-3"><Checkbox checked={controlsRecording} onCheckedChange={(checked) => setControlsRecording(checked === true)} /><span>I control this recording</span></Label>
-          <Label className="flex items-start gap-3"><Checkbox checked={neverAssignedIsrc} onCheckedChange={(checked) => setNeverAssignedIsrc(checked === true)} /><span>This recording has never received an ISRC</span></Label>
-          <Label className="flex items-start gap-3"><Checkbox checked={authorizeAssignment} onCheckedChange={(checked) => setAuthorizeAssignment(checked === true)} /><span>I authorize MEJay to assign the identifier</span></Label>
-        </div>
-        <Button disabled={!mejayReady || assign.isPending} onClick={() => assign.mutate(true)}>Have MEJay Assign One</Button>
-      </div>
+    {!track.isrc && <div className="space-y-3 rounded-md border border-white/10 bg-[#141417] p-4">
+      <p className="text-sm font-medium text-zinc-100">Enter Existing ISRC</p>
+      <div className="flex flex-wrap gap-3"><Input className="max-w-xs font-mono" value={value} onChange={(event) => setValue(event.target.value)} placeholder="CC-XXX-YY-NNNNN" /><Button variant="outline" disabled={!value.trim() || assign.isPending} onClick={() => assign.mutate()}>Register existing ISRC</Button></div>
+      <p className="text-xs text-zinc-500">No ISRC? Leave this empty. MeJay assigns one when the release is approved.</p>
     </div>}
     {assign.isError && <p className="text-sm text-red-400">{assign.error.message}</p>}
   </div>
@@ -309,7 +293,7 @@ function TrackSplitForm({track, detail}: {track: ProviderTrack; detail: Provider
 
 function ReviewStep({detail}: {detail: ProviderReleaseDetail}) {
   const navigate = useNavigate()
-  const submit = useMutation({mutationFn: () => submitProviderRelease(detail.release.id, detail.release.version), onSuccess: () => {toast({title: 'Release submitted for review'}); navigate('/app/artist')}})
+  const submit = useMutation({mutationFn: () => submitProviderRelease(detail.release.id, detail.release.version), onSuccess: () => {toast({title: 'Submitted for MeJay Review', description: 'We will let you know when the review is complete.'}); navigate('/app/artist')}})
   const editable = ['DRAFT', 'METADATA_COMPLETE', 'RIGHTS_COMPLETE', 'ISRC_COMPLETE', 'PRICING_COMPLETE', 'CHANGES_REQUESTED'].includes(detail.release.status)
   const latestFeedback = detail.reviewEvents.find((event) => event.note)?.note
   return <><StepHeading title="Review & Submit" detail="Confirm the release package before sending it to MEJay Publishing." />{latestFeedback && <div className="mb-5 border border-amber-400/30 bg-amber-400/5 p-4 text-sm text-amber-200"><p className="font-medium">Review feedback</p><p className="mt-1">{latestFeedback}</p></div>}<div className="divide-y divide-white/10 border-y border-white/10">{detail.prerequisites.length === 0 ? <div className="flex items-center gap-3 py-4 text-emerald-400"><Check className="h-4 w-4" />All submission requirements are complete</div> : detail.prerequisites.map((item) => <div key={item} className="py-3 text-sm text-zinc-400">Required: {item}</div>)}</div><Button className="mt-6 bg-emerald-400 text-zinc-950 hover:bg-emerald-300" disabled={!editable || detail.prerequisites.length > 0 || submit.isPending} onClick={() => submit.mutate()}>{submit.isPending ? 'Submitting...' : editable ? 'Submit to MEJay Review' : `Release is ${detail.release.status.replace(/_/g, ' ')}`}</Button>{submit.isError && <p className="mt-3 text-sm text-red-400">{submit.error.message}</p>}</>

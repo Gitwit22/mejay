@@ -139,7 +139,7 @@ export async function downloadIsrcRegistryExport(filters: {
   URL.revokeObjectURL(url)
 }
 
-export type ReleaseAdminAction = 'start_review' | 'approve' | 'request_changes' | 'reject' | 'publish_now' | 'schedule' | 'publish_due' | 'unpublish' | 'takedown' | 'restore'
+export type ReleaseAdminAction = 'start_review' | 'approve' | 'request_changes' | 'reject' | 'publish_now' | 'schedule' | 'publish_due' | 'unpublish' | 'takedown' | 'restore' | 'clear_rights' | 'flag_rights'
 
 export type ProviderAdminAction = 'approve' | 'reject' | 'suspend' | 'reinstate'
 
@@ -296,4 +296,39 @@ export function getMarketplaceFinance(filters: MarketplaceFinanceFilters): Promi
   for (const [key, value] of Object.entries(filters)) if (value) params.set(key, value)
   const query = params.size ? `?${params.toString()}` : ''
   return request(`/api/marketplace-admin/finance${query}`)
+}
+
+export type ReleaseReview = {
+  role: 'reviewer' | 'admin'
+  release: Record<string, unknown> & {
+    id: string; title: string; status: string; version: number; rights_status: string; third_party_material: string | null
+    release_type: string; provider_name: string; primary_artist_name: string | null; primary_artist_slug: string | null
+    artwork_asset_id: string | null; genre: string | null; subgenre: string | null; version_title: string | null
+    label_name: string | null; upc: string | null; original_release_date: string | null
+    copyright_year: number | null; copyright_holder: string | null; phonographic_copyright_year: number | null; phonographic_copyright_holder: string | null
+    distribution_status: string
+  }
+  tracks: Array<{
+    id: string; title: string; version_title: string | null; track_number: number; explicit: boolean; language_code: string | null
+    isrc: string | null; isrc_source: string | null; audio_ready: boolean
+    contributors: Array<{name: string; role: string; publisherName: string | null}>
+    featured_artists: Array<{id: string; name: string}>
+  }>
+  certifications: Array<{
+    id: string; certification_version: string; third_party_material: string; rights_status: string; certified_at: string
+    accepted_certifications: Array<{key: string; title: string; text: string}>
+  }>
+  materials: Array<{id: string; material_type: string; licensor_name: string; description: string; license_type: string; document_asset_id: string | null; document_file_name: string | null}>
+  reviewEvents: Array<{decision: string; note: string | null; from_status: string; to_status: string; created_at: string}>
+  readiness: {hasMinimumPrice: boolean; stripeReady: boolean}
+  warnings: string[]
+}
+
+export function getReleaseReview(releaseId: string): Promise<ReleaseReview> {
+  return request(`/api/marketplace-admin/releases/${encodeURIComponent(releaseId)}/review`)
+}
+
+/** Staff-only private file (artwork or rights document); opened in a new tab with the staff session. */
+export function reviewAssetUrl(assetId: string): string {
+  return apiUrl(`/api/marketplace-admin/assets/${encodeURIComponent(assetId)}`)
 }

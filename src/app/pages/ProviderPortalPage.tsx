@@ -1,5 +1,5 @@
 import {useState} from 'react'
-import {useNavigate, useSearchParams} from 'react-router-dom'
+import {Link, useNavigate, useSearchParams} from 'react-router-dom'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {
   BadgeDollarSign,
@@ -28,6 +28,7 @@ import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from '@/c
 import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
 import {getProviderStatusLabel, parseProviderStatus} from '@/lib/marketplace'
+import {ArtistProfileEditor} from '@/app/components/provider/ArtistProfileEditor'
 import {getConnectStatus, openConnectDashboard, startConnectOnboarding, type ConnectOnboardingStatus, type ConnectStatus} from '@/lib/marketplaceCommerceApi'
 import {ProviderEarningsReporting, ProviderOverviewReporting, ProviderSalesReporting} from '@/app/components/provider/ProviderReporting'
 import {
@@ -242,8 +243,21 @@ function Artists() {
   return <div className="space-y-6"><SectionHeader title="My Artists" detail="Artist identities available for release credits." action={<CreateArtistDialog />} />
     <SearchInput value={search} onChange={setSearch} placeholder="Search artists" />
     {artists.isLoading ? <Skeleton className="h-48 bg-white/5" /> : artists.isError ? <ErrorState message={artists.error.message} /> : filtered.length === 0 ? <EmptyState title="No artists found" detail="Create an artist profile to begin preparing a release." /> :
-      <div className="divide-y divide-white/10 border-y border-white/10">{filtered.map((artist) => <div key={artist.id} className="flex items-center gap-4 py-4"><div className="grid h-10 w-10 place-items-center rounded-full bg-emerald-400/10 font-semibold text-emerald-300">{artist.name.charAt(0).toUpperCase()}</div><div className="min-w-0 flex-1"><p className="truncate font-medium">{artist.name}</p><p className="text-xs text-zinc-500">{artist.country_code || 'Country not set'}</p></div><p className="text-xs text-zinc-400">{artist.release_count} releases</p></div>)}</div>}
+      <div className="divide-y divide-white/10 border-y border-white/10">{filtered.map((artist) => <div key={artist.id} className="flex items-center gap-4 py-4"><div className="grid h-10 w-10 place-items-center rounded-full bg-emerald-400/10 font-semibold text-emerald-300">{artist.name.charAt(0).toUpperCase()}</div><div className="min-w-0 flex-1"><p className="truncate font-medium">{artist.name}</p><p className="text-xs text-zinc-500">{artist.country_code || 'Country not set'}</p></div><p className="hidden text-xs text-zinc-400 sm:block">{artist.release_count} releases</p>{(artist.live_release_count ?? 0) > 0 && artist.slug && <Button asChild size="sm" variant="ghost"><Link to={`/artist/${artist.slug}`} target="_blank">Public page</Link></Button>}<ArtistProfileEditor artist={artist} /></div>)}</div>}
   </div>
+}
+
+/** Artist-facing wording for the release lifecycle. */
+function releaseStatusLabel(status: string): string {
+  const labels: Record<string, string> = {SUBMITTED: 'Submitted for MeJay Review', UNDER_REVIEW: 'In MeJay Review', CHANGES_REQUESTED: 'Changes requested', TAKEN_DOWN: 'Taken down'}
+  return labels[status] ?? status.replace(/_/g, ' ').toLowerCase().replace(/^./, (letter) => letter.toUpperCase())
+}
+
+/** Rights states the artist should know about (others need no action). */
+const rightsStatusNotes: Partial<Record<string, string>> = {
+  RIGHTS_REVIEW_REQUIRED: 'Rights review required before approval',
+  RIGHTS_DOCUMENTATION_ATTACHED: 'Rights documents under review',
+  RIGHTS_ISSUE_FLAGGED: 'Rights issue flagged — see review notes',
 }
 
 function Releases() {
@@ -255,7 +269,7 @@ function Releases() {
   return <div className="space-y-6"><SectionHeader title="My Releases" detail="Draft, submit, and monitor your catalog." action={<CreateReleaseDialog artists={artists.data ?? []} />} />
     <SearchInput value={search} onChange={setSearch} placeholder="Search releases" />
     {releases.isLoading ? <Skeleton className="h-48 bg-white/5" /> : releases.isError ? <ErrorState message={releases.error.message} /> : filtered.length === 0 ? <EmptyState title="No releases found" detail="Create your first release draft when an artist profile is ready." /> :
-      <div className="divide-y divide-white/10 border-y border-white/10">{filtered.map((release) => <button type="button" onClick={() => navigate(`/app/artist/releases/${release.id}/edit/${release.draft_step || 'release-information'}`)} key={release.id} className="grid w-full grid-cols-[1fr_auto] items-center gap-4 py-4 text-left hover:bg-white/[0.02] sm:grid-cols-[1fr_9rem_6rem_auto_auto]"><div className="min-w-0"><p className="truncate font-medium">{release.title}</p><p className="truncate text-xs text-zinc-500">{release.primary_artist_name}</p></div><p className="hidden text-sm capitalize text-zinc-400 sm:block">{release.release_type}</p><p className="hidden text-sm text-zinc-400 sm:block">{release.track_count} tracks</p><span className="rounded-full border border-white/10 px-2.5 py-1 text-xs">{release.status.replace(/_/g, ' ')}</span><ChevronRight className="h-4 w-4 text-zinc-500" /></button>)}</div>}
+      <div className="divide-y divide-white/10 border-y border-white/10">{filtered.map((release) => <button type="button" onClick={() => navigate(`/app/artist/releases/${release.id}/edit/${release.draft_step || 'release-information'}`)} key={release.id} className="grid w-full grid-cols-[1fr_auto] items-center gap-4 py-4 text-left hover:bg-white/[0.02] sm:grid-cols-[1fr_9rem_6rem_auto_auto]"><div className="min-w-0"><p className="truncate font-medium">{release.title}</p><p className="truncate text-xs text-zinc-500">{release.primary_artist_name}</p></div><p className="hidden text-sm capitalize text-zinc-400 sm:block">{release.release_type}</p><p className="hidden text-sm text-zinc-400 sm:block">{release.track_count} tracks</p><span className="flex flex-col items-end gap-1"><span className="rounded-full border border-white/10 px-2.5 py-1 text-xs">{releaseStatusLabel(release.status)}</span>{release.rights_status && rightsStatusNotes[release.rights_status] && <span className="text-[11px] text-amber-300">{rightsStatusNotes[release.rights_status]}</span>}</span><ChevronRight className="h-4 w-4 text-zinc-500" /></button>)}</div>}
   </div>
 }
 

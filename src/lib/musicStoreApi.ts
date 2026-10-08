@@ -9,6 +9,8 @@ export type StoreRelease = {
   published_at: string
   artist_id: string
   artist_name: string
+  /** Public artist page slug (absent from older API responses). */
+  artist_slug?: string
   artwork_asset_id: string | null
   product_id: string
   amount_minor: number
@@ -55,6 +57,27 @@ async function request<T>(path: string): Promise<T> {
 
 export function listStoreReleases(): Promise<StoreRelease[]> {
   return request('/api/store/releases')
+}
+
+export type PublicArtist = {
+  id: string
+  name: string
+  slug: string
+  tagline: string | null
+  bio: string | null
+  location: string | null
+  genres: string[]
+  links: Record<string, string>
+  spotify_artist_id: string | null
+  apple_music_artist_id: string | null
+  profile_photo_asset_id: string | null
+  banner_asset_id: string | null
+  verified: boolean
+}
+
+/** Public artist page: profile plus the artist's LIVE releases (same data as the marketplace). */
+export function getPublicArtist(slug: string): Promise<{artist: PublicArtist; releases: StoreRelease[]}> {
+  return request(`/api/store/artists/${encodeURIComponent(slug)}`)
 }
 
 export function getStoreRelease(releaseId: string): Promise<StoreReleaseDetail> {

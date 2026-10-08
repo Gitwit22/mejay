@@ -2,6 +2,7 @@ import {useState} from 'react'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {ArrowDown, ArrowUp, BarChart3, BadgeDollarSign, Landmark, CheckCircle2, Copy, Copyright, Disc3, Download, Fingerprint, Menu, Plus, RefreshCw, Scale, Scissors, Send, ShieldAlert, Sparkles, Trash2, Users, UserRound, X, XCircle} from 'lucide-react'
 
+import {ReleaseReviewDialog} from '@/app/components/admin/ReleaseReviewDialog'
 import {Button} from '@/components/ui/button'
 import {Dialog, DialogContent, DialogHeader, DialogTitle} from '@/components/ui/dialog'
 import {Input} from '@/components/ui/input'
@@ -128,12 +129,13 @@ function ReleaseActions({row, role}: {row: AdminRecord; role: 'reviewer' | 'admi
   const queryClient = useQueryClient()
   const mutation = useMutation({mutationFn: (input: {action: ReleaseAdminAction; note?: string; scheduledReleaseAt?: string}) => commandMarketplaceRelease(String(row.id), {expectedVersion: Number(row.version), ...input}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['marketplace-admin']}); toast({title: 'Release updated'})}, onError: (error) => toast({title: 'Action failed', description: error.message, variant: 'destructive'})})
   const status = String(row.status)
-  const actions: Array<{action: ReleaseAdminAction; label: string; admin?: boolean; note?: boolean}> = status === 'SUBMITTED' ? [{action: 'start_review', label: 'Start review'}]
-    : status === 'UNDER_REVIEW' ? [{action: 'approve', label: 'Approve'}, {action: 'request_changes', label: 'Request changes', note: true}, {action: 'reject', label: 'Reject', note: true}]
+  const actions: Array<{action: ReleaseAdminAction; label: string; admin?: boolean; note?: boolean}> = status === 'SUBMITTED' ? []
+    // Approve/reject live in the review dialog, next to the rights certification and documents.
+    : status === 'UNDER_REVIEW' ? []
       : status === 'APPROVED' ? [{action: 'publish_now', label: 'Publish now', admin: true}, {action: 'schedule', label: 'Schedule', admin: true}]
         : status === 'SCHEDULED' ? [{action: 'publish_due', label: 'Publish due', admin: true}, {action: 'takedown', label: 'Takedown', admin: true, note: true}]
           : status === 'LIVE' ? [{action: 'unpublish', label: 'Unpublish', admin: true}, {action: 'takedown', label: 'Takedown', admin: true, note: true}] : []
-  return <div className="flex gap-2">{actions.filter((item) => !item.admin || role === 'admin').map((item) => <Button key={item.action} size="sm" variant="outline" disabled={mutation.isPending} onClick={() => {
+  return <div className="flex gap-2">{['SUBMITTED', 'UNDER_REVIEW'].includes(status) && <ReleaseReviewDialog releaseId={String(row.id)} title={String(row.title ?? 'Release')} />}{actions.filter((item) => !item.admin || role === 'admin').map((item) => <Button key={item.action} size="sm" variant="outline" disabled={mutation.isPending} onClick={() => {
       if (item.action === 'schedule') {
         const raw = window.prompt('Release date and time (local), e.g. 2026-12-01 09:00')?.trim()
         if (!raw) return

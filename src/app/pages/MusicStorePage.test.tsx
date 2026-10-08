@@ -26,7 +26,7 @@ describe('StoreReleasePage song sales', () => {
     vi.mocked(getStoreRelease).mockResolvedValue({
       release: {
         id: 'release-1', title: 'Night Drive', release_type: 'ep', genre: 'House', original_release_date: null, published_at: '2026-10-01T00:00:00.000Z',
-        artist_id: 'artist-1', artist_name: 'Example Artist', artwork_asset_id: null, product_id: 'release-product', amount_minor: 999, currency: 'USD',
+        artist_id: 'artist-1', artist_name: 'Example Artist', artist_slug: 'example-artist', artwork_asset_id: null, product_id: 'release-product', amount_minor: 999, currency: 'USD',
         purchase_available: true, track_count: 2, preview_asset_id: null, version_title: null, subgenre: null, label_name: null,
       },
       tracks: [
@@ -41,6 +41,7 @@ describe('StoreReleasePage song sales', () => {
     render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/app/store/release-1']}><Routes><Route path="/app/store/:releaseId" element={<StoreReleasePage />} /></Routes></MemoryRouter></QueryClientProvider>)
     expect(await screen.findByText('Getaway')).toBeInTheDocument()
     expect(screen.getByText('$3.49')).toBeInTheDocument()
+    expect(screen.getByRole('link', {name: 'Example Artist'})).toHaveAttribute('href', '/artist/example-artist')
     // Only the priced song gets its own buy button; the unpriced one is sold with the release.
     const buySong = screen.getAllByRole('button', {name: 'Buy song'})
     expect(buySong).toHaveLength(1)

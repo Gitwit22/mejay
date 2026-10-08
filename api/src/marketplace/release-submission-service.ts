@@ -65,7 +65,27 @@ export async function releaseCertificationProblems(db: Database, release: {id: s
  * Write the immutable certification snapshot for a submission and set the release's rights status.
  * Runs inside the submit transaction; the draft is consumed so any resubmission must re-certify.
  */
-export async function snapshotReleaseCertification(db: Database, release: any, userId: string, meta: RequestMeta | null): Promise<{certificationId: string; rightsStatus: string}> {
+/** The release columns captured in a certification snapshot (a full `releases` row satisfies it). */
+export type SubmittableRelease = {
+  id: string
+  provider_profile_id: string
+  version: number
+  title: string
+  release_type: string
+  certification_draft?: unknown
+  version_title?: string | null
+  genre?: string | null
+  subgenre?: string | null
+  label_name?: string | null
+  upc?: string | null
+  original_release_date?: string | null
+  copyright_year?: number | null
+  copyright_holder?: string | null
+  phonographic_copyright_year?: number | null
+  phonographic_copyright_holder?: string | null
+}
+
+export async function snapshotReleaseCertification(db: Database, release: SubmittableRelease, userId: string, meta: RequestMeta | null): Promise<{certificationId: string; rightsStatus: string}> {
   const draft = parseDraft(release.certification_draft)
   const materials = await materialsFor(db, release.id)
   const missingIsrc = await tracksWithoutIsrc(db, release.id)
