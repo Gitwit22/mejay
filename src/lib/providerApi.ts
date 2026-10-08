@@ -31,7 +31,7 @@ export type ProviderSalesReport = {
   downloads: Array<{release_id: string; release_title: string; track_id: string | null; track_title: string; download_count: number}>
   refunds: Array<{orderId: string; saleDate: string; releaseId: string; releaseTitle: string; amountMinor: number; status: string}>
   /** Optional so reports from an older API still render. orderId is an internal reference, never buyer data. */
-  transactions?: Array<{orderId: string; saleDate: string; releaseId: string; releaseTitle: string; priceMinor: number; earningsMinor: number; status: string; payoutStatus: string}>
+  transactions?: Array<{orderId: string; saleDate: string; releaseId: string; releaseTitle: string; songTitle?: string | null; priceMinor: number; earningsMinor: number; status: string; payoutStatus: string}>
   recipientLiabilities: Array<{name: string; email: string | null; role: string | null; allocatedMinor: number; refundAdjustmentMinor: number; owedMinor: number}>
 }
 
@@ -103,6 +103,8 @@ export type ProviderReleaseDetail = {
   assets: Array<{id: string; release_id: string | null; track_id: string | null; kind: 'artwork' | 'audio'; processing_status: string; metadata: Record<string, unknown>}>
   rights: Array<{id: string; release_id: string | null; track_id: string | null; declaration_type: 'distribution' | 'master' | 'composition'; rights_holder: string; ownership_bps: number; territories: string[]}>
   product: {id: string; name: string; amount_minor: number | null; currency: string | null} | null
+  /** Optional single-song offers (absent from older API responses). */
+  trackProducts?: Array<{track_id: string; product_id: string; amount_minor: number; currency: string}>
   splits: Array<{id: string; track_id: string; entry_id: string; payee_name: string; payee_email: string | null; role: string | null; share_bps: number}>
   reviewEvents: Array<{decision: string; note: string | null; from_status: string; to_status: string; created_at: string}>
   prerequisites: string[]
@@ -297,6 +299,16 @@ export function getMarketplacePricingPolicy(amountMinor?: number): Promise<Marke
 /** Create or update the release's price in one atomic request. */
 export async function createProviderPricing(releaseId: string, title: string, amountMinor: number): Promise<void> {
   await request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}/price`, {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({name: title, amountMinor})})
+}
+
+/** Sell one song on its own, alongside the release (locked once the release is submitted). */
+export async function setProviderTrackPrice(trackId: string, amountMinor: number): Promise<void> {
+  await request(`/api/marketplace/tracks/${encodeURIComponent(trackId)}/price`, {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({amountMinor})})
+}
+
+/** Stop selling a song on its own; it stays available as part of the release. */
+export async function clearProviderTrackPrice(trackId: string): Promise<void> {
+  await request(`/api/marketplace/tracks/${encodeURIComponent(trackId)}/price`, {method: 'DELETE'})
 }
 
 export function replaceProviderSplits(trackId: string, entries: Array<{payeeName: string; payeeEmail?: string; role?: string; shareBps: number}>): Promise<unknown> {

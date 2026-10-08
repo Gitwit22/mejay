@@ -276,6 +276,7 @@ export type MarketplaceFinanceSummary = {
     paidAt: string
     providerName: string | null
     releaseTitle: string
+    songTitle?: string | null
     artistName: string
     grossMinor: number
     platformCommissionMinor: number

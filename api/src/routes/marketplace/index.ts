@@ -11,6 +11,7 @@ import {
   releaseSchema,
   releaseDraftSchema,
   releasePriceSchema,
+  trackPriceSchema,
   revenueSplitsSchema,
   rightsDeclarationSchema,
   submitReleaseSchema,
@@ -145,6 +146,21 @@ export const createPrice = handler(priceSchema, (service, userId, input, params)
 export const setReleasePrice = handler(releasePriceSchema, (service, userId, input, params) =>
   service.setReleasePrice(userId, requiredParam(params, 'releaseId'), input),
 )
+export const setTrackPrice = handler(trackPriceSchema, (service, userId, input, params) =>
+  service.setTrackPrice(userId, requiredParam(params, 'trackId'), input),
+)
+/** DELETE carries no body, so it skips the JSON-schema handler. */
+export const clearTrackPrice = async (context: Context): Promise<Response> => {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+  const userId = await getSessionUserId(context.request, context.env)
+  if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+  try {
+    const result = await new MarketplaceService(context.env.DB).clearTrackPrice(userId, requiredParam(context.params ?? {}, 'trackId'))
+    return json({ok: true, data: result}, {status: 200})
+  } catch (error) {
+    return errorResponse(error)
+  }
+}
 export const replaceRevenueSplits = handler(revenueSplitsSchema, (service, userId, input, params) =>
   service.replaceRevenueSplits(userId, requiredParam(params, 'trackId'), input),
 )

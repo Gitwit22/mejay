@@ -123,7 +123,8 @@ export class StoreService {
 
     const {results: tracks} = await this.database.prepare(
       `SELECT t.id, t.title, t.version_title, t.disc_number, t.track_number,
-        t.duration_ms, t.explicit, preview.id AS preview_asset_id
+        t.duration_ms, t.explicit, preview.id AS preview_asset_id,
+        song.product_id, song.amount_minor, song.currency
        FROM tracks t
        JOIN releases r ON r.id = t.release_id AND r.status = 'LIVE'
        LEFT JOIN LATERAL (
@@ -131,6 +132,15 @@ export class StoreService {
          WHERE asset.track_id = t.id AND asset.kind = 'audio' AND asset.processing_status = 'ready'
          ORDER BY asset.created_at DESC LIMIT 1
        ) preview ON TRUE
+       -- Optional single-song offer; null when the song is only sold as part of the release.
+       LEFT JOIN LATERAL (
+         SELECT product.id AS product_id, price.amount_minor, price.currency
+         FROM products product JOIN prices price ON price.product_id = product.id
+         WHERE product.track_id = t.id AND product.active = TRUE AND price.active = TRUE
+           AND price.effective_from <= CURRENT_TIMESTAMP
+           AND (price.effective_until IS NULL OR price.effective_until > CURRENT_TIMESTAMP)
+         ORDER BY price.effective_from DESC, product.created_at DESC LIMIT 1
+       ) song ON TRUE
        WHERE t.release_id = ?1
        ORDER BY t.disc_number, t.track_number`,
     ).bind(releaseId).all()

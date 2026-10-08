@@ -27,6 +27,10 @@ export type StoreTrack = {
   duration_ms: number | null
   explicit: boolean
   preview_asset_id: string | null
+  /** Single-song offer; null when the song is only sold with the release. */
+  product_id?: string | null
+  amount_minor?: number | null
+  currency?: string | null
 }
 
 export type StoreReleaseDetail = {

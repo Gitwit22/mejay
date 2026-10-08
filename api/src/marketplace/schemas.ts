@@ -228,7 +228,13 @@ export const releasePriceSchema = z.object({
   amountMinor: z.number().int().min(MINIMUM_RELEASE_PRICE_MINOR, `Marketplace releases must cost at least ${formatMinimumPrice()}`).max(100_000_00),
 }).strict()
 
+/** Optional per-song price on a multi-track release; same USD minimum as the release itself. */
+export const trackPriceSchema = z.object({
+  amountMinor: z.number().int().min(MINIMUM_RELEASE_PRICE_MINOR, `Songs must cost at least ${formatMinimumPrice()}`).max(100_000_00),
+}).strict()
+
 export type ReleasePriceInput = z.infer<typeof releasePriceSchema>
+export type TrackPriceInput = z.infer<typeof trackPriceSchema>
 export type IsrcAssignmentInput = z.infer<typeof isrcAssignmentSchema>
 export type GeneratedIsrcInput = z.infer<typeof generatedIsrcSchema>
 export type UploadInitInput = z.infer<typeof uploadInitSchema>

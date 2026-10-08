@@ -27,6 +27,7 @@ export type FinanceOrderRow = {
   provider_name: string | null
   release_id: string | null
   release_title: string
+  song_title: string | null
   artist_name: string
   currency: string
   gross_amount_minor: number
@@ -71,6 +72,8 @@ export type FinanceSummary = {
     paidAt: string
     providerName: string | null
     releaseTitle: string
+    /** Song title for a single-song sale; null for a whole-release sale. */
+    songTitle: string | null
     artistName: string
     grossMinor: number
     platformCommissionMinor: number
@@ -185,6 +188,7 @@ export function buildFinanceSummary(filters: FinanceFilters, rows: FinanceOrderR
         paidAt: row.paid_at,
         providerName: row.provider_name,
         releaseTitle: row.release_title,
+        songTitle: row.song_title ?? null,
         artistName: row.artist_name,
         grossMinor: gross,
         platformCommissionMinor: commission,
@@ -216,6 +220,7 @@ export class MarketplaceFinanceService {
       `WITH filtered AS (
          SELECT purchase_order.id, purchase_order.paid_at, purchase_order.provider_profile_id,
            provider.display_name AS provider_name, item.release_id, item.release_title, item.artist_name,
+           item.catalog_snapshot->>'track_title' AS song_title,
            purchase_order.currency, purchase_order.gross_amount_minor, purchase_order.platform_fee_minor,
            purchase_order.provider_proceeds_minor, purchase_order.stripe_fee_minor,
            purchase_order.refunded_amount_minor,

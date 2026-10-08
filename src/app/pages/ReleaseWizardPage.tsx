@@ -26,6 +26,8 @@ import {
   updateProviderTrack,
   uploadProviderAsset,
   getMarketplacePricingPolicy,
+  setProviderTrackPrice,
+  clearProviderTrackPrice,
 } from '@/lib/providerApi'
 
 const steps: Array<{id: ReleaseDraftStep; label: string}> = [
@@ -259,7 +261,38 @@ function PricingStep({detail}: {detail: ProviderReleaseDetail}) {
     {pricingEditable && <Button disabled={!meetsMinimum || save.isPending} onClick={() => save.mutate()}>{detail.product?.amount_minor != null ? 'Update price' : 'Save price'}</Button>}
     {meetsMinimum && <PayoutEstimate amountMinor={amountMinor!} />}
     {save.isError && <p className="text-sm text-red-400">{save.error.message}</p>}
-  </div></>
+  </div>
+  {detail.tracks.length > 1 && <SongPricing detail={detail} minimumMinor={minimumMinor} editable={pricingEditable} />}
+  </>
+}
+
+/** Optional per-song prices on multi-track releases. Songs without a price are sold only with the release. */
+function SongPricing({detail, minimumMinor, editable}: {detail: ProviderReleaseDetail; minimumMinor: number | undefined; editable: boolean}) {
+  return <section className="mt-10 max-w-2xl"><h3 className="text-base font-semibold">Sell songs individually</h3><p className="mt-1 text-sm text-zinc-400">Optional. Fans can buy a priced song on its own; every song is always included when they buy the release.</p>
+    <div className="mt-4 divide-y divide-white/10 border-y border-white/10">{detail.tracks.map((track) => <SongPriceRow key={track.id} track={track} detail={detail} minimumMinor={minimumMinor} editable={editable} />)}</div>
+  </section>
+}
+
+function SongPriceRow({track, detail, minimumMinor, editable}: {track: ProviderTrack; detail: ProviderReleaseDetail; minimumMinor: number | undefined; editable: boolean}) {
+  const queryClient = useQueryClient()
+  const current = detail.trackProducts?.find((product) => product.track_id === track.id)
+  const [price, setPrice] = useState(current ? (current.amount_minor / 100).toFixed(2) : '')
+  const amountMinor = parseUsdToMinor(price)
+  const meetsMinimum = amountMinor !== null && minimumMinor !== undefined && amountMinor >= minimumMinor
+  const refresh = () => queryClient.invalidateQueries({queryKey: ['provider', 'release', detail.release.id]})
+  const save = useMutation({mutationFn: () => setProviderTrackPrice(track.id, amountMinor!), onSuccess: async () => {await refresh(); toast({title: `${track.title} price saved`})}})
+  const remove = useMutation({mutationFn: () => clearProviderTrackPrice(track.id), onSuccess: async () => {setPrice(''); await refresh(); toast({title: `${track.title} is sold with the release only`})}})
+  return <div className="space-y-3 py-4">
+    <div className="flex flex-wrap items-center gap-3"><p className="min-w-0 flex-1 truncate text-sm font-medium">{track.track_number}. {track.title}</p>
+      <Input aria-label={`${track.title} price (USD)`} className="w-28" type="number" inputMode="decimal" step="0.01" min={minimumMinor !== undefined ? minimumMinor / 100 : undefined} placeholder="Not sold alone" value={price} onChange={(event) => setPrice(event.target.value)} disabled={!editable} />
+      {editable && <Button size="sm" disabled={!meetsMinimum || save.isPending || (current !== undefined && amountMinor === current.amount_minor)} onClick={() => save.mutate()}>{current ? 'Update' : 'Sell song'}</Button>}
+      {editable && current && <Button size="sm" variant="ghost" disabled={remove.isPending} onClick={() => remove.mutate()}>Remove</Button>}
+    </div>
+    {current && <p className="text-xs text-emerald-400">Selling for {usd(current.amount_minor)} USD</p>}
+    {amountMinor !== null && minimumMinor !== undefined && !meetsMinimum && <p className="text-xs text-amber-300">The minimum price is {usd(minimumMinor)} USD.</p>}
+    {meetsMinimum && amountMinor !== current?.amount_minor && <PayoutEstimate amountMinor={amountMinor!} />}
+    {(save.isError || remove.isError) && <p className="text-xs text-red-400">{(save.error ?? remove.error)?.message}</p>}
+  </div>
 }
 
 function SplitsStep({detail}: {detail: ProviderReleaseDetail}) {

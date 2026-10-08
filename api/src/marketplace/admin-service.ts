@@ -339,8 +339,10 @@ export class MarketplaceAdminService {
         // Restore sales for releases that are still live; drafts/taken-down releases stay inactive.
         await db.prepare(
           `UPDATE products SET active = TRUE, updated_at = CURRENT_TIMESTAMP
-           WHERE provider_profile_id = ?1 AND release_id IN (
-             SELECT id FROM releases WHERE provider_profile_id = ?1 AND status = 'LIVE'
+           WHERE provider_profile_id = ?1 AND (
+             release_id IN (SELECT id FROM releases WHERE provider_profile_id = ?1 AND status = 'LIVE')
+             OR track_id IN (SELECT track.id FROM tracks track JOIN releases release ON release.id = track.release_id
+               WHERE release.provider_profile_id = ?1 AND release.status = 'LIVE')
            )`,
         ).bind(providerId).run()
       }
@@ -415,7 +417,7 @@ export class MarketplaceAdminService {
           `UPDATE releases SET status = 'LIVE', version = version + 1, updated_at = ?1, published_at = ?1
            WHERE id = ?2`,
         ).bind(now, release.id).run()
-        await db.prepare('UPDATE products SET active = TRUE, updated_at = ?1 WHERE release_id = ?2').bind(now, release.id).run()
+        await db.prepare('UPDATE products SET active = TRUE, updated_at = ?1 WHERE (release_id = ?2 OR track_id IN (SELECT id FROM tracks WHERE release_id = ?2))').bind(now, release.id).run()
         await insertAudit(db, null, release, 'publish_due', 'LIVE')
         return 'published' as const
       })
@@ -520,9 +522,9 @@ export class MarketplaceAdminService {
       }
 
       if (['publish_now', 'publish_due'].includes(command.action)) {
-        await db.prepare('UPDATE products SET active = TRUE, updated_at = ?1 WHERE release_id = ?2').bind(now, release.id).run()
+        await db.prepare('UPDATE products SET active = TRUE, updated_at = ?1 WHERE (release_id = ?2 OR track_id IN (SELECT id FROM tracks WHERE release_id = ?2))').bind(now, release.id).run()
       } else if (['unpublish', 'takedown'].includes(command.action)) {
-        await db.prepare('UPDATE products SET active = FALSE, updated_at = ?1 WHERE release_id = ?2').bind(now, release.id).run()
+        await db.prepare('UPDATE products SET active = FALSE, updated_at = ?1 WHERE (release_id = ?2 OR track_id IN (SELECT id FROM tracks WHERE release_id = ?2))').bind(now, release.id).run()
       }
       await insertAudit(db, userId, release, command.action, target)
       return row

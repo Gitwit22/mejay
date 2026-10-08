@@ -14,6 +14,7 @@ import type {
   ReleaseInput,
   ReleasePriceInput,
   RevenueSplitsInput,
+  TrackPriceInput,
   RightsDeclarationInput,
   SubmitReleaseInput,
   TrackInput,
@@ -368,6 +369,14 @@ export class MarketplaceService {
        WHERE p.release_id = ?1 AND p.provider_profile_id = ?2 AND p.active = TRUE
        ORDER BY pr.effective_from DESC LIMIT 1`,
     ).bind(releaseId, context.providerId).first()
+    const {results: trackProducts} = await this.database.prepare(
+      `SELECT p.track_id, p.id AS product_id, pr.amount_minor, pr.currency
+       FROM products p JOIN prices pr ON pr.product_id = p.id AND pr.active = TRUE
+         AND pr.effective_from <= CURRENT_TIMESTAMP
+         AND (pr.effective_until IS NULL OR pr.effective_until > CURRENT_TIMESTAMP)
+       WHERE p.provider_profile_id = ?2 AND p.track_id IN (SELECT id FROM tracks WHERE release_id = ?1)
+       ORDER BY p.track_id`,
+    ).bind(releaseId, context.providerId).all()
     const {results: splits} = await this.database.prepare(
       `SELECT s.id, s.track_id, s.version, e.id AS entry_id, e.payee_name, e.payee_email, e.role, e.share_bps
        FROM revenue_split_sets s JOIN revenue_split_entries e ON e.split_set_id = s.id
@@ -379,7 +388,7 @@ export class MarketplaceService {
        FROM release_review_events WHERE release_id = ?1 ORDER BY created_at DESC`,
     ).bind(releaseId).all()
     const prerequisites = await this.unmetPrerequisites(this.database, release, 'SUBMITTED')
-    return {release, tracks, assets, rights, product, splits, reviewEvents, prerequisites}
+    return {release, tracks, assets, rights, product, trackProducts, splits, reviewEvents, prerequisites}
   }
 
   async updateReleaseDraft(userId: string, releaseId: string, input: ReleaseDraftInput): Promise<unknown> {
@@ -846,6 +855,60 @@ export class MarketplaceService {
       ).bind(id, product.id, input.amountMinor))
       await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'price', entityId: id, action: 'price.set', after: price})
       return {productId: product.id, price}
+    })
+  }
+
+  /**
+   * Sell one song on its own, alongside the release. Reuses the song's product, retires the previous
+   * price, and is locked once the release is submitted, exactly like the release price.
+   */
+  async setTrackPrice(userId: string, trackId: string, input: TrackPriceInput): Promise<unknown> {
+    return this.database.transaction(async (db: Database) => {
+      const context = await providerContext(db, userId)
+      await assertTrackMutable(db, trackId, context.providerId)
+      const track = await db.prepare('SELECT title FROM tracks WHERE id = ?1 AND provider_profile_id = ?2')
+        .bind(trackId, context.providerId).first<{title: string}>()
+      if (!track) throw new MarketplaceError(404, 'not_found', 'Marketplace resource was not found')
+      let product = await db.prepare(
+        `SELECT id FROM products WHERE track_id = ?1 AND provider_profile_id = ?2
+         ORDER BY created_at LIMIT 1 FOR UPDATE`,
+      ).bind(trackId, context.providerId).first<{id: string}>()
+      if (!product) {
+        product = await inserted<{id: string}>(db.prepare(
+          `INSERT INTO products (id, provider_profile_id, track_id, name)
+           VALUES (?1, ?2, ?3, ?4) RETURNING id`,
+        ).bind(crypto.randomUUID(), context.providerId, trackId, track.title))
+        await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'product', entityId: product.id, action: 'product.created', after: product})
+      }
+      await db.prepare(
+        `UPDATE prices SET active = FALSE,
+          effective_until = CASE WHEN effective_from < CURRENT_TIMESTAMP THEN CURRENT_TIMESTAMP ELSE effective_until END
+         WHERE product_id = ?1 AND active = TRUE`,
+      ).bind(product.id).run()
+      const id = crypto.randomUUID()
+      const price = await inserted<{id: string; amount_minor: number; currency: string}>(db.prepare(
+        `INSERT INTO prices (id, product_id, amount_minor, currency) VALUES (?1, ?2, ?3, 'USD') RETURNING *`,
+      ).bind(id, product.id, input.amountMinor))
+      await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'price', entityId: id, action: 'price.set', after: price})
+      return {productId: product.id, price}
+    })
+  }
+
+  /** Stop selling a song on its own. Past song sales and their downloads are unaffected. */
+  async clearTrackPrice(userId: string, trackId: string): Promise<{cleared: boolean}> {
+    return this.database.transaction(async (db: Database) => {
+      const context = await providerContext(db, userId)
+      await assertTrackMutable(db, trackId, context.providerId)
+      const {results: retired} = await db.prepare(
+        `UPDATE prices SET active = FALSE,
+          effective_until = CASE WHEN effective_from < CURRENT_TIMESTAMP THEN CURRENT_TIMESTAMP ELSE effective_until END
+         WHERE active = TRUE AND product_id IN (SELECT id FROM products WHERE track_id = ?1 AND provider_profile_id = ?2)
+         RETURNING id`,
+      ).bind(trackId, context.providerId).all<{id: string}>()
+      for (const price of retired) {
+        await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'price', entityId: price.id, action: 'price.retired'})
+      }
+      return {cleared: retired.length > 0}
     })
   }
 

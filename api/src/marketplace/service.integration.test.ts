@@ -7,6 +7,8 @@ import {MarketplaceAdminService} from './admin-service'
 import {CommerceService} from './commerce-service'
 import {ConnectService} from './connect-service'
 import {MarketplaceFinanceService} from './finance-service'
+import {MarketplaceReportingService} from './reporting-service'
+import {StoreService} from './store-service'
 import {claimStripeWebhookEvent} from './webhook-events'
 import {MarketplaceService} from './service'
 
@@ -103,7 +105,7 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
     return {userId, provider, artist, release, track}
   }
 
-  async function prepareLiveRelease(label: string) {
+  async function prepareLiveRelease(label: string, options: {songPriceMinor?: number} = {}) {
     const fixture = await createProviderFixture(label)
     await service.createAsset(fixture.userId, {
       releaseId: fixture.release.id,
@@ -155,6 +157,9 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
         {payeeName: 'Label', shareBps: 3000},
       ],
     })
+    if (options.songPriceMinor !== undefined) {
+      await service.setTrackPrice(fixture.userId, fixture.track.id, {amountMinor: options.songPriceMinor})
+    }
     let version = fixture.release.version
     for (const targetStatus of ['METADATA_COMPLETE', 'RIGHTS_COMPLETE', 'ISRC_COMPLETE', 'PRICING_COMPLETE', 'SUBMITTED'] as const) {
       const transitioned = await service.transitionRelease(fixture.userId, fixture.release.id, {targetStatus, expectedVersion: version}) as {version: number}
@@ -628,6 +633,92 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       expect(filtered.totals.orders).toBe(0)
       const dated = await finance.getSummary(adminUserId, {providerId: fixture.provider.id, from: today, to: today, paymentStatus: 'paid'})
       expect(dated.totals.orders).toBe(1)
+    })
+
+    it('sells a single song end to end: price, store, checkout, fulfillment, payout, reporting, takedown', async () => {
+      await resetIsrcState()
+      const fixture = await prepareLiveRelease('Song', {songPriceMinor: 349})
+      const songProduct = await pool.query<{id: string; active: boolean}>('SELECT id, active FROM products WHERE track_id = $1', [fixture.track.id])
+      expect(songProduct.rows[0].active).toBe(true)
+
+      // Artist can no longer change the song price once the release is live.
+      await expect(service.setTrackPrice(fixture.userId, fixture.track.id, {amountMinor: 399})).rejects.toMatchObject({code: 'release_locked'})
+
+      // Store shows the song offer next to the release offer.
+      const store = new StoreService(new Database(connectionString!, pool) as never)
+      const detail = await store.getRelease(fixture.release.id) as {release: {amount_minor: number}; tracks: Array<{id: string; product_id: string | null; amount_minor: number | null}>}
+      expect(detail.release.amount_minor).toBe(999)
+      expect(detail.tracks[0]).toMatchObject({id: fixture.track.id, product_id: songProduct.rows[0].id, amount_minor: 349})
+
+      const buyerId = crypto.randomUUID()
+      await pool.query(`INSERT INTO users (id, email, account_intent) VALUES ($1, $2, 'consumer')`, [buyerId, `song-${buyerId.slice(0, 8)}@example.test`])
+      const calls = stubStripe(40)
+      const commerce = new CommerceService(new Database(connectionString!, pool) as never, 'sk_test', 1000)
+      const checkout = await commerce.createCheckout(buyerId, songProduct.rows[0].id, 'https://app.test')
+      const sessionCall = calls.find((call) => call.url.endsWith('/v1/checkout/sessions'))
+      expect(sessionCall?.body?.get('line_items[0][price_data][unit_amount]')).toBe('349')
+      expect(sessionCall?.body?.get('line_items[0][price_data][product_data][name]')).toBe('Song Track')
+      expect(sessionCall?.body?.get('metadata[trackId]')).toBe(fixture.track.id)
+
+      const attempt = await pool.query<{id: string; release_id: string}>('SELECT id, release_id FROM marketplace_checkout_attempts WHERE stripe_checkout_session_id = $1', [checkout.sessionId])
+      expect(attempt.rows[0].release_id).toBe(fixture.release.id)
+      const {orderId} = await commerce.fulfillPaidSession({
+        id: checkout.sessionId, payment_status: 'paid', payment_intent: `pi_${crypto.randomUUID()}`, amount_total: 349, currency: 'usd', livemode: false,
+        metadata: {kind: 'marketplace_purchase', attemptId: attempt.rows[0].id, userId: buyerId, productId: songProduct.rows[0].id},
+      })
+      // $3.49 at 10%: 35¢ commission + 40¢ Stripe fee retained; artist receives 274¢.
+      const order = await pool.query('SELECT gross_amount_minor, platform_fee_minor, provider_proceeds_minor, transfer_status FROM marketplace_orders WHERE id = $1', [orderId])
+      expect(order.rows[0]).toEqual({gross_amount_minor: 349, platform_fee_minor: 75, provider_proceeds_minor: 274, transfer_status: 'transferred'})
+      expect(calls.find((call) => call.url.endsWith('/v1/transfers'))?.body?.get('amount')).toBe('274')
+      const allocations = await pool.query<{track_id: string; amount_minor: number}>('SELECT track_id, amount_minor FROM marketplace_split_allocations WHERE order_id = $1 ORDER BY amount_minor DESC', [orderId])
+      expect(allocations.rows.map((row) => row.amount_minor).reduce((sum, value) => sum + value, 0)).toBe(274)
+      expect(new Set(allocations.rows.map((row) => row.track_id))).toEqual(new Set([fixture.track.id]))
+
+      const [purchase] = await commerce.listPurchases(buyerId) as Array<{entitlement_id: string; track_id: string | null; product_name: string; files: Array<{id: string; trackId: string}>}>
+      expect(purchase).toMatchObject({track_id: fixture.track.id, product_name: 'Song Track'})
+      expect(purchase.files.map((file) => file.trackId)).toEqual([fixture.track.id])
+      await expect(commerce.getDownload(buyerId, purchase.entitlement_id, purchase.files[0].id)).resolves.toMatchObject({mimeType: 'audio/wav'})
+
+      // Already owned: the song again is refused; a buyer who owns the release cannot buy the song.
+      await expect(commerce.createCheckout(buyerId, songProduct.rows[0].id, 'https://app.test')).rejects.toMatchObject({code: 'already_owned'})
+
+      const report = await new MarketplaceReportingService(new Database(connectionString!, pool) as never).getProviderReport(fixture.userId, 'all')
+      expect(report.transactions.find((row) => row.orderId === orderId)).toMatchObject({songTitle: 'Song Track', releaseTitle: 'Song Release', priceMinor: 349, earningsMinor: 274})
+      const finance = await new MarketplaceFinanceService(new Database(connectionString!, pool) as never).getSummary(adminUserId, {providerId: fixture.provider.id})
+      expect(finance.transactions[0]).toMatchObject({orderId, songTitle: 'Song Track', grossMinor: 349})
+
+      // Taking the release down stops song sales too.
+      await adminService().commandRelease(adminUserId, fixture.release.id, {action: 'takedown', expectedVersion: fixture.version, note: 'Rights claim'})
+      const afterTakedown = await pool.query<{active: boolean}>('SELECT active FROM products WHERE track_id = $1', [fixture.track.id])
+      expect(afterTakedown.rows[0].active).toBe(false)
+      const otherBuyer = crypto.randomUUID()
+      await pool.query(`INSERT INTO users (id, email, account_intent) VALUES ($1, $2, 'consumer')`, [otherBuyer, `song2-${otherBuyer.slice(0, 8)}@example.test`])
+      await expect(commerce.createCheckout(otherBuyer, songProduct.rows[0].id, 'https://app.test')).rejects.toMatchObject({code: 'product_not_found'})
+    })
+
+    it('refuses a song checkout to a buyer who already owns the release', async () => {
+      const {commerce, buyerId, fixture} = await buyLiveRelease('Owner', 59)
+      // Song products can only be priced before submission, so add one directly for this check.
+      const productId = crypto.randomUUID()
+      await pool.query(`INSERT INTO products (id, provider_profile_id, track_id, name) VALUES ($1, $2, $3, 'Owner Track')`, [productId, fixture.provider.id, fixture.track.id])
+      await pool.query(`INSERT INTO prices (id, product_id, amount_minor, currency) VALUES ($1, $2, 349, 'USD')`, [crypto.randomUUID(), productId])
+      await expect(commerce.createCheckout(buyerId, productId, 'https://app.test')).rejects.toMatchObject({code: 'already_owned'})
+    })
+
+    it('lets the artist set and remove a song price while the release is a draft', async () => {
+      const {userId, track} = await createProviderFixture('Draft')
+      await service.setTrackPrice(userId, track.id, {amountMinor: 300})
+      await service.setTrackPrice(userId, track.id, {amountMinor: 450})
+      const active = await pool.query<{amount_minor: number}>(
+        `SELECT price.amount_minor FROM prices price JOIN products product ON product.id = price.product_id
+         WHERE product.track_id = $1 AND price.active = TRUE`, [track.id])
+      expect(active.rows).toEqual([{amount_minor: 450}])
+      await expect(service.clearTrackPrice(userId, track.id)).resolves.toEqual({cleared: true})
+      const none = await pool.query<{count: number}>(
+        `SELECT COUNT(*)::integer AS count FROM prices price JOIN products product ON product.id = price.product_id
+         WHERE product.track_id = $1 AND price.active = TRUE`, [track.id])
+      expect(none.rows[0].count).toBe(0)
+      await expect(service.setTrackPrice(crypto.randomUUID(), track.id, {amountMinor: 300})).rejects.toBeTruthy()
     })
 
     it('pays out held transfers once a suspended provider is reinstated', async () => {

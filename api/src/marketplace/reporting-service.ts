@@ -24,6 +24,8 @@ type OrderRow = {
   release_id: string
   release_title: string
   artist_name: string
+  /** Song title when the sale was a single song; absent for whole-release sales. */
+  song_title?: string | null
 }
 
 type AllocationRow = {
@@ -70,7 +72,7 @@ export type ProviderSalesReport = {
    * One row per sale, newest first. orderId is MEJay's internal order reference (no buyer details);
    * earningsMinor is the artist share after refunds and lost disputes.
    */
-  transactions: Array<{orderId: string; saleDate: string; releaseId: string; releaseTitle: string; priceMinor: number; earningsMinor: number; status: string; payoutStatus: string}>
+  transactions: Array<{orderId: string; saleDate: string; releaseId: string; releaseTitle: string; songTitle: string | null; priceMinor: number; earningsMinor: number; status: string; payoutStatus: string}>
   recipientLiabilities: Array<{name: string; email: string | null; role: string | null; allocatedMinor: number; refundAdjustmentMinor: number; owedMinor: number}>
 }
 
@@ -211,6 +213,7 @@ export function buildProviderSalesReport(
       saleDate: order.paid_at,
       releaseId: order.release_id,
       releaseTitle: order.release_title,
+      songTitle: order.song_title ?? null,
       priceMinor: Number(order.gross_amount_minor),
       earningsMinor: reportingOrderAmounts(moneyFor(order)).earningsMinor,
       status: order.dispute_status === 'open' || order.dispute_status === 'lost' ? `dispute_${order.dispute_status}` : order.payment_status,
@@ -245,7 +248,8 @@ export class MarketplaceReportingService {
       `SELECT orders.id, orders.paid_at, orders.buyer_country_code, orders.gross_amount_minor,
         orders.platform_fee_minor, orders.provider_proceeds_minor, orders.refunded_amount_minor,
         orders.payment_status, orders.transfer_status, orders.dispute_status,
-        item.release_id, item.release_title, item.artist_name
+        item.release_id, item.release_title, item.artist_name,
+        item.catalog_snapshot->>'track_title' AS song_title
        FROM marketplace_orders orders
        JOIN marketplace_order_items item ON item.order_id = orders.id
        WHERE orders.provider_profile_id = ?1 AND orders.payment_status <> 'failed'

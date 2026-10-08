@@ -89,7 +89,7 @@ describe('marketplace finance summary', () => {
   function order(overrides: Partial<FinanceOrderRow>): FinanceOrderRow {
     return {
       id: crypto.randomUUID(), paid_at: '2026-10-01T12:00:00.000Z', provider_profile_id: 'p1', provider_name: 'Label',
-      release_id: 'r1', release_title: 'Song', artist_name: 'Artist', currency: 'USD',
+      release_id: 'r1', release_title: 'Song', song_title: null, artist_name: 'Artist', currency: 'USD',
       gross_amount_minor: 999, platform_fee_minor: 159, provider_proceeds_minor: 840, stripe_fee_minor: 59,
       refunded_amount_minor: 0, platform_fee_bps: 1000, payment_status: 'paid', transfer_status: 'transferred',
       dispute_status: 'none', livemode: false, platform_revenue_net_minor: 159,

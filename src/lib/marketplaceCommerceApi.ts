@@ -67,6 +67,9 @@ export type Purchase = {
   payment_status: string
   currency: string
   product_id: string
+  /** Set for single-song purchases (absent from older API responses). */
+  product_name?: string
+  track_id?: string | null
   release_title: string
   artist_name: string
   artwork_asset_id: string | null
