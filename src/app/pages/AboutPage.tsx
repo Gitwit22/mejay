@@ -239,6 +239,7 @@ export default function AboutPage({ mode = 'app' }: AboutPageProps) {
         <div style={{marginTop: '2rem', textAlign: 'center', fontSize: '0.75rem', color: 'rgba(255,255,255,0.5)'}}>
           <div>© 2025 Nxt Lvl Technology Solutions</div>
           <div>MEJay™ is a trademark of Nxt Lvl Technology Solutions. All rights reserved.</div>
+          <div>Built by <a href="https://www.nxtlvlts.com" target="_blank" rel="noopener" style={{ color: 'inherit', textDecoration: 'underline' }}>NXT LVL Technology Solutions</a></div>
         </div>
       </main>
     </div>
