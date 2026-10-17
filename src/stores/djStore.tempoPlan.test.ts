@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/hooks/use-toast', () => ({
   toast: vi.fn(),
@@ -33,6 +33,7 @@ vi.mock('@/lib/audioEngine', () => {
     getDuration: vi.fn(() => 180),
     getEffectiveEndTime: vi.fn(() => 180),
     ignoreEndedFor: vi.fn(),
+    markTrackEndHandled: vi.fn(),
     getCurrentTime: vi.fn(() => 0),
     getTempo: vi.fn(() => 1),
     getEffectiveTempo: vi.fn(() => 1),
@@ -101,6 +102,9 @@ vi.mock('@/lib/db', () => ({
 
 import { useDJStore } from './djStore'
 import { audioEngine } from '@/lib/audioEngine'
+
+// Registered once when the store module initializes (before beforeEach clears mock calls).
+const engineOnTrackEnd = vi.mocked(audioEngine.setOnTrackEnd).mock.calls[0][0]
 
 const makeTrack = (id: string, bpm: number) => ({
   id,
@@ -323,5 +327,103 @@ describe('DJ Store transition tempo plan regression', () => {
     expect(plan?.targetBpmUsed).toBe(180)
     expect(plan?.incomingTargetRatio).toBeCloseTo(1.2, 6)
     expect(setTempoOrder).toBeLessThan(playOrder)
+  })
+})
+
+describe('DJ Store long auto-mix is not cancelled by the outgoing track end', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    try {
+      useDJStore.getState().stopPartyMode()
+    } catch {
+      // ignore
+    }
+    const state = useDJStore.getState()
+    useDJStore.setState({
+      ...state,
+      tracks: [makeTrack('t1', 120), makeTrack('t2', 120), makeTrack('t3', 120)],
+      isPartyMode: true,
+      partySource: { type: 'import' },
+      partyTrackIds: ['t1', 't2', 't3'],
+      nowPlayingIndex: 0,
+      pendingNextIndex: null,
+      pendingSourceSwitch: null,
+      queuedSourceSwitch: null,
+      playHistoryTrackIds: [],
+      activeDeck: 'A',
+      mixInProgress: false,
+      _mixInProgressSince: null,
+      deckA: { ...state.deckA, trackId: 't1', isPlaying: true, playbackRate: 1 },
+      deckB: { ...state.deckB, trackId: null, isPlaying: false, playbackRate: 1 },
+      settings: { ...state.settings, repeatMode: 'off', crossfadeSeconds: 8, endEarlySeconds: 5 },
+    })
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    try {
+      useDJStore.getState().stopPartyMode()
+    } catch {
+      // ignore
+    }
+    vi.useRealTimers()
+  })
+
+  it('marks the outgoing deck end as handled when the transition is scheduled', async () => {
+    useDJStore.getState().skip('auto')
+    await flush()
+
+    expect(audioEngine.markTrackEndHandled).toHaveBeenCalledWith('A')
+    expect(audioEngine.scheduleStop).toHaveBeenCalledWith('A', expect.any(Number))
+  })
+
+  it('an outgoing track end >15s into a scheduled mix does not snap back to the old track', async () => {
+    // Outgoing deck has ~40s left, so the scheduled crossfade ends well past 15s.
+    vi.mocked(audioEngine.getCurrentTime).mockImplementation((deck) => (deck === 'A' ? 140 : 0))
+    useDJStore.getState().skip('auto')
+    await flush()
+    expect(useDJStore.getState().mixInProgress).toBe(true)
+    vi.mocked(audioEngine.setCrossfade).mockClear()
+    vi.mocked(audioEngine.loadTrackWithOffset).mockClear()
+
+    vi.setSystemTime(Date.now() + 20_000)
+    engineOnTrackEnd('A')
+    await flush()
+
+    // Before the fix this cancelled the mix: crossfade reset to deck A and the next track reloaded.
+    expect(audioEngine.setCrossfade).not.toHaveBeenCalled()
+    expect(audioEngine.loadTrackWithOffset).not.toHaveBeenCalled()
+    expect(useDJStore.getState().mixInProgress).toBe(true)
+    expect(useDJStore.getState().deckB.trackId).toBe('t2')
+  })
+
+  it('still force-resets a mix that overran its scheduled end', async () => {
+    vi.mocked(audioEngine.getCurrentTime).mockImplementation((deck) => (deck === 'A' ? 140 : 0))
+    useDJStore.getState().skip('auto')
+    await flush()
+    vi.mocked(audioEngine.setCrossfade).mockClear()
+    vi.mocked(audioEngine.loadTrackWithOffset).mockClear()
+
+    vi.setSystemTime(Date.now() + 10 * 60_000)
+    useDJStore.getState().skip('auto')
+    await flush()
+
+    expect(audioEngine.setCrossfade).toHaveBeenCalled()
+    expect(audioEngine.loadTrackWithOffset).toHaveBeenCalled()
+  })
+
+  it('still force-resets a mix whose load never finished after 15s', async () => {
+    vi.mocked(audioEngine.loadTrackWithOffset).mockImplementationOnce(() => new Promise<number>(() => {}))
+    useDJStore.getState().skip('auto')
+    await flush()
+    expect(useDJStore.getState().mixInProgress).toBe(true)
+    vi.mocked(audioEngine.setCrossfade).mockClear()
+
+    vi.setSystemTime(Date.now() + 16_000)
+    useDJStore.getState().skip('auto')
+    await flush()
+
+    expect(audioEngine.setCrossfade).toHaveBeenCalled()
+    expect(audioEngine.loadTrackWithOffset).toHaveBeenCalledTimes(2)
   })
 })

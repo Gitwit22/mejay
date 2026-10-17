@@ -247,6 +247,19 @@ export const useDJStore = create<DJState>()(
   // Grace period after restart - blocks all auto-mix triggers for 5 seconds
   let restartGraceUntilMs: number = 0;
 
+  // Wall-clock time a scheduled transition should complete by; null until its stop is scheduled.
+  // Auto-mix transitions routinely run 30s+ (ramp + phrase alignment + crossfade), so a fixed
+  // timeout would cancel healthy mixes and snap playback back to the outgoing track.
+  let scheduledMixEndAtMs: number | null = null;
+  const MIX_STUCK_FALLBACK_MS = 15000;
+  const MIX_STUCK_GRACE_MS = 5000;
+
+  const isMixStuck = (mixInProgressSince: number | null): boolean => {
+    const now = Date.now();
+    if (scheduledMixEndAtMs !== null) return now > scheduledMixEndAtMs + MIX_STUCK_GRACE_MS;
+    return mixInProgressSince !== null && now - mixInProgressSince > MIX_STUCK_FALLBACK_MS;
+  };
+
   const FREE_UPLOAD_LIMIT_SECONDS = 30 * 60;
   // Allow a little overage for a single additional track.
   const FREE_UPLOAD_OVERAGE_MAX_SECONDS = 8 * 60;
@@ -658,6 +671,7 @@ export const useDJStore = create<DJState>()(
 
     // Invalidate any in-flight .then() callbacks from a previous transition.
     ++transitionNonce;
+    scheduledMixEndAtMs = null;
 
     // Cancels any scheduled transition timeouts (state updates, pause/stop hooks, etc).
     clearScheduledTimeouts();
@@ -2343,6 +2357,7 @@ export const useDJStore = create<DJState>()(
       const effectiveCrossfadeSeconds = clamp(state.settings.crossfadeSeconds ?? 8, 1, 20);
       const gainDbPromise = ensureGainDbForTrack(previousTrack, state.settings);
 
+      scheduledMixEndAtMs = null;
       set({ mixInProgress: true, _mixInProgressSince: Date.now() });
 
       audioEngine.loadTrackWithOffset(
@@ -2384,11 +2399,13 @@ export const useDJStore = create<DJState>()(
           // Guard against onended firing from the scheduled stop — it's not a natural track end.
           const stopGuardMs = Math.max(1000, (stopAt - (audioEngine.getAudioContextTime() ?? ctxNow)) * 1000 + 500);
           audioEngine.ignoreEndedFor(targetDeck, stopGuardMs);
+          audioEngine.markTrackEndHandled(targetDeck);
           audioEngine.scheduleStop(targetDeck, stopAt + 0.02);
 
           const now = audioEngine.getAudioContextTime() ?? ctxNow;
           const startDelayMs = Math.max(0, (startAt - now) * 1000);
           const stopDelayMs = Math.max(0, (stopAt - now) * 1000);
+          scheduledMixEndAtMs = Date.now() + stopDelayMs;
 
           scheduledTimeouts.push(setTimeout(() => {
             if (prevDeck === 'A') {
@@ -2472,9 +2489,9 @@ export const useDJStore = create<DJState>()(
           // User-initiated skip should always work — cancel the in-progress mix
           // and start a new transition immediately.
           cancelPendingTransition({ mixInProgress: false, reason: 'user_skip_override' });
-        } else if (state._mixInProgressSince && Date.now() - state._mixInProgressSince > 15000) {
-          // Safety: auto-reset if mixInProgress has been stuck for over 15 seconds
-          console.warn('[DJ Store] mixInProgress stuck for >15s, force-resetting');
+        } else if (isMixStuck(state._mixInProgressSince)) {
+          // Safety: auto-reset only if the mix overran its own schedule (or never got scheduled).
+          console.warn('[DJ Store] mixInProgress stuck past its scheduled end, force-resetting');
           cancelPendingTransition({ mixInProgress: false, reason: 'stuck_safety_reset' });
         } else {
           return;
@@ -2768,6 +2785,7 @@ export const useDJStore = create<DJState>()(
 
       // Bump transition nonce so any previously-pending .then() becomes a no-op.
       const myNonce = ++transitionNonce;
+      scheduledMixEndAtMs = null;
       set({ mixInProgress: true, _mixInProgressSince: Date.now() });
 
       // Load next track with offset
@@ -2915,11 +2933,14 @@ export const useDJStore = create<DJState>()(
         // Guard against onended firing from the scheduled stop — it's not a natural track end.
         const stopGuardMs = Math.max(1000, (stopAt - (audioEngine.getAudioContextTime() ?? ctxNow)) * 1000 + 500);
         audioEngine.ignoreEndedFor(currentDeck, stopGuardMs);
+        // The transition owns the outgoing ending; a late cutoff tick must not re-trigger skip('end').
+        audioEngine.markTrackEndHandled(currentDeck);
         audioEngine.scheduleStop(currentDeck, stopAt + 0.02);
 
         const now = audioEngine.getAudioContextTime() ?? ctxNow;
         const startDelayMs = Math.max(0, (incomingStartAt - now) * 1000);
         const stopDelayMs = Math.max(0, (stopAt - now) * 1000);
+        scheduledMixEndAtMs = Date.now() + stopDelayMs;
 
         scheduledTimeouts.push(setTimeout(() => {
           if (myNonce !== transitionNonce) return;
