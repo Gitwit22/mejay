@@ -3,10 +3,11 @@ import {cadenceFromPrice, persistSubscriptionState, revokeFullProgramAccess, str
 import {CommerceService} from '../marketplace/commerce-service'
 import {ConnectService} from '../marketplace/connect-service'
 import {claimStripeWebhookEvent, finalizeStripeWebhookEvent} from '../marketplace/webhook-events'
+import {sendOrderConfirmation, type OrderEmailEnv} from '../marketplace/order-email'
 
 type D1Database = any
 
-type Env = {
+type Env = OrderEmailEnv & {
   DB: D1Database
   STRIPE_SECRET_KEY: string
   STRIPE_WEBHOOK_SECRET: string
@@ -149,6 +150,29 @@ export async function verifyStripeWebhookWithAnySecret(args: {payload: string; h
   return false
 }
 
+export type StripeWebhookSource = 'platform' | 'connect'
+
+/** Connected-account events, delivered only by the Connect endpoint and signed with its secret. */
+export const CONNECT_EVENT_TYPES: ReadonlySet<string> = new Set(['account.updated', 'capability.updated', 'payout.failed'])
+
+/**
+ * Which endpoint signed the payload: the platform ("Your account") endpoint's STRIPE_WEBHOOK_SECRET
+ * or the Connect endpoint's STRIPE_CONNECT_WEBHOOK_SECRET. null when neither verifies.
+ */
+export async function verifyStripeWebhookSource(args: {
+  payload: string
+  header: string
+  platformSecret: string
+  connectSecret: string
+  nowSeconds?: number
+}): Promise<StripeWebhookSource | null> {
+  const {payload, header, nowSeconds} = args
+  if (args.platformSecret && await verifyStripeWebhook({payload, header, secret: args.platformSecret, nowSeconds})) return 'platform'
+  if (args.connectSecret && args.connectSecret !== args.platformSecret
+    && await verifyStripeWebhook({payload, header, secret: args.connectSecret, nowSeconds})) return 'connect'
+  return null
+}
+
 /** true for live keys, false for test keys, null when the key format is unrecognized. */
 export function stripeKeyLivemode(secretKey: string): boolean | null {
   if (/^(sk|rk)_live_/.test(secretKey)) return true
@@ -203,16 +227,14 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
 
   try {
     const secretKey = getRequiredEnv(env, 'STRIPE_SECRET_KEY').trim()
-    const webhookSecrets = [
-      getRequiredEnv(env, 'STRIPE_WEBHOOK_SECRET').trim(),
-      String(env.STRIPE_CONNECT_WEBHOOK_SECRET ?? '').trim(),
-    ].filter(Boolean)
+    const platformSecret = getRequiredEnv(env, 'STRIPE_WEBHOOK_SECRET').trim()
+    const connectSecret = String(env.STRIPE_CONNECT_WEBHOOK_SECRET ?? '').trim()
 
     const sigHeader = request.headers.get('stripe-signature') ?? ''
     const payload = await request.text()
 
-    const ok = await verifyStripeWebhookWithAnySecret({payload, header: sigHeader, secrets: webhookSecrets})
-    if (!ok) return json({error: 'Invalid signature'}, {status: 400})
+    const source = await verifyStripeWebhookSource({payload, header: sigHeader, platformSecret, connectSecret})
+    if (!source) return json({error: 'Invalid signature'}, {status: 400})
 
     const event = JSON.parse(payload) as any
     // Never let a test-mode event touch live records (or the reverse). Acknowledge without claiming
@@ -224,6 +246,14 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     }
     const commerce = () => new CommerceService(env.DB, secretKey, resolvePlatformFeeBps(env))
     const type = String(event?.type ?? '')
+    // Each secret only authorizes its own endpoint's events: the Connect secret can never drive store
+    // fulfillment or refunds, and the platform secret can never change a connected account.
+    const connectedAccountId = typeof event?.account === 'string' ? event.account : null
+    const connectEvent = CONNECT_EVENT_TYPES.has(type)
+    if (source === 'connect' ? !connectEvent || !connectedAccountId : connectEvent) {
+      console.warn('[stripe-webhook] Event not accepted from this endpoint; ignoring', {eventId: event?.id, type, source})
+      return json({ok: true, ignored: true})
+    }
     const obj = event?.data?.object
     const eventCreatedAt = stripeTimestampToIso(event?.created) ?? new Date().toISOString()
     const eventId = typeof event?.id === 'string' ? event.id.trim() : ''
@@ -232,8 +262,15 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     if (!claimed) return json({ok: true, duplicate: true})
     claimedEventId = eventId
 
-    if (type === 'account.updated' && typeof obj?.id === 'string') {
+    if (type === 'account.updated') {
+      if (obj?.id !== connectedAccountId) return json({ok: true, ignored: true})
       await new ConnectService(env.DB, secretKey).syncAccount(obj)
+      return json({ok: true})
+    }
+
+    if (type === 'capability.updated') {
+      // The payload is the capability; re-read the account so every status field stays consistent.
+      await new ConnectService(env.DB, secretKey).refreshAccount(connectedAccountId!)
       return json({ok: true})
     }
 
@@ -243,6 +280,7 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
       if (meta?.kind === 'marketplace_purchase') {
         if (session?.payment_status !== 'paid') return json({ok: true, ignored: true})
         const result = await commerce().fulfillPaidSession(session)
+        await sendOrderConfirmation(env.DB, env, result.orderId)
         return json({ok: true, orderId: result.orderId})
       }
       const userId = getUserIdFromMetadata(meta)
@@ -294,6 +332,7 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
 
     if (type === 'checkout.session.async_payment_succeeded' && obj?.metadata?.kind === 'marketplace_purchase') {
       const result = await commerce().fulfillPaidSession(obj)
+      await sendOrderConfirmation(env.DB, env, result.orderId)
       return json({ok: true, orderId: result.orderId})
     }
 
@@ -342,8 +381,7 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     }
 
     if (type === 'payout.failed') {
-      const accountId = typeof event?.account === 'string' ? event.account : null
-      await new ConnectService(env.DB, secretKey).handlePayoutFailed(accountId, obj, eventId)
+      await new ConnectService(env.DB, secretKey).handlePayoutFailed(connectedAccountId, obj, eventId)
       return json({ok: true})
     }
 

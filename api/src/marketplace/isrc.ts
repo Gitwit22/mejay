@@ -15,15 +15,25 @@ export function externalIsrcProblem(isrc: string): string | null {
   return null
 }
 
+/**
+ * Reads the generation prefix. ISRC_PREFIX=QTA3L alone is enough; ISRC_COUNTRY_CODE and
+ * ISRC_REGISTRANT_CODE are optional and, when present, must describe the same prefix. Anything other
+ * than MEJay's purchased QTA3L prefix fails closed, so a typo can never mint codes under another
+ * registrant (or a doubled prefix such as "QTA3LA3L").
+ */
 export function readIsrcGenerationConfig(env: NodeJS.ProcessEnv): IsrcGenerationConfig | null {
   const prefix = env.ISRC_PREFIX?.trim().toUpperCase() || ''
   const countryCode = env.ISRC_COUNTRY_CODE?.trim().toUpperCase() || ''
   const registrantCode = env.ISRC_REGISTRANT_CODE?.trim().toUpperCase() || ''
   if (!prefix && !countryCode && !registrantCode) return null
-  if (prefix !== 'QTA3L' || countryCode !== 'QT' || registrantCode !== 'A3L' || prefix !== `${countryCode}${registrantCode}`) {
-    throw new Error('ISRC generation requires ISRC_PREFIX=QTA3L, ISRC_COUNTRY_CODE=QT, and ISRC_REGISTRANT_CODE=A3L')
+  const effectivePrefix = prefix || `${countryCode}${registrantCode}`
+  const consistent = effectivePrefix === MEJAY_ISRC_PREFIX
+    && (!countryCode || countryCode === 'QT')
+    && (!registrantCode || registrantCode === 'A3L')
+  if (!consistent) {
+    throw new Error('ISRC generation requires ISRC_PREFIX=QTA3L (optional ISRC_COUNTRY_CODE=QT and ISRC_REGISTRANT_CODE=A3L must match it)')
   }
-  return {prefix, countryCode, registrantCode}
+  return {prefix: MEJAY_ISRC_PREFIX, countryCode: 'QT', registrantCode: 'A3L'}
 }
 
 export function normalizeIsrc(value: string): string {

@@ -14,6 +14,9 @@ import {ArtistProfileService} from './artist-profile-service'
 import {CERTIFICATION_VERSION} from './release-certification'
 import {claimStripeWebhookEvent} from './webhook-events'
 import {MarketplaceService} from './service'
+import {sendOrderConfirmation} from './order-email'
+import {onRequest as stripeWebhook} from '../routes/stripe-webhook'
+import {createHmac} from 'node:crypto'
 
 const connectionString = process.env.TEST_DATABASE_URL
 const describeWithDatabase = connectionString ? describe : describe.skip
@@ -225,6 +228,38 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
 
     expect(assignment.isrc).toBe(`QTA3L${String(currentYear).padStart(2, '0')}00001`)
     expect(sequence.rows[0]?.next_number).toBe(2)
+  })
+
+  it('issues sequential, unique designations and keeps ISRC operations owner-scoped', async () => {
+    await resetIsrcState()
+    const owner = await createProviderFixture('IsrcOwner')
+    const trackTwo = await service.createTrack(owner.userId, owner.release.id, {
+      title: 'Sequential Track 2', primaryArtistId: owner.artist.id, discNumber: 1, trackNumber: 2,
+      durationMs: 181_000, explicit: false, metadata: {},
+    }) as {id: string}
+    const config = {prefix: 'QTA3L', countryCode: 'QT', registrantCode: 'A3L'} as const
+    const certification = {controlsRecording: true, neverAssignedIsrc: true, authorizeAssignment: true} as const
+    const year = String(currentYear).padStart(2, '0')
+
+    const first = await service.assignGeneratedIsrc(owner.userId, owner.track.id, certification, config) as {isrc: string}
+    const second = await service.assignGeneratedIsrc(owner.userId, trackTwo.id, certification, config) as {isrc: string}
+    expect([first.isrc, second.isrc]).toEqual([`QTA3L${year}00001`, `QTA3L${year}00002`])
+
+    // A different provider can neither generate nor register a code on someone else's track.
+    const intruder = await createProviderFixture('IsrcIntruder')
+    const otherTrack = await service.createTrack(owner.userId, owner.release.id, {
+      title: 'Unassigned Track', primaryArtistId: owner.artist.id, discNumber: 1, trackNumber: 3,
+      durationMs: 181_000, explicit: false, metadata: {},
+    }) as {id: string}
+    await expect(service.assignGeneratedIsrc(intruder.userId, otherTrack.id, certification, config)).rejects.toMatchObject({status: 404})
+    await expect(service.assignIsrc(intruder.userId, otherTrack.id, {isrc: 'USABC2600001', source: 'provider'})).rejects.toMatchObject({status: 404})
+    const untouched = await pool.query('SELECT COUNT(*)::integer AS count FROM isrc_registry WHERE track_id = $1', [otherTrack.id])
+    expect(untouched.rows[0].count).toBe(0)
+
+    // The registry is staff-only; providers cannot list it.
+    await expect(adminService().listIsrcRegistry(owner.userId)).rejects.toMatchObject({status: 403})
+    const registry = await adminService().listIsrcRegistry(adminUserId, {year: currentYear}) as Array<{isrc: string}>
+    expect(new Set(registry.map((row) => row.isrc)).size).toBe(registry.length)
   })
 
   it('prevents duplicate generation under concurrent requests', async () => {
@@ -456,10 +491,11 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       return calls
     }
 
-    async function startCheckout(label: string, stripeFee: number) {
+    async function startCheckout(label: string, stripeFee: number, amountMinor = 999) {
       await resetIsrcState()
       const fixture = await prepareLiveRelease(label)
       const product = await pool.query<{id: string}>('SELECT id FROM products WHERE release_id = $1', [fixture.release.id])
+      if (amountMinor !== 999) await pool.query('UPDATE prices SET amount_minor = $1 WHERE product_id = $2', [amountMinor, product.rows[0].id])
       const buyerId = crypto.randomUUID()
       await pool.query(`INSERT INTO users (id, email, account_intent) VALUES ($1, $2, 'consumer')`, [buyerId, `buyer-${buyerId.slice(0, 8)}@example.test`])
       const calls = stubStripe(stripeFee)
@@ -470,7 +506,7 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
         id: checkout.sessionId,
         payment_status: 'paid',
         payment_intent: `pi_${crypto.randomUUID()}`,
-        amount_total: 999,
+        amount_total: amountMinor,
         currency: 'usd',
         livemode: false,
         metadata: {kind: 'marketplace_purchase', attemptId: attempt.rows[0].id, userId: buyerId, productId: product.rows[0].id},
@@ -508,6 +544,128 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       expect(final.rows[0]).toEqual({transfer_reversed_minor: 840, transfer_status: 'reversed'})
       const purchases = await commerce.listPurchases(buyerId) as Array<{entitlement_status: string}>
       expect(purchases[0].entitlement_status).toBe('revoked')
+    })
+
+    it('takes exactly 10% commission on a $10.00 sale and refunds at the same rate', async () => {
+      const {commerce, calls, session} = await startCheckout('TenDollar', 59, 1000)
+      expect(calls.find((call) => call.url.endsWith('/v1/checkout/sessions'))?.body?.get('line_items[0][price_data][unit_amount]')).toBe('1000')
+      const {orderId} = await commerce.fulfillPaidSession(session)
+      const order = (await pool.query('SELECT * FROM marketplace_orders WHERE id = $1', [orderId])).rows[0]
+      // 100¢ commission (10% of 1000) + 59¢ recovered Stripe fee; artist receives 841¢.
+      expect(order).toMatchObject({gross_amount_minor: 1000, platform_fee_bps: 1000, stripe_fee_minor: 59, platform_fee_minor: 159, provider_proceeds_minor: 841})
+      expect(order.platform_fee_minor - order.stripe_fee_minor).toBe(100)
+      expect(calls.find((call) => call.url.endsWith('/v1/transfers'))?.body?.get('amount')).toBe('841')
+
+      await commerce.handleRefund({id: order.stripe_charge_id, amount: 1000, amount_refunded: 1000})
+      expect(calls.filter((call) => call.url.includes('/reversals')).map((call) => call.body?.get('amount'))).toEqual(['841'])
+      const refundEntries = await pool.query<{account_code: string; debit: number; credit: number}>(
+        `SELECT entry.account_code, SUM(entry.debit_minor)::integer AS debit, SUM(entry.credit_minor)::integer AS credit
+         FROM marketplace_ledger_entries entry JOIN marketplace_ledger_transactions txn ON txn.id = entry.transaction_id
+         WHERE txn.order_id = $1 AND txn.transaction_type = 'refund' GROUP BY entry.account_code ORDER BY entry.account_code`,
+        [orderId],
+      )
+      expect(refundEntries.rows).toEqual([
+        {account_code: 'platform_revenue', debit: 159, credit: 0},
+        {account_code: 'provider_payable', debit: 841, credit: 0},
+        {account_code: 'stripe_clearing', debit: 0, credit: 1000},
+      ])
+    })
+
+    describe('purchase confirmation email', () => {
+      const webhookSecret = 'whsec_integration_platform'
+      const emailEnv = {RESEND_API_KEY: 're_test_key', RESEND_FROM: 'MeJay <orders@example.test>', FRONTEND_URL: 'https://app.test'}
+
+      function signedEvent(event: Record<string, unknown>): Request {
+        const payload = JSON.stringify(event)
+        const timestamp = Math.floor(Date.now() / 1000)
+        const signature = createHmac('sha256', webhookSecret).update(`${timestamp}.${payload}`).digest('hex')
+        return new Request('https://api.test/api/stripe-webhook', {method: 'POST', headers: {'stripe-signature': `t=${timestamp},v1=${signature}`}, body: payload})
+      }
+
+      /** Stripe stub plus a Resend endpoint whose responses the test controls. */
+      function stubStripeAndResend(resendStatuses: number[]) {
+        const stripeCalls = stubStripe(59)
+        const stripeFetch = globalThis.fetch
+        const resendCalls: Array<{headers: Record<string, string>; body: Record<string, unknown>}> = []
+        vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+          if (String(input) === 'https://api.resend.com/emails') {
+            resendCalls.push({headers: init?.headers as Record<string, string>, body: JSON.parse(String(init?.body))})
+            return new Response('{}', {status: resendStatuses.shift() ?? 200})
+          }
+          return stripeFetch(input, init)
+        }))
+        return {stripeCalls, resendCalls}
+      }
+
+      async function deliver(env: Record<string, unknown>, event: Record<string, unknown>) {
+        const response = await stripeWebhook({request: signedEvent(event), env: env as never})
+        return {status: response.status, body: await response.json() as Record<string, unknown>}
+      }
+
+      it('sends exactly one confirmation across duplicate and follow-up webhook deliveries', async () => {
+        const {session, buyerId} = await startCheckout('EmailOnce', 59)
+        const {resendCalls} = stubStripeAndResend([])
+        const env = {DB: new Database(connectionString!, pool), STRIPE_SECRET_KEY: 'sk_test_x', STRIPE_WEBHOOK_SECRET: webhookSecret, STRIPE_PRICE_PRO: 'p', STRIPE_PRICE_YEARLY: 'y', MARKETPLACE_PLATFORM_FEE_BPS: '1000', ...emailEnv}
+        const completed = {id: `evt_${crypto.randomUUID()}`, type: 'checkout.session.completed', livemode: false, data: {object: session}}
+
+        const first = await deliver(env, completed)
+        expect(first.status).toBe(200)
+        const orderId = first.body.orderId as string
+        expect(await deliver(env, completed)).toMatchObject({status: 200, body: {duplicate: true}})
+        expect(await deliver(env, {id: `evt_${crypto.randomUUID()}`, type: 'checkout.session.async_payment_succeeded', livemode: false, data: {object: session}}))
+          .toMatchObject({status: 200, body: {orderId}})
+        await expect(sendOrderConfirmation(env.DB as never, env, orderId)).resolves.toBe('already_handled')
+
+        expect(resendCalls).toHaveLength(1)
+        const [sent] = resendCalls
+        const buyer = await pool.query('SELECT email FROM users WHERE id = $1', [buyerId])
+        expect(sent.body.to).toBe(buyer.rows[0].email)
+        expect(sent.headers['idempotency-key']).toBe(`mejay-order-confirmation/${orderId}`)
+        expect(sent.body).not.toHaveProperty('attachments')
+        const content = `${sent.body.text}\n${sent.body.html}`
+        expect(content).toContain('$9.99')
+        expect(content).toContain(orderId)
+        expect(content).toContain('https://app.test/app/purchased')
+        // Only the sign-in page is linked: no download routes, storage keys, or asset URLs.
+        expect(content.match(/https?:\/\/[^\s"<]+/g)).toEqual(['https://app.test/app/purchased', 'https://app.test/app/purchased'])
+        expect(content).not.toMatch(/download\?|\/files\/|\.wav|r2|storage/i)
+        const row = await pool.query('SELECT status, attempts, sent_at IS NOT NULL AS sent FROM marketplace_order_notifications WHERE order_id = $1', [orderId])
+        expect(row.rows).toEqual([{status: 'sent', attempts: 1, sent: true}])
+      })
+
+      it('never fails or rolls back the order when the email provider fails', async () => {
+        const {session} = await startCheckout('EmailFails', 59)
+        const {resendCalls} = stubStripeAndResend([500])
+        const env = {DB: new Database(connectionString!, pool), STRIPE_SECRET_KEY: 'sk_test_x', STRIPE_WEBHOOK_SECRET: webhookSecret, STRIPE_PRICE_PRO: 'p', STRIPE_PRICE_YEARLY: 'y', MARKETPLACE_PLATFORM_FEE_BPS: '1000', ...emailEnv}
+        const eventId = `evt_${crypto.randomUUID()}`
+        const delivered = await deliver(env, {id: eventId, type: 'checkout.session.completed', livemode: false, data: {object: session}})
+        expect(delivered.status).toBe(200)
+        const orderId = delivered.body.orderId as string
+        const state = await pool.query(
+          `SELECT purchase_order.payment_status, entitlement.status AS entitlement, notification.status AS email, notification.last_error, event.status AS event
+           FROM marketplace_orders purchase_order
+           JOIN download_entitlements entitlement ON entitlement.order_id = purchase_order.id
+           JOIN marketplace_order_notifications notification ON notification.order_id = purchase_order.id
+           JOIN stripe_webhook_events event ON event.stripe_event_id = $2
+           WHERE purchase_order.id = $1`,
+          [orderId, eventId],
+        )
+        expect(state.rows[0]).toEqual({payment_status: 'paid', entitlement: 'active', email: 'failed', last_error: 'http_500', event: 'processed'})
+
+        // A later event for the same order retries the failed confirmation once more.
+        await expect(sendOrderConfirmation(env.DB as never, env, orderId)).resolves.toBe('sent')
+        await expect(sendOrderConfirmation(env.DB as never, env, orderId)).resolves.toBe('already_handled')
+        expect(resendCalls).toHaveLength(2)
+      })
+
+      it('records a skipped confirmation when email is not configured', async () => {
+        const {commerce, session} = await startCheckout('EmailOff', 59)
+        const {orderId} = await commerce.fulfillPaidSession(session)
+        const fetchSpy = vi.fn()
+        vi.stubGlobal('fetch', fetchSpy)
+        await expect(sendOrderConfirmation(new Database(connectionString!, pool) as never, {FRONTEND_URL: 'https://app.test'}, orderId)).resolves.toBe('skipped')
+        expect(fetchSpy).not.toHaveBeenCalled()
+      })
     })
 
     it('fulfills a verified paid session exactly once, snapshotting commission and mode', async () => {

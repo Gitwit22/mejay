@@ -182,6 +182,19 @@ export class ConnectService {
     return {url: link.url}
   }
 
+  /**
+   * Re-reads a connected account from Stripe and syncs it. Used for events such as
+   * capability.updated whose payload is not the account itself. Accounts MEJay does not know are
+   * skipped without calling Stripe.
+   */
+  async refreshAccount(accountId: string): Promise<void> {
+    const known = await this.database.prepare('SELECT id FROM provider_profiles WHERE stripe_account_id = ?1')
+      .bind(accountId).first<{id: string}>()
+    if (!known) return
+    const account = await stripeRequest<StripeAccount>({secretKey: this.secretKey, path: `/v1/accounts/${encodeURIComponent(accountId)}`})
+    await this.syncAccount(account)
+  }
+
   async syncAccount(account: StripeAccount): Promise<void> {
     const transferState = account.capabilities?.transfers
     const transfersStatus = transferState === 'active' ? 'active' : transferState === 'pending' ? 'pending' : 'inactive'

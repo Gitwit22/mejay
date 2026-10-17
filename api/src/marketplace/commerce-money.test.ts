@@ -23,16 +23,39 @@ describe('marketplace commerce money', () => {
     })
   })
 
-  it('splits a $3 minimum-price sale with the default 20% MEJay cut', () => {
-    expect(DEFAULT_PLATFORM_FEE_BPS).toBe(2000)
+  it('splits a $3 minimum-price sale with the default 10% MEJay cut', () => {
+    expect(DEFAULT_PLATFORM_FEE_BPS).toBe(1000)
     const stripeFee = estimateStripeFeeMinor(300)
     expect(stripeFee).toBe(39)
     expect(calculateSaleAmounts(300, DEFAULT_PLATFORM_FEE_BPS, stripeFee)).toEqual({
       grossAmountMinor: 300,
-      platformFeeMinor: 99,
+      platformFeeMinor: 69,
       processingFeeMinor: 39,
-      providerProceedsMinor: 201,
+      providerProceedsMinor: 231,
     })
+  })
+
+  it('takes exactly $1.00 commission on a $10.00 sale at the default rate', () => {
+    const stripeFee = estimateStripeFeeMinor(1000)
+    expect(stripeFee).toBe(59)
+    const amounts = calculateSaleAmounts(1000, DEFAULT_PLATFORM_FEE_BPS, stripeFee)
+    // platformFeeMinor = 100 commission + 59 recovered processing fee.
+    expect(amounts).toEqual({grossAmountMinor: 1000, platformFeeMinor: 159, processingFeeMinor: 59, providerProceedsMinor: 841})
+    expect(amounts.platformFeeMinor - amounts.processingFeeMinor).toBe(100)
+  })
+
+  it('reverses a $10.00 sale at the same rate whether refunded in full or in parts', () => {
+    const full = refundLedgerEntries({grossAmountMinor: 1000, platformFeeMinor: 159, previousRefundedMinor: 0, refundedAmountMinor: 1000})
+    expect(full).toEqual([
+      {accountCode: 'platform_revenue', debitMinor: 159, creditMinor: 0},
+      {accountCode: 'provider_payable', debitMinor: 841, creditMinor: 0},
+      {accountCode: 'stripe_clearing', debitMinor: 0, creditMinor: 1000},
+    ])
+    const first = refundLedgerEntries({grossAmountMinor: 1000, platformFeeMinor: 159, previousRefundedMinor: 0, refundedAmountMinor: 500})
+    const second = refundLedgerEntries({grossAmountMinor: 1000, platformFeeMinor: 159, previousRefundedMinor: 500, refundedAmountMinor: 1000})
+    const total = (account: string) => [...first, ...second].filter((entry) => entry.accountCode === account).reduce((sum, entry) => sum + entry.debitMinor, 0)
+    expect(total('platform_revenue')).toBe(159)
+    expect(total('provider_payable')).toBe(841)
   })
 
   it('never lets fees push provider proceeds below zero', () => {

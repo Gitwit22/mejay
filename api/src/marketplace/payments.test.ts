@@ -6,7 +6,7 @@ import {connectOnboardingStatus} from './connect-service'
 import {buildFinanceSummary, normalizeFinanceFilters, type FinanceOrderRow} from './finance-service'
 import {DEFAULT_MINIMUM_RELEASE_PRICE_MINOR, resolveMinimumReleasePriceMinor} from './sale-policy'
 import {priceSchema, releasePriceSchema} from './schemas'
-import {onRequest as stripeWebhook, stripeKeyLivemode, verifyStripeWebhookWithAnySecret} from '../routes/stripe-webhook'
+import {onRequest as stripeWebhook, stripeKeyLivemode, verifyStripeWebhookSource, verifyStripeWebhookWithAnySecret} from '../routes/stripe-webhook'
 
 describe('marketplace minimum price configuration', () => {
   it('defaults to $3.00 and accepts an explicit override in cents', () => {
@@ -32,9 +32,10 @@ describe('marketplace minimum price configuration', () => {
 })
 
 describe('marketplace commission configuration', () => {
-  it('reads the platform fee from MARKETPLACE_PLATFORM_FEE_BPS with a 20% default', () => {
-    expect(resolvePlatformFeeBps({})).toBe(2000)
-    expect(resolvePlatformFeeBps({MARKETPLACE_PLATFORM_FEE_BPS: '1000'})).toBe(1000)
+  it('reads the platform fee from MARKETPLACE_PLATFORM_FEE_BPS with a 10% default', () => {
+    expect(resolvePlatformFeeBps({})).toBe(1000)
+    expect(resolvePlatformFeeBps({MARKETPLACE_PLATFORM_FEE_BPS: ''})).toBe(1000)
+    expect(resolvePlatformFeeBps({MARKETPLACE_PLATFORM_FEE_BPS: '2000'})).toBe(2000)
     expect(() => resolvePlatformFeeBps({MARKETPLACE_PLATFORM_FEE_BPS: '10001'})).toThrow()
     expect(() => resolvePlatformFeeBps({MARKETPLACE_PLATFORM_FEE_BPS: '12.5'})).toThrow()
   })
@@ -147,13 +148,14 @@ describe('Stripe webhook verification', () => {
     return new Request('https://api.test/api/stripe-webhook', {method: 'POST', headers: {'stripe-signature': sign(payload, secret)}, body: payload})
   }
 
-  function fakeDb(claimed: boolean) {
+  function fakeDb(claimed: boolean, knownAccount: string | null = null) {
     const queries: string[] = []
     const statement = (sql: string) => {
       const value = {
         bind: () => value,
         first: async () => {
           if (sql.includes('INSERT INTO stripe_webhook_events')) return claimed ? {stripe_event_id: 'evt'} : null
+          if (knownAccount && sql.includes('FROM provider_profiles WHERE stripe_account_id')) return {id: 'provider-1'}
           return null
         },
         run: async () => ({}),
@@ -204,6 +206,100 @@ describe('Stripe webhook verification', () => {
     const response = await stripeWebhook({request: webhookRequest(event, connectSecret), env: env(db) as never})
     expect(response.status).toBe(200)
     expect(queries.some((sql) => sql.includes('UPDATE provider_profiles SET stripe_details_submitted'))).toBe(true)
+  })
+
+  it('identifies which endpoint secret signed a payload', async () => {
+    const payload = '{"id":"evt_1"}'
+    const secrets = {platformSecret, connectSecret}
+    await expect(verifyStripeWebhookSource({payload, header: sign(payload, platformSecret), ...secrets})).resolves.toBe('platform')
+    await expect(verifyStripeWebhookSource({payload, header: sign(payload, connectSecret), ...secrets})).resolves.toBe('connect')
+    await expect(verifyStripeWebhookSource({payload, header: sign(payload, 'whsec_other'), ...secrets})).resolves.toBeNull()
+    // Without a configured Connect secret, a Connect-signed payload is not authentic.
+    await expect(verifyStripeWebhookSource({payload, header: sign(payload, connectSecret), platformSecret, connectSecret: ''})).resolves.toBeNull()
+  })
+
+  it('rejects forged signatures for both store and Connect event types', async () => {
+    for (const event of [
+      {id: 'evt_f1', type: 'checkout.session.completed', livemode: false, data: {object: {}}},
+      {id: 'evt_f2', type: 'capability.updated', livemode: false, account: 'acct_1', data: {object: {account: 'acct_1'}}},
+    ]) {
+      const {db, queries} = fakeDb(true)
+      const response = await stripeWebhook({request: webhookRequest(event, 'whsec_forged'), env: env(db) as never})
+      expect(response.status).toBe(400)
+      expect(queries).toHaveLength(0)
+    }
+  })
+
+  it('never lets the Connect secret drive store fulfillment', async () => {
+    const {db, queries} = fakeDb(true)
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    try {
+      const event = {id: 'evt_x', type: 'checkout.session.completed', livemode: false, account: 'acct_1', data: {object: {payment_status: 'paid', metadata: {kind: 'marketplace_purchase'}}}}
+      const response = await stripeWebhook({request: webhookRequest(event, connectSecret), env: env(db) as never})
+      await expect(response.json()).resolves.toEqual({ok: true, ignored: true})
+      expect(queries).toHaveLength(0)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('never lets the platform secret change a connected account', async () => {
+    for (const type of ['account.updated', 'capability.updated', 'payout.failed']) {
+      const {db, queries} = fakeDb(true)
+      const event = {id: `evt_${type}`, type, livemode: false, account: 'acct_1', data: {object: {id: 'acct_1'}}}
+      const response = await stripeWebhook({request: webhookRequest(event, platformSecret), env: env(db) as never})
+      await expect(response.json()).resolves.toEqual({ok: true, ignored: true})
+      expect(queries).toHaveLength(0)
+    }
+  })
+
+  it('ignores Connect-signed events that name no connected account', async () => {
+    const {db, queries} = fakeDb(true)
+    const event = {id: 'evt_noacct', type: 'account.updated', livemode: false, data: {object: {id: 'acct_1'}}}
+    const response = await stripeWebhook({request: webhookRequest(event, connectSecret), env: env(db) as never})
+    await expect(response.json()).resolves.toEqual({ok: true, ignored: true})
+    expect(queries).toHaveLength(0)
+  })
+
+  it('ignores an account.updated payload for a different account than the event names', async () => {
+    const {db, queries} = fakeDb(true)
+    const event = {id: 'evt_mismatch', type: 'account.updated', livemode: false, account: 'acct_1', data: {object: {id: 'acct_2'}}}
+    const response = await stripeWebhook({request: webhookRequest(event, connectSecret), env: env(db) as never})
+    await expect(response.json()).resolves.toEqual({ok: true, ignored: true})
+    expect(queries.some((sql) => sql.includes('UPDATE provider_profiles'))).toBe(false)
+  })
+
+  it('re-reads and syncs the account on capability.updated', async () => {
+    const {db, queries} = fakeDb(true, 'acct_1')
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({id: 'acct_1', details_submitted: true, payouts_enabled: true, capabilities: {transfers: 'active'}}), {status: 200}))
+    vi.stubGlobal('fetch', fetchSpy)
+    try {
+      const event = {id: 'evt_cap', type: 'capability.updated', livemode: false, account: 'acct_1', data: {object: {id: 'transfers', account: 'acct_1', status: 'active'}}}
+      const response = await stripeWebhook({request: webhookRequest(event, connectSecret), env: env(db) as never})
+      expect(response.status).toBe(200)
+      await expect(response.json()).resolves.toEqual({ok: true})
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(String((fetchSpy.mock.calls[0] as unknown[])[0])).toBe('https://api.stripe.com/v1/accounts/acct_1')
+      expect(queries.some((sql) => sql.includes('UPDATE provider_profiles SET stripe_details_submitted'))).toBe(true)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('skips capability.updated for accounts MEJay does not know', async () => {
+    const {db} = fakeDb(true)
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    try {
+      const event = {id: 'evt_cap2', type: 'capability.updated', livemode: false, account: 'acct_unknown', data: {object: {account: 'acct_unknown'}}}
+      const response = await stripeWebhook({request: webhookRequest(event, connectSecret), env: env(db) as never})
+      expect(response.status).toBe(200)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('acknowledges duplicate deliveries without processing them again', async () => {
