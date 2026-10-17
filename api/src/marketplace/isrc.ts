@@ -26,14 +26,22 @@ export function readIsrcGenerationConfig(env: NodeJS.ProcessEnv): IsrcGeneration
   const countryCode = env.ISRC_COUNTRY_CODE?.trim().toUpperCase() || ''
   const registrantCode = env.ISRC_REGISTRANT_CODE?.trim().toUpperCase() || ''
   if (!prefix && !countryCode && !registrantCode) return null
-  const effectivePrefix = prefix || `${countryCode}${registrantCode}`
-  const consistent = effectivePrefix === MEJAY_ISRC_PREFIX
-    && (!countryCode || countryCode === 'QT')
-    && (!registrantCode || registrantCode === 'A3L')
-  if (!consistent) {
-    throw new Error('ISRC generation requires ISRC_PREFIX=QTA3L (optional ISRC_COUNTRY_CODE=QT and ISRC_REGISTRANT_CODE=A3L must match it)')
+  // Name the offending variable (never its value) so a bad deploy is diagnosable from the logs.
+  const problems: string[] = []
+  if (prefix && prefix !== MEJAY_ISRC_PREFIX) problems.push(`ISRC_PREFIX is not QTA3L (${describeValue(prefix)})`)
+  if (countryCode && countryCode !== 'QT') problems.push(`ISRC_COUNTRY_CODE is not QT (${describeValue(countryCode)})`)
+  if (registrantCode && registrantCode !== 'A3L') problems.push(`ISRC_REGISTRANT_CODE is not A3L (${describeValue(registrantCode)})`)
+  if (!prefix && (!countryCode || !registrantCode)) problems.push('ISRC_PREFIX is missing and the country/registrant pair is incomplete')
+  if (problems.length > 0) {
+    throw new Error(`ISRC generation requires ISRC_PREFIX=QTA3L (optional ISRC_COUNTRY_CODE=QT and ISRC_REGISTRANT_CODE=A3L must match it): ${problems.join('; ')}`)
   }
   return {prefix: MEJAY_ISRC_PREFIX, countryCode: 'QT', registrantCode: 'A3L'}
+}
+
+function describeValue(value: string): string {
+  const notes = [`${value.length} characters`]
+  if (/[-\s]/.test(value)) notes.push('contains dashes or spaces')
+  return notes.join(', ')
 }
 
 export function normalizeIsrc(value: string): string {

@@ -21,6 +21,18 @@ describe('MEJay ISRC helpers', () => {
     })).toThrow('ISRC generation requires')
   })
 
+  it('names the misconfigured variable without echoing its value', () => {
+    expect(() => readIsrcGenerationConfig({ISRC_PREFIX: 'QT-A3L', ISRC_COUNTRY_CODE: 'QT', ISRC_REGISTRANT_CODE: 'A3L'}))
+      .toThrow('ISRC_PREFIX is not QTA3L (6 characters, contains dashes or spaces)')
+    expect(() => readIsrcGenerationConfig({ISRC_PREFIX: 'QTA3L', ISRC_COUNTRY_CODE: 'US'})).toThrow('ISRC_COUNTRY_CODE is not QT (2 characters)')
+    expect(() => readIsrcGenerationConfig({ISRC_REGISTRANT_CODE: 'A3L'})).toThrow('ISRC_PREFIX is missing')
+    try {
+      readIsrcGenerationConfig({ISRC_PREFIX: 'ZZSECRET'})
+    } catch (error) {
+      expect(String(error)).not.toContain('ZZSECRET')
+    }
+  })
+
   it('accepts only the purchased QTA3L prefix', () => {
     expect(readIsrcGenerationConfig({
       ISRC_PREFIX: 'qta3l',
