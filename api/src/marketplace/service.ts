@@ -1,4 +1,5 @@
 import {bootstrapProviderAccount} from './onboarding'
+import {MARKETPLACE_STORAGE_PREFIX} from './storage-keys'
 import {userHasArtistPortalAccess} from '../account/artist-access'
 import {buildGeneratedIsrc, externalIsrcProblem, type IsrcGenerationConfig} from './isrc'
 import type {PrivateBucket} from '../services/r2'
@@ -701,7 +702,7 @@ export class MarketplaceService {
       const trackId = input.kind === 'audio' ? input.trackId : null
       const artistId = 'artistId' in input ? input.artistId : null
       const targetId = releaseId ?? trackId ?? artistId
-      const storageKey = `marketplace/${context.providerId}/${input.kind}/${targetId}/${id}.${extension}`
+      const storageKey = `${MARKETPLACE_STORAGE_PREFIX}${context.providerId}/${input.kind}/${targetId}/${id}.${extension}`
       const metadata = 'width' in input
         ? {fileName: input.fileName, width: input.width, height: input.height}
         : {fileName: input.fileName}

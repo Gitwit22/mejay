@@ -1,4 +1,5 @@
 import {MarketplaceError} from './service'
+import {isMarketplaceStorageKey} from './storage-keys'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -12,7 +13,6 @@ type Database = {prepare: (sql: string) => Statement}
 export type StoreAsset = {storageKey: string; mimeType: string; byteSize: number; durationMs: number | null}
 
 /** Only objects created through the signed-upload flow live under this prefix. */
-export const MARKETPLACE_STORAGE_PREFIX = 'marketplace/'
 
 export const PREVIEW_SECONDS = 30
 const PREVIEW_MAX_FILE_FRACTION = 0.2
@@ -181,7 +181,7 @@ export class StoreService {
            WHERE credit.artist_id = asset.artist_id AND credit.is_primary = TRUE AND r.status = 'LIVE'))
        )`,
     ).bind(assetId).first<{storage_key: string; mime_type: string; byte_size: number | string; duration_ms: number | null}>()
-    if (!asset || !asset.storage_key.startsWith(MARKETPLACE_STORAGE_PREFIX)) {
+    if (!asset || !isMarketplaceStorageKey(asset.storage_key)) {
       throw new MarketplaceError(404, 'not_found', 'Catalog asset was not found')
     }
     return {
