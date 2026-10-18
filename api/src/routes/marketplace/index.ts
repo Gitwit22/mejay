@@ -25,7 +25,7 @@ import {getSessionUserId, readJson, sha256Hex} from '../_auth'
 import {getClientIp} from '../_security'
 import {ReleaseSubmissionService, trackCreditsSchema} from '../../marketplace/release-submission-service'
 import {certificationDraftSchema, rightsMaterialSchema} from '../../marketplace/release-certification'
-import {artistProfileSchema} from '../../marketplace/artist-profile'
+import {artistGallerySchema, artistProfileSchema} from '../../marketplace/artist-profile'
 import {ArtistProfileService} from '../../marketplace/artist-profile-service'
 
 type Context = {
@@ -242,6 +242,20 @@ export const updateArtistProfile = async (context: Context): Promise<Response> =
   try {
     const input = artistProfileSchema.parse(await readJson(context.request))
     const data = await new ArtistProfileService(context.env.DB).updateProfile(userId, requiredParam(context.params ?? {}, 'artistId'), input)
+    return json({ok: true, data})
+  } catch (error) {
+    if (error instanceof ZodError) return json({ok: false, error: 'invalid_request', issues: error.issues}, {status: 400})
+    return errorResponse(error)
+  }
+}
+
+export const replaceArtistGallery = async (context: Context): Promise<Response> => {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+  const userId = await getSessionUserId(context.request, context.env)
+  if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+  try {
+    const input = artistGallerySchema.parse(await readJson(context.request))
+    const data = await new ArtistProfileService(context.env.DB).replaceGallery(userId, requiredParam(context.params ?? {}, 'artistId'), input)
     return json({ok: true, data})
   } catch (error) {
     if (error instanceof ZodError) return json({ok: false, error: 'invalid_request', issues: error.issues}, {status: 400})

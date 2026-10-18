@@ -27,6 +27,8 @@ export const ARTIST_LINK_HOSTS = {
   tidal: ['tidal.com', 'listen.tidal.com'],
   amazonMusic: ['music.amazon.com'],
   deezer: ['deezer.com'],
+  // Booking/contact: any https page, or a mailto: address (see artistLinkProblem).
+  booking: null,
 } as const satisfies Record<string, readonly string[] | null>
 
 export type ArtistLinkKey = keyof typeof ARTIST_LINK_HOSTS
@@ -42,7 +44,10 @@ export function artistLinkProblem(key: ArtistLinkKey, value: string): string | n
   try {
     url = new URL(value)
   } catch {
-    return 'must be a full URL starting with https://'
+    return key === 'booking' ? 'must be an https:// link or a mailto: address' : 'must be a full URL starting with https://'
+  }
+  if (key === 'booking' && url.protocol === 'mailto:') {
+    return /^[^\s@,;?]+@[^\s@,;?]+\.[^\s@,;?]+$/.test(url.pathname) ? null : 'must be a valid email address'
   }
   if (url.protocol !== 'https:') return 'must use https://'
   if (url.username || url.password) return 'must not contain credentials'
@@ -74,7 +79,27 @@ export const artistProfileSchema = z.object({
   appleMusicArtistId: z.string().trim().regex(/^[0-9]{1,20}$/, 'Apple Music artist IDs are numeric').nullable().optional(),
   profilePhotoAssetId: z.string().trim().min(1).max(128).nullable().optional(),
   bannerAssetId: z.string().trim().min(1).max(128).nullable().optional(),
+  cutoutAssetId: z.string().trim().min(1).max(128).nullable().optional(),
+  storyPhotoAssetId: z.string().trim().min(1).max(128).nullable().optional(),
+  featuredReleaseId: z.string().trim().min(1).max(128).nullable().optional(),
+  accentColor: z.string().trim().toLowerCase().regex(/^#[0-9a-f]{6}$/, 'Use a hex colour like #22c55e').nullable().optional(),
+  highlightQuote: optionalText(280),
 }).strict()
+
+export const ARTIST_GALLERY_LIMIT = 12
+
+export const artistGallerySchema = z.object({
+  items: z.array(z.object({
+    assetId: z.string().trim().min(1).max(128),
+    caption: optionalText(140),
+  }).strict()).max(ARTIST_GALLERY_LIMIT),
+}).strict().superRefine((value, context) => {
+  if (new Set(value.items.map((item) => item.assetId)).size !== value.items.length) {
+    context.addIssue({code: z.ZodIssueCode.custom, path: ['items'], message: 'Each photo can only appear once'})
+  }
+})
+
+export type ArtistGalleryInput = z.infer<typeof artistGallerySchema>
 
 export type ArtistProfileInput = z.infer<typeof artistProfileSchema>
 

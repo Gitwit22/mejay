@@ -150,6 +150,8 @@ export const UPLOAD_MAX_BYTES = {
   audio: 500 * 1024 * 1024,
   artist_photo: 10 * 1024 * 1024,
   artist_banner: 15 * 1024 * 1024,
+  artist_cutout: 15 * 1024 * 1024,
+  artist_gallery: 10 * 1024 * 1024,
   rights_document: 15 * 1024 * 1024,
 } as const
 
@@ -184,6 +186,20 @@ export const uploadInitSchema = z.discriminatedUnion('kind', [
     mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
     width: z.number().int().min(ARTIST_IMAGE_RULES.artist_banner.minWidth),
     height: z.number().int().min(ARTIST_IMAGE_RULES.artist_banner.minHeight),
+  }),
+  uploadBase.extend({
+    kind: z.literal('artist_cutout'),
+    artistId: id,
+    mimeType: z.enum(['image/png', 'image/webp']),
+    width: z.number().int().min(ARTIST_IMAGE_RULES.artist_cutout.minWidth),
+    height: z.number().int().min(ARTIST_IMAGE_RULES.artist_cutout.minHeight),
+  }),
+  uploadBase.extend({
+    kind: z.literal('artist_gallery'),
+    artistId: id,
+    mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+    width: z.number().int().min(ARTIST_IMAGE_RULES.artist_gallery.minWidth),
+    height: z.number().int().min(ARTIST_IMAGE_RULES.artist_gallery.minHeight),
   }),
   uploadBase.extend({
     kind: z.literal('rights_document'),

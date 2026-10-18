@@ -30,6 +30,7 @@ describe('runMigrations', () => {
       {version: 14, name: 'marketplace_payment_snapshots'},
       {version: 15, name: 'artist_profiles_release_certification'},
       {version: 16, name: 'marketplace_order_notifications'},
+      {version: 17, name: 'artist_release_pages'},
     ])
   })
 

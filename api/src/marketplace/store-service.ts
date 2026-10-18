@@ -176,7 +176,7 @@ export class StoreService {
        WHERE asset.id = ?1 AND asset.processing_status = 'ready' AND (
          (asset.kind IN ('artwork', 'audio') AND EXISTS (
            SELECT 1 FROM releases r WHERE r.id = COALESCE(asset.release_id, track.release_id) AND r.status = 'LIVE'))
-         OR (asset.kind IN ('artist_photo', 'artist_banner') AND EXISTS (
+         OR (asset.kind IN ('artist_photo', 'artist_banner', 'artist_cutout', 'artist_gallery') AND EXISTS (
            SELECT 1 FROM release_artists credit JOIN releases r ON r.id = credit.release_id
            WHERE credit.artist_id = asset.artist_id AND credit.is_primary = TRUE AND r.status = 'LIVE'))
        )`,

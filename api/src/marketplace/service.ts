@@ -699,7 +699,7 @@ export class MarketplaceService {
               : input.mimeType.includes('wav') ? 'wav' : 'jpg'
       const releaseId = input.kind === 'artwork' || input.kind === 'rights_document' ? input.releaseId : null
       const trackId = input.kind === 'audio' ? input.trackId : null
-      const artistId = input.kind === 'artist_photo' || input.kind === 'artist_banner' ? input.artistId : null
+      const artistId = 'artistId' in input ? input.artistId : null
       const targetId = releaseId ?? trackId ?? artistId
       const storageKey = `marketplace/${context.providerId}/${input.kind}/${targetId}/${id}.${extension}`
       const metadata = 'width' in input

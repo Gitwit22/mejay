@@ -72,6 +72,12 @@ export type PublicArtist = {
   apple_music_artist_id: string | null
   profile_photo_asset_id: string | null
   banner_asset_id: string | null
+  cutout_asset_id?: string | null
+  story_photo_asset_id?: string | null
+  featured_release_id?: string | null
+  accent_color?: string | null
+  highlight_quote?: string | null
+  gallery?: Array<{asset_id: string; caption: string | null; position: number}>
   verified: boolean
 }
 

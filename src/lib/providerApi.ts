@@ -55,7 +55,9 @@ export type ProviderArtist = {
   live_release_count?: number
 }
 
-export type ArtistLinks = Partial<Record<'website' | 'instagram' | 'tiktok' | 'youtube' | 'facebook' | 'x' | 'spotify' | 'appleMusic' | 'soundcloud' | 'bandcamp' | 'tidal' | 'amazonMusic' | 'deezer', string>>
+export type ArtistLinks = Partial<Record<'website' | 'instagram' | 'tiktok' | 'youtube' | 'facebook' | 'x' | 'spotify' | 'appleMusic' | 'soundcloud' | 'bandcamp' | 'tidal' | 'amazonMusic' | 'deezer' | 'booking', string>>
+
+export type ArtistGalleryImage = {asset_id: string; caption: string | null; position: number}
 
 export type ArtistProfile = {
   id: string
@@ -70,7 +72,14 @@ export type ArtistProfile = {
   apple_music_artist_id: string | null
   profile_photo_asset_id: string | null
   banner_asset_id: string | null
+  cutout_asset_id?: string | null
+  story_photo_asset_id?: string | null
+  featured_release_id?: string | null
+  accent_color?: string | null
+  highlight_quote?: string | null
   liveReleaseCount?: number
+  liveReleases?: Array<{id: string; title: string}>
+  gallery?: ArtistGalleryImage[]
 }
 
 export type ArtistProfileInput = {
@@ -85,6 +94,11 @@ export type ArtistProfileInput = {
   appleMusicArtistId?: string | null
   profilePhotoAssetId?: string | null
   bannerAssetId?: string | null
+  cutoutAssetId?: string | null
+  storyPhotoAssetId?: string | null
+  featuredReleaseId?: string | null
+  accentColor?: string | null
+  highlightQuote?: string | null
 }
 
 export function getArtistProfile(artistId: string): Promise<ArtistProfile> {
@@ -93,6 +107,10 @@ export function getArtistProfile(artistId: string): Promise<ArtistProfile> {
 
 export function updateArtistProfile(artistId: string, input: ArtistProfileInput): Promise<ArtistProfile> {
   return request(`/api/marketplace/artists/${encodeURIComponent(artistId)}/profile`, {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
+}
+
+export function replaceArtistGallery(artistId: string, items: Array<{assetId: string; caption: string | null}>): Promise<ArtistGalleryImage[]> {
+  return request(`/api/marketplace/artists/${encodeURIComponent(artistId)}/gallery`, {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({items})})
 }
 
 export type ProviderRelease = {
@@ -323,7 +341,7 @@ type ImageMime = 'image/jpeg' | 'image/png' | 'image/webp'
 type UploadInput =
   | {kind: 'artwork'; releaseId: string; fileName: string; mimeType: ImageMime; byteSize: number; width: number; height: number}
   | {kind: 'audio'; trackId: string; fileName: string; mimeType: 'audio/wav' | 'audio/x-wav' | 'audio/flac' | 'audio/x-flac'; byteSize: number}
-  | {kind: 'artist_photo' | 'artist_banner'; artistId: string; fileName: string; mimeType: ImageMime; byteSize: number; width: number; height: number}
+  | {kind: 'artist_photo' | 'artist_banner' | 'artist_cutout' | 'artist_gallery'; artistId: string; fileName: string; mimeType: ImageMime; byteSize: number; width: number; height: number}
   | {kind: 'rights_document'; releaseId: string; fileName: string; mimeType: 'application/pdf' | 'image/jpeg' | 'image/png'; byteSize: number}
 
 /** Signed upload: start, PUT to private storage, then server-side verification. Returns the ready asset id. */

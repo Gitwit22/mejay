@@ -159,7 +159,7 @@ export class MarketplaceAdminService {
     await requireStaff(this.database, userId)
     const asset = await this.database.prepare(
       `SELECT storage_key, mime_type, kind, metadata->>'fileName' AS file_name FROM marketplace_assets
-       WHERE id = ?1 AND processing_status = 'ready' AND kind IN ('artwork', 'rights_document', 'artist_photo', 'artist_banner')`,
+       WHERE id = ?1 AND processing_status = 'ready' AND kind IN ('artwork', 'rights_document', 'artist_photo', 'artist_banner', 'artist_cutout', 'artist_gallery')`,
     ).bind(assetId).first<{storage_key: string; mime_type: string; kind: string; file_name: string | null}>()
     if (!asset || !asset.storage_key.startsWith('marketplace/')) throw new MarketplaceError(404, 'not_found', 'Asset was not found')
     return {storageKey: asset.storage_key, mimeType: asset.mime_type, fileName: (asset.file_name || `${asset.kind}-${assetId}`).replace(/["\r\n]/g, '_')}

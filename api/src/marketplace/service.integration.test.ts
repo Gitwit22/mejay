@@ -1216,5 +1216,64 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       await expect(profiles().getPublicArtist(slug)).rejects.toMatchObject({code: 'not_found'})
       await expect(store.getAsset(photoId)).rejects.toMatchObject({code: 'not_found'})
     })
+
+    it('saves release-page fields and galleries for the owning artist only, exposing them only while LIVE', async () => {
+      await resetIsrcState()
+      const live = await prepareLiveRelease('PageOwner')
+      const other = await prepareLiveRelease('PageIntruder')
+      const draftRelease = await service.createRelease(live.userId, {title: 'Not Live', releaseType: 'single', primaryArtistId: live.artist.id}) as {id: string}
+      const asset = async (owner: typeof live, kind: string, status = 'ready') => {
+        const assetId = crypto.randomUUID()
+        await pool.query(
+          `INSERT INTO marketplace_assets (id, provider_profile_id, artist_id, kind, storage_key, mime_type, byte_size, processing_status)
+           VALUES ($1, $2, $3, $4, $5, 'image/png', 1000, $6)`,
+          [assetId, owner.provider.id, owner.artist.id, kind, `marketplace/${owner.provider.id}/${kind}/${assetId}.png`, status],
+        )
+        return assetId
+      }
+      const cutout = await asset(live, 'artist_cutout')
+      const story = await asset(live, 'artist_photo')
+      const galleryA = await asset(live, 'artist_gallery')
+      const galleryB = await asset(live, 'artist_gallery')
+      const pendingGallery = await asset(live, 'artist_gallery', 'pending')
+      const foreignCutout = await asset(other, 'artist_cutout')
+      const base = {name: 'Page Owner', genres: [], links: {booking: 'mailto:booking@example.test'}}
+
+      const saved = await profiles().updateProfile(live.userId, live.artist.id, {
+        ...base, cutoutAssetId: cutout, storyPhotoAssetId: story, featuredReleaseId: live.release.id,
+        accentColor: '#ff3366', highlightQuote: 'Detroit made.',
+      })
+      expect(saved).toMatchObject({cutout_asset_id: cutout, story_photo_asset_id: story, featured_release_id: live.release.id, accent_color: '#ff3366', highlight_quote: 'Detroit made.'})
+
+      // Wrong kind, another artist's upload, and a featured release that is not LIVE are refused.
+      await expect(profiles().updateProfile(live.userId, live.artist.id, {...base, cutoutAssetId: story})).rejects.toMatchObject({code: 'invalid_profile_image'})
+      await expect(profiles().updateProfile(live.userId, live.artist.id, {...base, cutoutAssetId: foreignCutout})).rejects.toMatchObject({code: 'invalid_profile_image'})
+      await expect(profiles().updateProfile(live.userId, live.artist.id, {...base, featuredReleaseId: draftRelease.id})).rejects.toMatchObject({code: 'invalid_featured_release'})
+      await expect(profiles().updateProfile(live.userId, live.artist.id, {...base, featuredReleaseId: other.release.id})).rejects.toMatchObject({code: 'invalid_featured_release'})
+      // Omitted fields keep their values.
+      const kept = await profiles().updateProfile(live.userId, live.artist.id, base)
+      expect(kept).toMatchObject({cutout_asset_id: cutout, accent_color: '#ff3366', highlight_quote: 'Detroit made.'})
+
+      // Galleries: owner-only, ready gallery uploads only, replaced atomically in the given order.
+      await expect(profiles().replaceGallery(other.userId, live.artist.id, {items: [{assetId: galleryA, caption: null}]})).rejects.toMatchObject({code: 'not_found'})
+      await expect(profiles().replaceGallery(live.userId, live.artist.id, {items: [{assetId: pendingGallery, caption: null}]})).rejects.toMatchObject({code: 'invalid_gallery_image'})
+      await expect(profiles().replaceGallery(live.userId, live.artist.id, {items: [{assetId: cutout, caption: null}]})).rejects.toMatchObject({code: 'invalid_gallery_image'})
+      expect(await profiles().replaceGallery(live.userId, live.artist.id, {items: [{assetId: galleryB, caption: 'Backstage'}, {assetId: galleryA, caption: null}]}))
+        .toEqual([{asset_id: galleryB, caption: 'Backstage', position: 0}, {asset_id: galleryA, caption: null, position: 1}])
+      await expect(profiles().replaceGallery(live.userId, live.artist.id, {items: [{assetId: galleryA, caption: null}, {assetId: foreignCutout, caption: null}]})).rejects.toMatchObject({code: 'invalid_gallery_image'})
+      expect((await profiles().getProfile(live.userId, live.artist.id)).gallery.map((image) => image.asset_id)).toEqual([galleryB, galleryA])
+
+      const slug = (await pool.query<{slug: string}>('SELECT slug FROM artists WHERE id = $1', [live.artist.id])).rows[0].slug
+      const page = await profiles().getPublicArtist(slug)
+      expect(page.artist).toMatchObject({accent_color: '#ff3366', cutout_asset_id: cutout, featured_release_id: live.release.id, links: {booking: 'mailto:booking@example.test'}})
+      expect(page.artist.gallery.map((image) => image.asset_id)).toEqual([galleryB, galleryA])
+      const store = new StoreService(new Database(connectionString!, pool) as never)
+      await expect(store.getAsset(cutout)).resolves.toMatchObject({mimeType: 'image/png'})
+      await expect(store.getAsset(galleryA)).resolves.toMatchObject({mimeType: 'image/png'})
+
+      await adminService().commandRelease(adminUserId, live.release.id, {action: 'takedown', expectedVersion: live.version, note: 'Rights claim'})
+      await expect(store.getAsset(cutout)).rejects.toMatchObject({code: 'not_found'})
+      await expect(store.getAsset(galleryA)).rejects.toMatchObject({code: 'not_found'})
+    })
   })
 })
