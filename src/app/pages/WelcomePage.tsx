@@ -216,6 +216,7 @@ export default function WelcomePage() {
                 <div style={{ textAlign: 'center', fontSize: '0.7rem', color: 'rgba(255, 255, 255, 0.5)', lineHeight: '1.4' }}>
                   <div>© 2025 Nxt Lvl Technology Solutions</div>
                   <div>MEJay™ is a trademark of Nxt Lvl Technology Solutions. All rights reserved.</div>
+                  <div>Built by <a href="https://www.nxtlvlts.com" target="_blank" rel="noopener" style={{ color: 'inherit', textDecoration: 'underline' }}>NXT LVL Technology Solutions</a></div>
                 </div>
               </section>
             </div>
