@@ -1,21 +1,22 @@
 import {useState} from 'react'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
-import {ArrowDown, ArrowUp, BarChart3, BadgeDollarSign, CheckCircle2, Copy, Copyright, Disc3, Download, Fingerprint, Menu, Plus, RefreshCw, Scale, Scissors, Send, ShieldAlert, Sparkles, Trash2, Users, UserRound, X, XCircle} from 'lucide-react'
+import {ArrowDown, ArrowUp, BarChart3, BadgeDollarSign, Landmark, CheckCircle2, Copy, Copyright, Disc3, Download, Fingerprint, Menu, Plus, RefreshCw, Scale, Scissors, Send, ShieldAlert, Sparkles, Trash2, Users, UserRound, X, XCircle} from 'lucide-react'
 
+import {ReleaseReviewDialog} from '@/app/components/admin/ReleaseReviewDialog'
 import {Button} from '@/components/ui/button'
 import {Dialog, DialogContent, DialogHeader, DialogTitle} from '@/components/ui/dialog'
 import {Input} from '@/components/ui/input'
 import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
-import {commandMarketplaceProvider, commandMarketplaceRelease, retryMarketplacePayouts, type ProviderAdminAction, createIndustryReportingBatch, downloadIndustryReportingBatch, downloadIsrcRegistryExport, getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview, replaceMarketplaceDiscoveryFeatures, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting, type AdminRecord, type IndustryReportingDashboard, type IsrcRegistryRecord, type MarketplaceAdminOverview, type ReleaseAdminAction} from '@/lib/marketplaceAdminApi'
+import {getMarketplaceFinance, type MarketplaceFinanceFilters, commandMarketplaceProvider, commandMarketplaceRelease, recordSplitDispute, retryMarketplacePayouts, type ProviderAdminAction, createIndustryReportingBatch, downloadIndustryReportingBatch, downloadIsrcRegistryExport, getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview, replaceMarketplaceDiscoveryFeatures, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting, type AdminRecord, type IndustryReportingDashboard, type IsrcRegistryRecord, type MarketplaceAdminOverview, type ReleaseAdminAction} from '@/lib/marketplaceAdminApi'
 
-type Section = 'pending' | 'catalog' | 'discovery' | 'providers' | 'artists' | 'isrcs' | 'rights' | 'pricing' | 'splits' | 'takedowns' | 'reporting'
+type Section = 'pending' | 'catalog' | 'discovery' | 'providers' | 'artists' | 'isrcs' | 'rights' | 'pricing' | 'splits' | 'takedowns' | 'reporting' | 'finance'
 
 const navigation = [
   ['pending', 'Pending Releases', ShieldAlert], ['catalog', 'Live Catalog', Disc3], ['discovery', 'Discovery', Sparkles], ['providers', 'Providers', Users],
   ['artists', 'Artists', UserRound], ['isrcs', 'ISRC Registry', Fingerprint], ['rights', 'Rights Review', Copyright],
   ['pricing', 'Pricing', BadgeDollarSign], ['splits', 'Splits', Scissors], ['takedowns', 'Takedowns', Scale],
-  ['reporting', 'Reporting', BarChart3],
+  ['reporting', 'Reporting', BarChart3], ['finance', 'Finance', Landmark],
 ] as const
 
 export default function MarketplaceAdminPage() {
@@ -38,9 +39,12 @@ function Navigation({active, onSelect}: {active: Section; onSelect: (section: Se
 
 function SectionView({section, data}: {section: Section; data: Awaited<ReturnType<typeof getMarketplaceAdminOverview>>}) {
   if (section === 'reporting') return <Reporting />
+  if (section === 'finance') return <FinanceSection data={data} />
   if (section === 'discovery') return <DiscoveryCuration data={data} />
   if (section === 'isrcs') return <IsrcRegistrySection />
   if (section === 'providers') return <ProvidersSection rows={data.providers} role={data.role} />
+  if (section === 'takedowns') return <RecordTable title="Takedowns" rows={data.takedowns} actionable role={data.role} renderActions={(row) => <TakedownActions row={row} role={data.role} />} />
+  if (section === 'splits') return <RecordTable title="Splits" rows={data.splits} actionable={data.role === 'admin'} role={data.role} renderActions={(row) => <SplitDisputeAction row={row} />} />
   const rows = data[section]
   return <RecordTable title={navigation.find(([id]) => id === section)?.[1] || section} rows={rows} actionable={section === 'pending' || section === 'catalog'} role={data.role} />
 }
@@ -113,24 +117,60 @@ function FeaturePicker({title, ids, onChange, candidates, labelKey, readOnly}: {
   </section>
 }
 
-function RecordTable({title, rows, actionable, role}: {title: string; rows: AdminRecord[]; actionable: boolean; role: 'reviewer' | 'admin'}) {
+function RecordTable({title, rows, actionable, role, renderActions}: {title: string; rows: AdminRecord[]; actionable: boolean; role: 'reviewer' | 'admin'; renderActions?: (row: AdminRecord) => React.ReactNode}) {
   const [search, setSearch] = useState('')
   const filtered = rows.filter((row) => JSON.stringify(row).toLowerCase().includes(search.toLowerCase()))
   return <div className="space-y-5"><div><h1 className="text-2xl font-bold">{title}</h1><p className="mt-1 text-sm text-zinc-400">{filtered.length} operational records</p></div><Input className="max-w-md" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Search ${title.toLowerCase()}`} />
-    {filtered.length === 0 ? <div className="border-y border-dashed border-white/10 py-16 text-center text-sm text-zinc-500">No records found.</div> : <div className="overflow-x-auto border-y border-white/10"><table className="w-full min-w-[720px] text-left text-sm"><thead className="text-xs uppercase text-zinc-500"><tr>{Object.keys(filtered[0]).slice(0, 6).map((key) => <th key={key} className="px-3 py-3 font-medium">{key.replace(/_/g, ' ')}</th>)}{actionable && <th className="px-3 py-3">Actions</th>}</tr></thead><tbody className="divide-y divide-white/10">{filtered.map((row, index) => <tr key={String(row.id ?? row.isrc ?? index)}>{Object.keys(filtered[0]).slice(0, 6).map((key) => <td key={key} className="max-w-64 truncate px-3 py-3 text-zinc-300">{formatValue(row[key])}</td>)}{actionable && <td className="px-3 py-3"><ReleaseActions row={row} role={role} /></td>}</tr>)}</tbody></table></div>}
+    {filtered.length === 0 ? <div className="border-y border-dashed border-white/10 py-16 text-center text-sm text-zinc-500">No records found.</div> : <div className="overflow-x-auto border-y border-white/10"><table className="w-full min-w-[720px] text-left text-sm"><thead className="text-xs uppercase text-zinc-500"><tr>{Object.keys(filtered[0]).slice(0, 6).map((key) => <th key={key} className="px-3 py-3 font-medium">{key.replace(/_/g, ' ')}</th>)}{actionable && <th className="px-3 py-3">Actions</th>}</tr></thead><tbody className="divide-y divide-white/10">{filtered.map((row, index) => <tr key={String(row.id ?? row.isrc ?? index)}>{Object.keys(filtered[0]).slice(0, 6).map((key) => <td key={key} className="max-w-64 truncate px-3 py-3 text-zinc-300">{formatValue(row[key])}</td>)}{actionable && <td className="px-3 py-3">{renderActions ? renderActions(row) : <ReleaseActions row={row} role={role} />}</td>}</tr>)}</tbody></table></div>}
   </div>
 }
 
 function ReleaseActions({row, role}: {row: AdminRecord; role: 'reviewer' | 'admin'}) {
   const queryClient = useQueryClient()
-  const mutation = useMutation({mutationFn: (input: {action: ReleaseAdminAction; note?: string}) => commandMarketplaceRelease(String(row.id), {expectedVersion: Number(row.version), ...input}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['marketplace-admin']}); toast({title: 'Release updated'})}, onError: (error) => toast({title: 'Action failed', description: error.message, variant: 'destructive'})})
+  const mutation = useMutation({mutationFn: (input: {action: ReleaseAdminAction; note?: string; scheduledReleaseAt?: string}) => commandMarketplaceRelease(String(row.id), {expectedVersion: Number(row.version), ...input}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['marketplace-admin']}); toast({title: 'Release updated'})}, onError: (error) => toast({title: 'Action failed', description: error.message, variant: 'destructive'})})
   const status = String(row.status)
-  const actions: Array<{action: ReleaseAdminAction; label: string; admin?: boolean; note?: boolean}> = status === 'SUBMITTED' ? [{action: 'start_review', label: 'Start review'}]
-    : status === 'UNDER_REVIEW' ? [{action: 'approve', label: 'Approve'}, {action: 'request_changes', label: 'Request changes', note: true}, {action: 'reject', label: 'Reject', note: true}]
-      : status === 'APPROVED' ? [{action: 'publish_now', label: 'Publish now', admin: true}]
+  const actions: Array<{action: ReleaseAdminAction; label: string; admin?: boolean; note?: boolean}> = status === 'SUBMITTED' ? []
+    // Approve/reject live in the review dialog, next to the rights certification and documents.
+    : status === 'UNDER_REVIEW' ? []
+      : status === 'APPROVED' ? [{action: 'publish_now', label: 'Publish now', admin: true}, {action: 'schedule', label: 'Schedule', admin: true}]
         : status === 'SCHEDULED' ? [{action: 'publish_due', label: 'Publish due', admin: true}, {action: 'takedown', label: 'Takedown', admin: true, note: true}]
           : status === 'LIVE' ? [{action: 'unpublish', label: 'Unpublish', admin: true}, {action: 'takedown', label: 'Takedown', admin: true, note: true}] : []
-  return <div className="flex gap-2">{actions.filter((item) => !item.admin || role === 'admin').map((item) => <Button key={item.action} size="sm" variant="outline" disabled={mutation.isPending} onClick={() => {const note = item.note ? window.prompt(`${item.label} reason`)?.trim() : undefined; if (item.note && !note) return; mutation.mutate({action: item.action, note})}}>{item.label}</Button>)}</div>
+  return <div className="flex gap-2">{['SUBMITTED', 'UNDER_REVIEW'].includes(status) && <ReleaseReviewDialog releaseId={String(row.id)} title={String(row.title ?? 'Release')} />}{actions.filter((item) => !item.admin || role === 'admin').map((item) => <Button key={item.action} size="sm" variant="outline" disabled={mutation.isPending} onClick={() => {
+      if (item.action === 'schedule') {
+        const raw = window.prompt('Release date and time (local), e.g. 2026-12-01 09:00')?.trim()
+        if (!raw) return
+        const when = new Date(raw.replace(' ', 'T'))
+        if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now()) {toast({title: 'Enter a future date and time', variant: 'destructive'}); return}
+        mutation.mutate({action: 'schedule', scheduledReleaseAt: when.toISOString()})
+        return
+      }
+      const note = item.note ? window.prompt(`${item.label} reason`)?.trim() : undefined; if (item.note && !note) return; mutation.mutate({action: item.action, note})
+    }}>{item.label}</Button>)}</div>
+}
+
+function TakedownActions({row, role}: {row: AdminRecord; role: 'reviewer' | 'admin'}) {
+  const queryClient = useQueryClient()
+  const mutation = useMutation({
+    mutationFn: (note: string) => commandMarketplaceRelease(String(row.release_id), {action: 'restore', expectedVersion: Number(row.release_version), note}),
+    onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['marketplace-admin']}); toast({title: 'Release restored', description: 'It is back in Approved; publish or schedule it from Live Catalog.'})},
+    onError: (error) => toast({title: 'Restore failed', description: error.message, variant: 'destructive'}),
+  })
+  if (role !== 'admin' || row.restored_at || row.release_status !== 'TAKEN_DOWN') return <span className="text-xs text-zinc-500">{row.restored_at ? 'Restored' : '-'}</span>
+  return <Button size="sm" variant="outline" disabled={mutation.isPending} onClick={() => {const note = window.prompt('Restore reason')?.trim(); if (note) mutation.mutate(note)}}>Restore</Button>
+}
+
+function SplitDisputeAction({row}: {row: AdminRecord}) {
+  const mutation = useMutation({
+    mutationFn: (input: {reason: string; orderId?: string}) => recordSplitDispute({providerId: String(row.provider_id), splitSetId: String(row.id), ...input}),
+    onSuccess: () => toast({title: 'Split dispute recorded'}),
+    onError: (error) => toast({title: 'Could not record dispute', description: error.message, variant: 'destructive'}),
+  })
+  return <Button size="sm" variant="outline" disabled={mutation.isPending} onClick={() => {
+    const reason = window.prompt('Dispute details')?.trim()
+    if (!reason) return
+    const orderId = window.prompt('Related order ID (optional)')?.trim() || undefined
+    mutation.mutate({reason, orderId})
+  }}>Record dispute</Button>
 }
 
 function IsrcRegistrySection() {
@@ -245,6 +285,51 @@ function ReportingEvents({events}: {events: IndustryReportingDashboard['events']
 
 function ReportingBatches({data, pending, run}: {data: IndustryReportingDashboard; pending: boolean; run: (action: () => Promise<unknown>) => void}) {
   return <section><h2 className="text-lg font-semibold">Daily reporting batches</h2>{data.batches.length === 0 ? <p className="mt-4 border-y border-dashed border-white/10 py-10 text-center text-sm text-zinc-500">No exports created yet.</p> : <div className="mt-4 overflow-x-auto border-y border-white/10"><table className="w-full min-w-[760px] text-left text-sm"><thead><tr className="text-xs uppercase text-zinc-500"><th className="px-3 py-3">Report date</th><th className="px-3 py-3">Events</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Reason</th><th className="px-3 py-3">Actions</th></tr></thead><tbody className="divide-y divide-white/10">{data.batches.map((batch) => <tr key={batch.id}><td className="px-3 py-3">{batch.report_date}</td><td className="px-3 py-3 tabular-nums">{batch.event_count}</td><td className="px-3 py-3 capitalize">{batch.status}</td><td className="px-3 py-3 text-zinc-500">{batch.rejection_reason || '-'}</td><td className="px-3 py-3"><div className="flex gap-2"><Button size="sm" variant="outline" disabled={pending} onClick={() => run(() => downloadIndustryReportingBatch(batch.id))}><Download className="h-4 w-4" />Export</Button>{data.role === 'admin' && (batch.status === 'exported' || batch.status === 'rejected') && <Button size="sm" variant="outline" disabled={pending} onClick={() => run(() => submitIndustryReportingBatch(batch.id))}><Send className="h-4 w-4" />Submit</Button>}{data.role === 'admin' && batch.status === 'submitted' && <><Button size="sm" variant="outline" disabled={pending} onClick={() => run(() => resolveIndustryReportingBatch(batch.id, 'accepted'))}><CheckCircle2 className="h-4 w-4" />Accept</Button><Button size="sm" variant="outline" disabled={pending} onClick={() => {const reason = window.prompt('Rejection reason')?.trim(); if (reason) run(() => resolveIndustryReportingBatch(batch.id, 'rejected', reason))}}><XCircle className="h-4 w-4" />Reject</Button></>}</div></td></tr>)}</tbody></table></div>}</section>
+}
+
+const financeStatuses = [['', 'All statuses'], ['paid', 'Paid'], ['partially_refunded', 'Partially refunded'], ['refunded', 'Refunded'], ['disputed', 'Disputed']] as const
+
+/** Read-only finance view. Amounts come from immutable order and ledger records; nothing here edits them. */
+function FinanceSection({data}: {data: MarketplaceAdminOverview}) {
+  const [filters, setFilters] = useState<MarketplaceFinanceFilters>({})
+  const finance = useQuery({queryKey: ['marketplace-admin', 'finance', filters], queryFn: () => getMarketplaceFinance(filters)})
+  const update = (key: keyof MarketplaceFinanceFilters, value: string) => setFilters((current) => ({...current, [key]: value || undefined}))
+  const selectClass = 'h-10 rounded-md border border-white/10 bg-[#141417] px-3 text-sm text-zinc-200'
+  const releases = [...new Map([...data.catalog, ...data.takedowns.filter((row) => row.release_id)]
+    .map((row) => [String(row.release_id ?? row.id), String(row.title ?? row.release_title ?? row.id)] as const)).entries()]
+    .map(([id, title]) => ({id, title}))
+  return <div className="space-y-7">
+    <div><h1 className="text-2xl font-bold">Finance</h1><p className="mt-1 text-sm text-zinc-400">Marketplace sales, Stripe fees, artist allocations, and MEJay revenue. Dates are UTC sale dates.</p></div>
+    <div className="flex flex-wrap items-end gap-3">
+      <label className="text-xs text-zinc-500">From<Input type="date" className="mt-1 w-40" value={filters.from ?? ''} onChange={(event) => update('from', event.target.value)} /></label>
+      <label className="text-xs text-zinc-500">To<Input type="date" className="mt-1 w-40" value={filters.to ?? ''} onChange={(event) => update('to', event.target.value)} /></label>
+      <label className="text-xs text-zinc-500">Artist account<select className={`mt-1 block ${selectClass}`} value={filters.providerId ?? ''} onChange={(event) => update('providerId', event.target.value)}><option value="">All artist accounts</option>{data.providers.map((row) => <option key={String(row.id)} value={String(row.id)}>{formatValue(row.display_name)}</option>)}</select></label>
+      <label className="text-xs text-zinc-500">Release<select className={`mt-1 block ${selectClass}`} value={filters.releaseId ?? ''} onChange={(event) => update('releaseId', event.target.value)}><option value="">All releases</option>{releases.map((row) => <option key={row.id} value={row.id}>{row.title}</option>)}</select></label>
+      <label className="text-xs text-zinc-500">Status<select className={`mt-1 block ${selectClass}`} value={filters.status ?? ''} onChange={(event) => update('status', event.target.value)}>{financeStatuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+    </div>
+    {finance.isLoading ? <Skeleton className="h-72 bg-white/5" /> : finance.isError || !finance.data ? <ErrorState message={finance.error?.message || 'Finance reporting is unavailable'} /> : <FinanceReport summary={finance.data} />}
+  </div>
+}
+
+function FinanceReport({summary}: {summary: Awaited<ReturnType<typeof getMarketplaceFinance>>}) {
+  const totals = summary.totals
+  const metrics: Array<[string, string, string?]> = [
+    ['Gross Marketplace Sales', money(totals.grossSalesMinor), `${totals.orders} orders`],
+    ['Stripe Fees', money(totals.stripeFeesMinor), totals.ordersWithUnknownStripeFee ? `${totals.ordersWithUnknownStripeFee} not yet reported by Stripe` : undefined],
+    ['Artist Allocations', money(totals.artistAllocationMinor), `${money(totals.artistEarningsAfterAdjustmentsMinor)} after refunds and disputes`],
+    ['MEJay Commission', money(totals.platformCommissionMinor), `+${money(totals.processingFeesRecoveredMinor)} Stripe fees recovered from artists`],
+    ['MEJay Net Revenue', money(totals.netPlatformRevenueMinor), 'After refunds, lost disputes, and Stripe fees'],
+    ['Refunds', money(totals.refundsMinor), `${totals.refundedOrders} orders`],
+    ['Disputes', `${totals.disputes.open} open · ${totals.disputes.lost} lost`, `${money(totals.disputes.openAmountMinor)} open, ${money(totals.disputes.lostAmountMinor)} lost, ${totals.disputes.won} won`],
+    ['Failed Payments', String(totals.failedPayments), 'Checkout payments that did not complete'],
+    ['Pending Transfers', money(totals.pendingTransfers.amountMinor), `${totals.pendingTransfers.count} pending · ${totals.failedTransfers.count} failed (${money(totals.failedTransfers.amountMinor)})`],
+  ]
+  return <div className="space-y-7">
+    <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{metrics.map(([label, value, detail]) => <div key={label} className="border border-white/10 bg-[#141417] p-5"><dt className="text-xs uppercase text-zinc-500">{label}</dt><dd className="mt-3 text-2xl font-bold tabular-nums">{value}</dd>{detail && <dd className="mt-1 text-xs text-zinc-500">{detail}</dd>}</div>)}</dl>
+    <section><h2 className="text-lg font-semibold">Transactions</h2><p className="mt-1 text-sm text-zinc-500">Latest {summary.transactions.length} orders. Sale amounts are fixed at the time of purchase; refunds and disputes are recorded separately.</p>
+      {summary.transactions.length === 0 ? <div className="mt-4 border-y border-dashed border-white/10 py-12 text-center text-sm text-zinc-500">No orders match these filters.</div> : <div className="mt-4 overflow-x-auto border-y border-white/10"><table className="w-full min-w-[1100px] text-left text-sm"><thead className="text-xs uppercase text-zinc-500"><tr><th className="px-3 py-3">Date</th><th className="px-3 py-3">Release</th><th className="px-3 py-3">Artist account</th><th className="px-3 py-3">Gross</th><th className="px-3 py-3">Commission</th><th className="px-3 py-3">Stripe fee</th><th className="px-3 py-3">Artist</th><th className="px-3 py-3">Refunded</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Order</th></tr></thead><tbody className="divide-y divide-white/10">{summary.transactions.map((row) => <tr key={row.orderId}><td className="px-3 py-3">{formatDate(row.paidAt)}</td><td className="px-3 py-3"><p>{row.songTitle ?? row.releaseTitle}</p><p className="text-xs text-zinc-500">{row.songTitle ? `Song · ${row.releaseTitle} · ` : ''}{row.artistName}</p></td><td className="px-3 py-3 text-zinc-300">{row.providerName ?? '-'}</td><td className="px-3 py-3 tabular-nums">{money(row.grossMinor)}</td><td className="px-3 py-3 tabular-nums">{money(row.platformCommissionMinor)}</td><td className="px-3 py-3 tabular-nums">{row.stripeFeeMinor === null ? 'Pending' : money(row.stripeFeeMinor)}</td><td className="px-3 py-3 tabular-nums">{money(row.artistAllocationMinor)}</td><td className="px-3 py-3 tabular-nums">{row.refundedMinor ? money(row.refundedMinor) : '-'}</td><td className="px-3 py-3 capitalize"><p>{row.paymentStatus.replace(/_/g, ' ')}</p><p className="text-xs text-zinc-500">Transfer {row.transferStatus}{row.disputeStatus !== 'none' ? ` · dispute ${row.disputeStatus}` : ''}{row.livemode === false ? ' · test' : ''}</p></td><td className="px-3 py-3 font-mono text-xs" title={row.orderId}>{shortId(row.orderId)}</td></tr>)}</tbody></table></div>}
+    </section>
+  </div>
 }
 
 function money(amountMinor: number) { return new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD'}).format(amountMinor / 100) }

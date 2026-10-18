@@ -1,14 +1,18 @@
-import {cadenceFromPrice, persistSubscriptionState, revokeFullProgramAccess, stripeTimestampToIso, type SubscriptionState} from '../services/billing'
+import {resolvePlatformFeeBps} from '../marketplace/commerce-money'
+import {cadenceFromPrice, persistSubscriptionState, revokeFullProgramAccess, stripeTimestampToIso, type SubscriptionState, upsertPurchasedEntitlement} from '../services/billing'
 import {CommerceService} from '../marketplace/commerce-service'
 import {ConnectService} from '../marketplace/connect-service'
 import {claimStripeWebhookEvent, finalizeStripeWebhookEvent} from '../marketplace/webhook-events'
+import {sendOrderConfirmation, type OrderEmailEnv} from '../marketplace/order-email'
 
 type D1Database = any
 
-type Env = {
+type Env = OrderEmailEnv & {
   DB: D1Database
   STRIPE_SECRET_KEY: string
   STRIPE_WEBHOOK_SECRET: string
+  /** Signing secret of the separate Connect ("connected accounts") endpoint, if one is configured. */
+  STRIPE_CONNECT_WEBHOOK_SECRET?: string
   STRIPE_PRICE_PRO: string
   STRIPE_PRICE_YEARLY: string
   MARKETPLACE_PLATFORM_FEE_BPS?: string
@@ -35,11 +39,6 @@ function getRequiredEnv(env: Partial<Env>, key: keyof Env): string {
   return String(value)
 }
 
-function mapToDbAccessType(accessType: AccessType): 'free' | 'pro' | 'full' {
-  if (accessType === 'pro') return 'pro'
-  if (accessType === 'full_program') return 'full'
-  return 'free'
-}
 
 async function stripeGet(secretKey: string, path: string): Promise<any> {
   const res = await fetch(`https://api.stripe.com${path}`, {
@@ -62,58 +61,7 @@ async function stripeGet(secretKey: string, path: string): Promise<any> {
   return JSON.parse(text)
 }
 
-async function upsertEntitlementsInD1(args: {
-  db: D1Database
-  userId: string
-  customerId: string | null
-  email?: string | null
-  subscriptionId?: string | null
-  accessType: AccessType
-  hasFullAccess: boolean
-}): Promise<void> {
-  const {db, userId, customerId, email, subscriptionId, accessType, hasFullAccess} = args
-
-  // Never persist "free" from Stripe events.
-  if (!hasFullAccess) return
-  if (accessType !== 'pro' && accessType !== 'full_program') return
-
-  const effectiveUserId = await (async () => {
-    const byId = (await db.prepare('SELECT id FROM users WHERE id = ?1').bind(userId).first()) as {id: string} | null
-    if (byId?.id) return userId
-
-    if (email) {
-      const byEmail = (await db.prepare('SELECT id FROM users WHERE email = ?1').bind(email).first()) as {id: string} | null
-      if (byEmail?.id) return byEmail.id
-    }
-
-    await db
-      .prepare('INSERT INTO users (id, email) VALUES (?1, ?2)')
-      .bind(userId, email ?? `unknown+${userId}@example.invalid`)
-      .run()
-    return userId
-  })()
-
-  const dbAccessType = mapToDbAccessType(accessType)
-  const hasFull = hasFullAccess ? 1 : 0
-
-  const stmt = db
-    .prepare(
-      [
-        'INSERT INTO entitlements (user_id, access_type, has_full_access, stripe_customer_id, stripe_subscription_id, updated_at)',
-        'VALUES (?1, ?2, ?3, ?4, ?5, (strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\')))',
-        'ON CONFLICT(user_id) DO UPDATE SET',
-        'access_type=excluded.access_type,',
-        'has_full_access=excluded.has_full_access,',
-        'stripe_customer_id=COALESCE(excluded.stripe_customer_id, entitlements.stripe_customer_id),',
-        // Don't orphan an existing Pro subscription when Full Program is bought on top of it.
-        'stripe_subscription_id=COALESCE(excluded.stripe_subscription_id, entitlements.stripe_subscription_id),',
-        'updated_at=excluded.updated_at',
-      ].join(' '),
-    )
-    .bind(effectiveUserId, dbAccessType, hasFull, customerId, subscriptionId ?? null)
-
-  await db.batch([stmt])
-}
+const upsertEntitlementsInD1 = upsertPurchasedEntitlement
 
 /**
  * Resolve the MEJay user behind a one-time Full Program charge via its Checkout Session.
@@ -190,6 +138,48 @@ export async function verifyStripeWebhook(args: {payload: string; header: string
   return false
 }
 
+/**
+ * A payload is authentic if it verifies against any configured endpoint secret. Stripe signs
+ * platform events and connected-account events (account.updated, payout.failed) with the secret of
+ * the endpoint that received them, and those are two different endpoints.
+ */
+export async function verifyStripeWebhookWithAnySecret(args: {payload: string; header: string; secrets: string[]; nowSeconds?: number}): Promise<boolean> {
+  for (const secret of args.secrets) {
+    if (await verifyStripeWebhook({payload: args.payload, header: args.header, secret, nowSeconds: args.nowSeconds})) return true
+  }
+  return false
+}
+
+export type StripeWebhookSource = 'platform' | 'connect'
+
+/** Connected-account events, delivered only by the Connect endpoint and signed with its secret. */
+export const CONNECT_EVENT_TYPES: ReadonlySet<string> = new Set(['account.updated', 'capability.updated', 'payout.failed'])
+
+/**
+ * Which endpoint signed the payload: the platform ("Your account") endpoint's STRIPE_WEBHOOK_SECRET
+ * or the Connect endpoint's STRIPE_CONNECT_WEBHOOK_SECRET. null when neither verifies.
+ */
+export async function verifyStripeWebhookSource(args: {
+  payload: string
+  header: string
+  platformSecret: string
+  connectSecret: string
+  nowSeconds?: number
+}): Promise<StripeWebhookSource | null> {
+  const {payload, header, nowSeconds} = args
+  if (args.platformSecret && await verifyStripeWebhook({payload, header, secret: args.platformSecret, nowSeconds})) return 'platform'
+  if (args.connectSecret && args.connectSecret !== args.platformSecret
+    && await verifyStripeWebhook({payload, header, secret: args.connectSecret, nowSeconds})) return 'connect'
+  return null
+}
+
+/** true for live keys, false for test keys, null when the key format is unrecognized. */
+export function stripeKeyLivemode(secretKey: string): boolean | null {
+  if (/^(sk|rk)_live_/.test(secretKey)) return true
+  if (/^(sk|rk)_test_/.test(secretKey)) return false
+  return null
+}
+
 function getUserIdFromMetadata(meta: any): string | null {
   const raw = meta?.userId
   if (typeof raw !== 'string') return null
@@ -237,16 +227,33 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
 
   try {
     const secretKey = getRequiredEnv(env, 'STRIPE_SECRET_KEY').trim()
-    const webhookSecret = getRequiredEnv(env, 'STRIPE_WEBHOOK_SECRET').trim()
+    const platformSecret = getRequiredEnv(env, 'STRIPE_WEBHOOK_SECRET').trim()
+    const connectSecret = String(env.STRIPE_CONNECT_WEBHOOK_SECRET ?? '').trim()
 
     const sigHeader = request.headers.get('stripe-signature') ?? ''
     const payload = await request.text()
 
-    const ok = await verifyStripeWebhook({payload, header: sigHeader, secret: webhookSecret})
-    if (!ok) return json({error: 'Invalid signature'}, {status: 400})
+    const source = await verifyStripeWebhookSource({payload, header: sigHeader, platformSecret, connectSecret})
+    if (!source) return json({error: 'Invalid signature'}, {status: 400})
 
     const event = JSON.parse(payload) as any
+    // Never let a test-mode event touch live records (or the reverse). Acknowledge without claiming
+    // so a misconfigured endpoint is visible in logs but Stripe stops retrying.
+    const keyLivemode = stripeKeyLivemode(secretKey)
+    if (keyLivemode !== null && typeof event?.livemode === 'boolean' && event.livemode !== keyLivemode) {
+      console.error('[stripe-webhook] Event mode does not match STRIPE_SECRET_KEY mode; ignoring', {eventId: event?.id, type: event?.type, livemode: event.livemode})
+      return json({ok: true, ignored: true})
+    }
+    const commerce = () => new CommerceService(env.DB, secretKey, resolvePlatformFeeBps(env))
     const type = String(event?.type ?? '')
+    // Each secret only authorizes its own endpoint's events: the Connect secret can never drive store
+    // fulfillment or refunds, and the platform secret can never change a connected account.
+    const connectedAccountId = typeof event?.account === 'string' ? event.account : null
+    const connectEvent = CONNECT_EVENT_TYPES.has(type)
+    if (source === 'connect' ? !connectEvent || !connectedAccountId : connectEvent) {
+      console.warn('[stripe-webhook] Event not accepted from this endpoint; ignoring', {eventId: event?.id, type, source})
+      return json({ok: true, ignored: true})
+    }
     const obj = event?.data?.object
     const eventCreatedAt = stripeTimestampToIso(event?.created) ?? new Date().toISOString()
     const eventId = typeof event?.id === 'string' ? event.id.trim() : ''
@@ -255,8 +262,15 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     if (!claimed) return json({ok: true, duplicate: true})
     claimedEventId = eventId
 
-    if (type === 'account.updated' && typeof obj?.id === 'string') {
+    if (type === 'account.updated') {
+      if (obj?.id !== connectedAccountId) return json({ok: true, ignored: true})
       await new ConnectService(env.DB, secretKey).syncAccount(obj)
+      return json({ok: true})
+    }
+
+    if (type === 'capability.updated') {
+      // The payload is the capability; re-read the account so every status field stays consistent.
+      await new ConnectService(env.DB, secretKey).refreshAccount(connectedAccountId!)
       return json({ok: true})
     }
 
@@ -265,7 +279,8 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
       const meta = session?.metadata
       if (meta?.kind === 'marketplace_purchase') {
         if (session?.payment_status !== 'paid') return json({ok: true, ignored: true})
-        const result = await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).fulfillPaidSession(session)
+        const result = await commerce().fulfillPaidSession(session)
+        await sendOrderConfirmation(env.DB, env, result.orderId)
         return json({ok: true, orderId: result.orderId})
       }
       const userId = getUserIdFromMetadata(meta)
@@ -316,12 +331,25 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     }
 
     if (type === 'checkout.session.async_payment_succeeded' && obj?.metadata?.kind === 'marketplace_purchase') {
-      const result = await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).fulfillPaidSession(obj)
+      const result = await commerce().fulfillPaidSession(obj)
+      await sendOrderConfirmation(env.DB, env, result.orderId)
       return json({ok: true, orderId: result.orderId})
     }
 
+    // Delayed payment methods that ultimately fail, and sessions that expire unpaid. Nothing was
+    // granted for these, so only the checkout attempt is closed.
+    if (type === 'checkout.session.async_payment_failed' && obj?.metadata?.kind === 'marketplace_purchase') {
+      await commerce().closeCheckoutAttempt(obj, 'payment_failed')
+      return json({ok: true})
+    }
+
+    if (type === 'checkout.session.expired' && obj?.metadata?.kind === 'marketplace_purchase') {
+      await commerce().closeCheckoutAttempt(obj, 'expired')
+      return json({ok: true})
+    }
+
     if (type === 'charge.refunded') {
-      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).handleRefund(obj)
+      await commerce().handleRefund(obj)
       // One-time Full Program purchases: a full refund revokes access. (Pro refunds are handled
       // by the subscription lifecycle events.)
       if (obj?.refunded === true && !obj?.invoice) {
@@ -333,12 +361,12 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     }
 
     if (type === 'charge.dispute.created') {
-      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).handleDispute(obj, true, eventId)
+      await commerce().handleDispute(obj, true, eventId)
       return json({ok: true})
     }
 
     if (type === 'charge.dispute.closed') {
-      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).handleDispute(obj, false, eventId)
+      await commerce().handleDispute(obj, false, eventId)
       if (obj?.status === 'lost') {
         const paymentIntentId = typeof obj?.payment_intent === 'string' ? obj.payment_intent : null
         const userId = await fullProgramUserForPaymentIntent(secretKey, paymentIntentId)
@@ -348,13 +376,12 @@ export const onRequest = async (context: {request: Request; env: Env}): Promise<
     }
 
     if (type === 'transfer.failed') {
-      await new CommerceService(env.DB, secretKey, Number(env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)).handleTransferFailed(obj, eventId)
+      await commerce().handleTransferFailed(obj, eventId)
       return json({ok: true})
     }
 
     if (type === 'payout.failed') {
-      const accountId = typeof event?.account === 'string' ? event.account : null
-      await new ConnectService(env.DB, secretKey).handlePayoutFailed(accountId, obj, eventId)
+      await new ConnectService(env.DB, secretKey).handlePayoutFailed(connectedAccountId, obj, eventId)
       return json({ok: true})
     }
 

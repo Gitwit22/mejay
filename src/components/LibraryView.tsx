@@ -117,8 +117,8 @@ export function LibraryView() {
 
   const handleCreateAndAdd = async (trackId: string) => {
     if (!newPlaylistName.trim()) return;
-    await createPlaylist(newPlaylistName.trim());
-    const newPlaylist = useDJStore.getState().playlists.find(p => p.name === newPlaylistName.trim());
+    const newPlaylistId = await createPlaylist(newPlaylistName.trim());
+    const newPlaylist = useDJStore.getState().playlists.find(p => p.id === newPlaylistId);
     if (newPlaylist) {
       if (showAddSelectedToPlaylist) {
         let addedCount = 0;
@@ -355,7 +355,10 @@ export function LibraryView() {
                       <DropdownMenuItem
                         className="text-destructive focus:text-destructive"
                         onSelect={() => {
-                          removeFromLibrary(track.id);
+                          if (!window.confirm(`Delete "${track.displayName}" from My Music? This removes it from this device and all playlists.`)) return;
+                          void removeFromLibrary(track.id).catch((error: unknown) => {
+                            console.error('[Library] delete failed', error);
+                          });
                         }}
                       >
                         <span className="flex items-center gap-2">

@@ -52,16 +52,17 @@ export function resolvePreviewRange(rangeHeader: string | null, limit: number): 
 export class StoreService {
   constructor(private readonly database: Database) {}
 
-  async listCatalog(): Promise<unknown[]> {
+  /** Public LIVE catalog; `artistId` narrows it to one artist's primary releases (artist pages). */
+  async listCatalog(artistId?: string): Promise<unknown[]> {
     const {results} = await this.database.prepare(
       `SELECT r.id, r.title, r.release_type, r.genre, r.original_release_date, r.published_at,
-        artist.id AS artist_id, artist.name AS artist_name,
+        artist.id AS artist_id, artist.name AS artist_name, artist.slug AS artist_slug,
         artwork.id AS artwork_asset_id,
         offer.product_id, offer.amount_minor, offer.currency,
         (provider.suspended_at IS NULL AND provider.stripe_details_submitted AND provider.stripe_payouts_enabled
           AND provider.stripe_transfers_status = 'active') AS purchase_available,
         COUNT(DISTINCT track.id)::integer AS track_count,
-        MIN(preview.id) AS preview_asset_id
+        (ARRAY_AGG(preview.id ORDER BY track.disc_number, track.track_number, preview.created_at DESC) FILTER (WHERE preview.id IS NOT NULL))[1] AS preview_asset_id
        FROM releases r
       JOIN provider_profiles provider ON provider.id = r.provider_profile_id
        JOIN release_artists credit ON credit.release_id = r.id AND credit.is_primary = TRUE
@@ -82,11 +83,11 @@ export class StoreService {
        LEFT JOIN tracks track ON track.release_id = r.id
        LEFT JOIN marketplace_assets preview ON preview.track_id = track.id
          AND preview.kind = 'audio' AND preview.processing_status = 'ready'
-       WHERE r.status = 'LIVE'
+       WHERE r.status = 'LIVE' AND (?1 = '' OR artist.id = ?1)
       GROUP BY r.id, artist.id, artist.name, artwork.id, offer.product_id, offer.amount_minor, offer.currency,
         provider.suspended_at, provider.stripe_details_submitted, provider.stripe_payouts_enabled, provider.stripe_transfers_status
        ORDER BY r.published_at DESC, r.updated_at DESC`,
-    ).all()
+    ).bind(artistId ?? '').all()
     return results
   }
 
@@ -94,7 +95,7 @@ export class StoreService {
     const release = await this.database.prepare(
       `SELECT r.id, r.title, r.version_title, r.release_type, r.genre, r.subgenre,
         r.original_release_date, r.published_at, r.label_name,
-        artist.id AS artist_id, artist.name AS artist_name,
+        artist.id AS artist_id, artist.name AS artist_name, artist.slug AS artist_slug,
         artwork.id AS artwork_asset_id,
         offer.product_id, offer.amount_minor, offer.currency,
         (provider.suspended_at IS NULL AND provider.stripe_details_submitted AND provider.stripe_payouts_enabled
@@ -123,7 +124,8 @@ export class StoreService {
 
     const {results: tracks} = await this.database.prepare(
       `SELECT t.id, t.title, t.version_title, t.disc_number, t.track_number,
-        t.duration_ms, t.explicit, preview.id AS preview_asset_id
+        t.duration_ms, t.explicit, preview.id AS preview_asset_id,
+        song.product_id, song.amount_minor, song.currency
        FROM tracks t
        JOIN releases r ON r.id = t.release_id AND r.status = 'LIVE'
        LEFT JOIN LATERAL (
@@ -131,6 +133,15 @@ export class StoreService {
          WHERE asset.track_id = t.id AND asset.kind = 'audio' AND asset.processing_status = 'ready'
          ORDER BY asset.created_at DESC LIMIT 1
        ) preview ON TRUE
+       -- Optional single-song offer; null when the song is only sold as part of the release.
+       LEFT JOIN LATERAL (
+         SELECT product.id AS product_id, price.amount_minor, price.currency
+         FROM products product JOIN prices price ON price.product_id = product.id
+         WHERE product.track_id = t.id AND product.active = TRUE AND price.active = TRUE
+           AND price.effective_from <= CURRENT_TIMESTAMP
+           AND (price.effective_until IS NULL OR price.effective_until > CURRENT_TIMESTAMP)
+         ORDER BY price.effective_from DESC, product.created_at DESC LIMIT 1
+       ) song ON TRUE
        WHERE t.release_id = ?1
        ORDER BY t.disc_number, t.track_number`,
     ).bind(releaseId).all()
@@ -157,11 +168,18 @@ export class StoreService {
 
   async getAsset(assetId: string): Promise<StoreAsset> {
     const asset = await this.database.prepare(
+      // Only public kinds: release artwork and audio previews of LIVE releases, and profile imagery
+      // of artists who have a LIVE release. Rights documents are never served from here.
       `SELECT asset.storage_key, asset.mime_type, asset.byte_size, track.duration_ms
        FROM marketplace_assets asset
        LEFT JOIN tracks track ON track.id = asset.track_id
-       JOIN releases r ON r.id = COALESCE(asset.release_id, track.release_id)
-       WHERE asset.id = ?1 AND asset.processing_status = 'ready' AND r.status = 'LIVE'`,
+       WHERE asset.id = ?1 AND asset.processing_status = 'ready' AND (
+         (asset.kind IN ('artwork', 'audio') AND EXISTS (
+           SELECT 1 FROM releases r WHERE r.id = COALESCE(asset.release_id, track.release_id) AND r.status = 'LIVE'))
+         OR (asset.kind IN ('artist_photo', 'artist_banner', 'artist_cutout', 'artist_gallery') AND EXISTS (
+           SELECT 1 FROM release_artists credit JOIN releases r ON r.id = credit.release_id
+           WHERE credit.artist_id = asset.artist_id AND credit.is_primary = TRUE AND r.status = 'LIVE'))
+       )`,
     ).bind(assetId).first<{storage_key: string; mime_type: string; byte_size: number | string; duration_ms: number | null}>()
     if (!asset || !asset.storage_key.startsWith(MARKETPLACE_STORAGE_PREFIX)) {
       throw new MarketplaceError(404, 'not_found', 'Catalog asset was not found')

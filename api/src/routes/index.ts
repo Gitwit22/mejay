@@ -21,6 +21,7 @@ import {
   assignGeneratedIsrc,
   createArtist,
   createPrice,
+  setReleasePrice, setTrackPrice, replaceTrackCredits, getReleaseCertification, saveReleaseCertification, addRightsMaterial, deleteRightsMaterial, getArtistProfile, updateArtistProfile, replaceArtistGallery, clearTrackPrice,
   createProduct,
   createProvider,
   createRelease,
@@ -38,13 +39,14 @@ import {
   updateTrack,
   finalizeUpload,
 } from './marketplace'
-import {commandProvider as marketplaceAdminCommandProvider, commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview, recordSplitDispute, replaceDiscoveryFeatures, retryProviderPayouts} from './marketplace-admin'
+import {commandProvider as marketplaceAdminCommandProvider, commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview, recordSplitDispute, replaceDiscoveryFeatures, retryProviderPayouts, getFinanceSummary as marketplaceAdminFinance, getReleaseReview as marketplaceAdminReleaseReview, getReviewAsset as marketplaceAdminReviewAsset} from './marketplace-admin'
 import {createIndustryReportingBatch, createIndustryReportingCorrection, exportIndustryReportingBatch, getIndustryReporting, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting} from './marketplace-admin/reporting'
 import {onRequest as stripeWebhook} from './stripe-webhook'
-import {getCatalogAsset, getCatalogRelease, listCatalog, recordCatalogPreview} from './store'
+import {getCatalogAsset, getCatalogRelease, getPublicArtist, listCatalog, recordCatalogPreview} from './store'
 import {createConnectDashboard, createConnectOnboarding, getConnectStatus} from './marketplace/connect'
 import {getProviderReporting, getRecipientEarnings} from './marketplace/reporting'
-import {createStoreCheckout, downloadStorePurchase, getStoreOrderStatus, listStorePurchases} from './store/commerce'
+import {getPricingPolicy} from './marketplace/pricing'
+import {createStoreCheckout, downloadStorePurchase, getStoreOrderStatus, getStorePurchaseArtwork, listStorePurchases} from './store/commerce'
 import {getMusicDiscovery} from './music'
 import {CLIENT_IP_HEADER} from './_security'
 import {assignTrackIsrc, exportIsrcRecords, getIsrcRecord, getIsrcSequence, listIsrcRecords, registerExistingIsrc} from './isrc'
@@ -72,21 +74,27 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'get', path: '/api/music/discovery', handler: getMusicDiscovery},
   {method: 'get', path: '/api/store/releases', handler: listCatalog},
   {method: 'get', path: '/api/store/releases/:releaseId', handler: getCatalogRelease},
+  {method: 'get', path: '/api/store/artists/:slug', handler: getPublicArtist},
   {method: 'get', path: '/api/store/assets/:assetId', handler: getCatalogAsset},
   {method: 'post', path: '/api/store/previews', handler: recordCatalogPreview},
   {method: 'post', path: '/api/store/checkout', handler: createStoreCheckout},
   {method: 'get', path: '/api/store/orders/by-session/:sessionId', handler: getStoreOrderStatus},
   {method: 'get', path: '/api/store/purchases', handler: listStorePurchases},
   {method: 'get', path: '/api/store/purchases/:entitlementId/files/:fileId/download', handler: downloadStorePurchase},
+  {method: 'get', path: '/api/store/purchases/:entitlementId/artwork', handler: getStorePurchaseArtwork},
   {method: 'get', path: '/api/marketplace/connect', handler: getConnectStatus},
   {method: 'post', path: '/api/marketplace/connect/onboarding', handler: createConnectOnboarding},
   {method: 'post', path: '/api/marketplace/connect/dashboard', handler: createConnectDashboard},
   {method: 'get', path: '/api/marketplace/reporting', handler: getProviderReporting},
+  {method: 'get', path: '/api/marketplace/pricing-policy', handler: getPricingPolicy},
   {method: 'get', path: '/api/marketplace/recipient-earnings', handler: getRecipientEarnings},
   {method: 'post', path: '/api/marketplace/providers', handler: createProvider},
   {method: 'get', path: '/api/marketplace/dashboard', handler: getDashboard},
   {method: 'get', path: '/api/marketplace/artists', handler: listArtists},
   {method: 'post', path: '/api/marketplace/artists', handler: createArtist},
+  {method: 'get', path: '/api/marketplace/artists/:artistId/profile', handler: getArtistProfile},
+  {method: 'put', path: '/api/marketplace/artists/:artistId/profile', handler: updateArtistProfile},
+  {method: 'put', path: '/api/marketplace/artists/:artistId/gallery', handler: replaceArtistGallery},
   {method: 'get', path: '/api/marketplace/releases', handler: listReleases},
   {method: 'post', path: '/api/marketplace/releases', handler: createRelease},
   {method: 'get', path: '/api/marketplace/releases/:releaseId', handler: getRelease},
@@ -100,6 +108,14 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'post', path: '/api/marketplace/tracks/:trackId/isrc-assignments/generated', handler: assignGeneratedIsrc},
   {method: 'post', path: '/api/marketplace/products', handler: createProduct},
   {method: 'post', path: '/api/marketplace/products/:productId/prices', handler: createPrice},
+  {method: 'put', path: '/api/marketplace/releases/:releaseId/price', handler: setReleasePrice},
+  {method: 'put', path: '/api/marketplace/tracks/:trackId/price', handler: setTrackPrice},
+  {method: 'put', path: '/api/marketplace/tracks/:trackId/credits', handler: replaceTrackCredits},
+  {method: 'get', path: '/api/marketplace/releases/:releaseId/certification', handler: getReleaseCertification},
+  {method: 'put', path: '/api/marketplace/releases/:releaseId/certification', handler: saveReleaseCertification},
+  {method: 'post', path: '/api/marketplace/releases/:releaseId/rights-materials', handler: addRightsMaterial},
+  {method: 'delete', path: '/api/marketplace/rights-materials/:materialId', handler: deleteRightsMaterial},
+  {method: 'delete', path: '/api/marketplace/tracks/:trackId/price', handler: clearTrackPrice},
   {method: 'put', path: '/api/marketplace/tracks/:trackId/revenue-splits', handler: replaceRevenueSplits},
   {method: 'post', path: '/api/marketplace/releases/:releaseId/submit', handler: submitRelease},
   {method: 'post', path: '/api/marketplace/releases/:releaseId/transitions', handler: transitionRelease},
@@ -114,6 +130,9 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'post', path: '/api/marketplace-admin/split-disputes', handler: recordSplitDispute},
   {method: 'post', path: '/api/marketplace-admin/payouts/retry', handler: retryProviderPayouts},
   {method: 'get', path: '/api/marketplace-admin/overview', handler: marketplaceAdminOverview},
+  {method: 'get', path: '/api/marketplace-admin/finance', handler: marketplaceAdminFinance},
+  {method: 'get', path: '/api/marketplace-admin/releases/:releaseId/review', handler: marketplaceAdminReleaseReview},
+  {method: 'get', path: '/api/marketplace-admin/assets/:assetId', handler: marketplaceAdminReviewAsset},
   {method: 'put', path: '/api/marketplace-admin/discovery/features', handler: replaceDiscoveryFeatures},
   {method: 'get', path: '/api/marketplace-admin/reporting', handler: getIndustryReporting},
   {method: 'post', path: '/api/marketplace-admin/reporting/validate', handler: validateIndustryReporting},

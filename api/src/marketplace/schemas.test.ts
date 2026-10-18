@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {assetSchema, generatedIsrcSchema, isrcAssignmentSchema, priceSchema, productSchema, revenueSplitsSchema, uploadInitSchema} from './schemas'
+import {assetSchema, generatedIsrcSchema, isrcAssignmentSchema, priceSchema, productSchema, releasePriceSchema, revenueSplitsSchema, uploadInitSchema} from './schemas'
 
 describe('marketplace upload validation', () => {
   it('accepts square high-resolution artwork', () => {
@@ -53,10 +53,10 @@ describe('marketplace request schemas', () => {
     expect(productSchema.safeParse({name: 'Invalid', releaseId: 'release-1', trackId: 'track-1'}).success).toBe(false)
   })
 
-  it('requires marketplace prices to be at least one US dollar', () => {
-    expect(priceSchema.safeParse({amountMinor: 100, currency: 'USD'}).success).toBe(true)
-    expect(priceSchema.safeParse({amountMinor: 99, currency: 'USD'}).success).toBe(false)
-    expect(priceSchema.safeParse({amountMinor: 100, currency: 'EUR'}).success).toBe(false)
+  it('requires marketplace prices to be at least three US dollars', () => {
+    expect(priceSchema.safeParse({amountMinor: 300, currency: 'USD'}).success).toBe(true)
+    expect(priceSchema.safeParse({amountMinor: 299, currency: 'USD'}).success).toBe(false)
+    expect(priceSchema.safeParse({amountMinor: 300, currency: 'EUR'}).success).toBe(false)
   })
 
   it('keeps artwork on releases and audio on tracks', () => {
@@ -72,5 +72,12 @@ describe('marketplace request schemas', () => {
       {payeeName: 'Label', shareBps: 3000},
     ]}).success).toBe(true)
     expect(revenueSplitsSchema.safeParse({entries: [{payeeName: 'Artist', shareBps: 9999}]}).success).toBe(false)
+  })
+})
+
+describe('release pricing minimum', () => {
+  it('rejects prices under $3.00', () => {
+    expect(releasePriceSchema.safeParse({name: 'Single', amountMinor: 299}).success).toBe(false)
+    expect(releasePriceSchema.safeParse({name: 'Single', amountMinor: 300}).success).toBe(true)
   })
 })

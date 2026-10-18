@@ -1,4 +1,6 @@
+import {resolvePlatformFeeBps} from '../../marketplace/commerce-money'
 import {getSessionUserId, sha256Hex} from '../_auth'
+import {applyRateLimit, getClientIp} from '../_security'
 import {CommerceService} from '../../marketplace/commerce-service'
 import {MarketplaceError} from '../../marketplace/service'
 import type {PrivateBucket} from '../../services/r2'
@@ -16,8 +18,10 @@ function json(body: unknown, status = 200): Response {
 function commerceService(context: Context): CommerceService {
   const secretKey = String(context.env.STRIPE_SECRET_KEY || '').trim()
   if (!secretKey) throw new MarketplaceError(503, 'stripe_not_configured', 'Marketplace checkout is not configured')
-  const feeBps = Number(context.env.MARKETPLACE_PLATFORM_FEE_BPS || 1000)
-  if (!Number.isInteger(feeBps) || feeBps < 0 || feeBps > 10000) {
+  let feeBps: number
+  try {
+    feeBps = resolvePlatformFeeBps(context.env)
+  } catch {
     throw new MarketplaceError(500, 'platform_fee_invalid', 'Marketplace platform fee configuration is invalid')
   }
   return new CommerceService(context.env.DB, secretKey, feeBps)
@@ -41,6 +45,12 @@ export async function createStoreCheckout(context: Context): Promise<Response> {
     const body = await context.request.json().catch(() => null) as {productId?: unknown} | null
     const productId = typeof body?.productId === 'string' ? body.productId.trim() : ''
     if (!productId) return json({ok: false, error: 'product_id_required'}, 400)
+    // Each attempt creates a Stripe Checkout Session; cap per buyer to stop scripted session spam.
+    const limit = await applyRateLimit({
+      db: context.env.DB, key: `user:${auth.userId}`, purpose: 'store_checkout', kind: 'create',
+      maxPerWindow: 20, windowSeconds: 10 * 60, lockoutMs: 10 * 60 * 1000,
+    })
+    if (!limit.ok) return json({ok: false, error: 'rate_limited', message: 'Too many checkout attempts. Try again in a few minutes.'}, 429)
     const configuredOrigin = String(context.env.FRONTEND_URL || '').split(',')[0]?.trim()
     if (!configuredOrigin) throw new MarketplaceError(500, 'frontend_url_missing', 'Frontend URL is not configured')
     const data = await commerceService(context).createCheckout(auth.userId, productId, new URL(configuredOrigin).origin)
@@ -85,7 +95,8 @@ export async function downloadStorePurchase(context: Context): Promise<Response>
     const range = requestedRange && /^bytes=\d*-\d*$/.test(requestedRange) ? requestedRange : undefined
     const object = await context.env.DOWNLOADS.getExact(file.storageKey, range)
     if (!object) return json({ok: false, error: 'not_found'}, 404)
-    const forwardedFor = context.request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || ''
+    const clientIp = getClientIp(context.request)
+    const forwardedFor = clientIp === 'unknown' ? '' : clientIp
     const pepper = String(context.env.SESSION_PEPPER || 'dev-session-pepper')
     const ipHash = forwardedFor ? await sha256Hex(`download:${forwardedFor}:${pepper}`) : null
     await context.env.DB.prepare(
@@ -106,6 +117,29 @@ export async function downloadStorePurchase(context: Context): Promise<Response>
         'accept-ranges': 'bytes',
         ...(object.contentLength !== undefined ? {'content-length': String(object.contentLength)} : {}),
         ...(object.contentRange ? {'content-range': object.contentRange} : {}),
+      },
+    })
+  } catch (error) {
+    return failed(error)
+  }
+}
+export async function getStorePurchaseArtwork(context: Context): Promise<Response> {
+  const auth = await authenticated(context)
+  if (auth instanceof Response) return auth
+  if (!context.env.DOWNLOADS) return json({ok: false, error: 'storage_unavailable'}, 503)
+  const entitlementId = context.params?.entitlementId?.trim()
+  if (!entitlementId) return json({ok: false, error: 'entitlement_id_required'}, 400)
+  try {
+    const artwork = await commerceService(context).getPurchaseArtwork(auth.userId, entitlementId)
+    const object = await context.env.DOWNLOADS.getExact(artwork.storageKey)
+    if (!object) return json({ok: false, error: 'not_found'}, 404)
+    return new Response(object.body, {
+      status: 200,
+      headers: {
+        'content-type': artwork.mimeType,
+        'cache-control': 'private, max-age=3600',
+        'content-disposition': 'inline',
+        ...(object.contentLength !== undefined ? {'content-length': String(object.contentLength)} : {}),
       },
     })
   } catch (error) {

@@ -1,6 +1,7 @@
 type Statement = {
   bind: (...values: unknown[]) => Statement
   first: <T = Record<string, unknown>>() => Promise<T | null>
+  all: <T = Record<string, unknown>>() => Promise<{results: T[]}>
   run: () => Promise<unknown>
 }
 
@@ -27,12 +28,15 @@ export function accountDeletionEligibility(
 ): {allowed: true} | {allowed: false; code: 'subscription_active' | 'full_program_forfeiture_required'} {
   if (!entitlement) return {allowed: true}
   const accessType = entitlement.access_type
+  const paidStatus = ['active', 'trialing', 'past_due', 'unpaid'].includes(entitlement.subscription_status ?? '')
+  // A live Pro subscription keeps billing after the account is gone, so it must be cancelled
+  // first, even for Full Program owners.
+  if (paidStatus) return {allowed: false, code: 'subscription_active'}
   const fullProgram = accessType === 'full' || accessType === 'full_program'
   if (fullProgram) {
     return forfeitFullProgram ? {allowed: true} : {allowed: false, code: 'full_program_forfeiture_required'}
   }
 
-  const paidStatus = ['active', 'trialing', 'past_due', 'unpaid'].includes(entitlement.subscription_status ?? '')
   const free = accessType === 'free' && !Boolean(entitlement.has_full_access) && !paidStatus
   return free ? {allowed: true} : {allowed: false, code: 'subscription_active'}
 }
@@ -40,7 +44,11 @@ export function accountDeletionEligibility(
 export class AccountDeletionService {
   constructor(private readonly database: Database) {}
 
-  async deleteCurrentUser(args: {userId: string; email: string; forfeitFullProgram: boolean}): Promise<void> {
+  /**
+   * Deletes the account. Returns the storage keys of provider uploads that were removed from the
+   * database so the caller can delete the objects from R2 after the transaction commits.
+   */
+  async deleteCurrentUser(args: {userId: string; email: string; forfeitFullProgram: boolean}): Promise<{storageKeys: string[]}> {
     return this.database.transaction(async (db) => {
       const user = await db.prepare('SELECT id, email FROM users WHERE id = ?1 FOR UPDATE')
         .bind(args.userId)
@@ -68,6 +76,7 @@ export class AccountDeletionService {
         throw new AccountDeletionError(eligibility.code === 'subscription_active' ? 409 : 400, eligibility.code, message)
       }
 
+      let storageKeys: string[] = []
       const membership = await db.prepare(
         `SELECT pm.provider_profile_id, pm.role, p.owner_user_id
          FROM provider_members pm JOIN provider_profiles p ON p.id = pm.provider_profile_id
@@ -90,6 +99,23 @@ export class AccountDeletionService {
         }
 
         await this.anonymizeAudits(db, user.id, membership.provider_profile_id)
+        const {results: assets} = await db.prepare(
+          'SELECT storage_key FROM marketplace_assets WHERE provider_profile_id = ?1',
+        ).bind(membership.provider_profile_id).all<{storage_key: string}>()
+        storageKeys = assets.map((asset) => asset.storage_key).filter((key) => key.startsWith('marketplace/'))
+        // Abandoned (unpaid) checkouts and operational incidents reference the provider's catalog
+        // with RESTRICT foreign keys; detach them so the catalog can be removed.
+        await db.prepare(
+          `UPDATE marketplace_checkout_attempts SET product_id = NULL, release_id = NULL, updated_at = CURRENT_TIMESTAMP
+           WHERE release_id IN (SELECT id FROM releases WHERE provider_profile_id = ?1)
+              OR product_id IN (SELECT id FROM products WHERE provider_profile_id = ?1)`,
+        ).bind(membership.provider_profile_id).run()
+        await db.prepare(
+          'UPDATE marketplace_operational_incidents SET provider_profile_id = NULL WHERE provider_profile_id = ?1',
+        ).bind(membership.provider_profile_id).run()
+        // Release certifications are immutable; deleting the whole account is the one sanctioned
+        // purge, enabled for this transaction only.
+        await db.prepare("SELECT set_config('mejay.allow_certification_purge', 'on', true)").first()
         await db.prepare('DELETE FROM releases WHERE provider_profile_id = ?1').bind(membership.provider_profile_id).run()
         await db.prepare('DELETE FROM artists WHERE provider_profile_id = ?1').bind(membership.provider_profile_id).run()
         await db.prepare('DELETE FROM provider_members WHERE provider_profile_id = ?1').bind(membership.provider_profile_id).run()
@@ -113,6 +139,7 @@ export class AccountDeletionService {
       await db.prepare('DELETE FROM email_codes WHERE email = ?1').bind(user.email).run()
       await db.prepare('DELETE FROM auth_codes WHERE email = ?1').bind(user.email).run()
       await db.prepare('DELETE FROM users WHERE id = ?1').bind(user.id).run()
+      return {storageKeys}
     })
   }
 

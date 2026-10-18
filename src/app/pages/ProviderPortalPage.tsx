@@ -1,5 +1,5 @@
 import {useState} from 'react'
-import {useNavigate, useSearchParams} from 'react-router-dom'
+import {Link, useNavigate, useSearchParams} from 'react-router-dom'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {
   BadgeDollarSign,
@@ -28,7 +28,8 @@ import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from '@/c
 import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
 import {getProviderStatusLabel, parseProviderStatus} from '@/lib/marketplace'
-import {getConnectStatus, openConnectDashboard, startConnectOnboarding} from '@/lib/marketplaceCommerceApi'
+import {ArtistProfileEditor} from '@/app/components/provider/ArtistProfileEditor'
+import {getConnectStatus, openConnectDashboard, startConnectOnboarding, type ConnectOnboardingStatus, type ConnectStatus} from '@/lib/marketplaceCommerceApi'
 import {ProviderEarningsReporting, ProviderOverviewReporting, ProviderSalesReporting} from '@/app/components/provider/ProviderReporting'
 import {
   createProviderArtist,
@@ -150,8 +151,26 @@ function PortalSection({section, dashboard, loading, onNavigate, range, onRangeC
   return <EmptyState title={state.title} detail={state.detail} />
 }
 
+const connectStatusCopy: Record<ConnectOnboardingStatus, {label: string; tone: 'ready' | 'pending' | 'blocked'; detail: string}> = {
+  not_connected: {label: 'Not Connected', tone: 'pending', detail: 'Connect a Stripe account to sell releases on MEJay. Stripe collects your identity and bank details; MEJay never sees them.'},
+  onboarding_required: {label: 'Onboarding Required', tone: 'pending', detail: 'Finish Stripe setup to start selling.'},
+  verification_required: {label: 'Verification Required', tone: 'pending', detail: 'Stripe needs more information or is verifying what you submitted.'},
+  restricted: {label: 'Restricted', tone: 'blocked', detail: 'Stripe has restricted this account. Update your Stripe account to resume payouts and sales.'},
+  connected: {label: 'Connected', tone: 'pending', detail: 'Your account is verified. Stripe is still enabling payouts and transfers.'},
+  payouts_enabled: {label: 'Payouts Enabled', tone: 'ready', detail: 'Your releases can be sold, and your earnings are paid to your bank by Stripe.'},
+}
+
+/** Fallback for an API response without onboardingStatus (older deploys). */
+function legacyConnectStatus(state: ConnectStatus): ConnectOnboardingStatus {
+  if (!state.connected) return 'not_connected'
+  if (state.purchaseReady) return 'payouts_enabled'
+  return state.detailsSubmitted ? 'verification_required' : 'onboarding_required'
+}
+
 function PayoutAccount() {
   const queryClient = useQueryClient()
+  const [searchParams] = useSearchParams()
+  const connectReturn = searchParams.get('connect')
   const connect = useQuery({queryKey: ['provider', 'connect'], queryFn: getConnectStatus, retry: false})
   const onboarding = useMutation({
     mutationFn: startConnectOnboarding,
@@ -164,19 +183,31 @@ function PayoutAccount() {
   if (connect.isLoading) return <Skeleton className="h-72 bg-white/5" />
   if (connect.isError || !connect.data) return <ErrorState message={connect.error?.message || 'Payout status is unavailable'} />
   const state = connect.data
-  const due = state.requirements.currently_due ?? []
+  const due = [...new Set([...(state.requirements.past_due ?? []), ...(state.requirements.currently_due ?? [])])]
+  const onboardingStatus = state.onboardingStatus ?? legacyConnectStatus(state)
+  const copy = connectStatusCopy[onboardingStatus]
+  const toneClass = copy.tone === 'ready' ? 'border-emerald-400/40 text-emerald-300' : copy.tone === 'blocked' ? 'border-red-400/40 text-red-300' : 'border-amber-400/40 text-amber-300'
+  const primaryLabel = onboardingStatus === 'not_connected' ? 'Connect Stripe'
+    : onboardingStatus === 'onboarding_required' || onboardingStatus === 'verification_required' ? 'Continue Stripe Setup'
+      : 'Update Stripe Account'
+  // Outstanding requirements (including a restriction) are collected through a fresh Stripe onboarding
+  // link; a fully set-up account manages its bank and payout details in the Stripe Express Dashboard.
+  const primaryOpensDashboard = onboardingStatus === 'connected' || onboardingStatus === 'payouts_enabled'
   return <div className="space-y-7">
     <div><h1 className="text-2xl font-bold">Payout Account</h1><p className="mt-1 text-sm text-zinc-400">Stripe verifies your identity and sends marketplace proceeds to your bank.</p></div>
+    {connectReturn === 'refresh' && <p role="status" className="border border-amber-400/30 bg-amber-400/5 p-3 text-sm text-amber-200">Your Stripe setup link expired. Choose {primaryLabel} to get a new one.</p>}
+    {connectReturn === 'return' && <p role="status" className="border border-white/10 bg-white/[0.03] p-3 text-sm text-zinc-300">Welcome back. The status below comes straight from Stripe; if something is still pending, Stripe may need a few minutes to verify it.</p>}
     <div className="grid gap-4 md:grid-cols-[1fr_auto] md:items-start">
       <div className="rounded-md border border-white/10 bg-[#141417] p-5">
-        <div className="flex flex-wrap items-center gap-3"><p className="font-semibold">Stripe Connect</p><span className={`rounded-full border px-2.5 py-1 text-xs ${state.purchaseReady ? 'border-emerald-400/40 text-emerald-300' : 'border-amber-400/40 text-amber-300'}`}>{state.purchaseReady ? 'Ready for sales' : state.connected ? 'Action required' : 'Not connected'}</span></div>
+        <div className="flex flex-wrap items-center gap-3"><p className="font-semibold">Stripe Connect</p><span className={`rounded-full border px-2.5 py-1 text-xs ${toneClass}`}>{copy.label}</span></div>
+        <p className="mt-3 text-sm text-zinc-400">{copy.detail}</p>
         <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-3"><StatusDatum label="Identity" ready={state.detailsSubmitted} /><StatusDatum label="Payouts" ready={state.payoutsEnabled} /><StatusDatum label="Transfers" ready={state.transfersStatus === 'active'} /></dl>
         {!state.purchaseReady && <p className="mt-5 text-sm text-zinc-400">Stripe must enable payouts and transfers before you can submit or publish a release for sale.</p>}
         {due.length > 0 && <div className="mt-5 border-t border-white/10 pt-4"><p className="text-xs font-semibold uppercase text-zinc-500">Required by Stripe</p><ul className="mt-2 space-y-1 text-sm text-zinc-300">{due.map((requirement) => <li key={requirement}>{requirement.replace(/\./g, ' / ').replace(/_/g, ' ')}</li>)}</ul></div>}
       </div>
       <div className="flex gap-2 md:flex-col">
-        <Button className="gap-2 bg-emerald-400 text-zinc-950 hover:bg-emerald-300" disabled={onboarding.isPending} onClick={() => onboarding.mutate()}><ExternalLink className="h-4 w-4" />{state.connected ? 'Continue setup' : 'Connect Stripe'}</Button>
-        {state.connected && <Button variant="outline" className="gap-2" disabled={dashboard.isPending} onClick={() => dashboard.mutate()}><ExternalLink className="h-4 w-4" />Stripe dashboard</Button>}
+        <Button className="gap-2 bg-emerald-400 text-zinc-950 hover:bg-emerald-300" disabled={onboarding.isPending || dashboard.isPending} onClick={() => (primaryOpensDashboard ? dashboard.mutate() : onboarding.mutate())}><ExternalLink className="h-4 w-4" />{primaryLabel}</Button>
+        {state.connected && state.detailsSubmitted && <Button variant="outline" className="gap-2" disabled={dashboard.isPending} onClick={() => dashboard.mutate()}><ExternalLink className="h-4 w-4" />Open Stripe Dashboard</Button>}
         <Button variant="ghost" className="gap-2" disabled={connect.isFetching} onClick={() => void queryClient.invalidateQueries({queryKey: ['provider', 'connect']})}><RefreshCw className={`h-4 w-4 ${connect.isFetching ? 'animate-spin' : ''}`} />Refresh</Button>
       </div>
     </div>
@@ -212,8 +243,21 @@ function Artists() {
   return <div className="space-y-6"><SectionHeader title="My Artists" detail="Artist identities available for release credits." action={<CreateArtistDialog />} />
     <SearchInput value={search} onChange={setSearch} placeholder="Search artists" />
     {artists.isLoading ? <Skeleton className="h-48 bg-white/5" /> : artists.isError ? <ErrorState message={artists.error.message} /> : filtered.length === 0 ? <EmptyState title="No artists found" detail="Create an artist profile to begin preparing a release." /> :
-      <div className="divide-y divide-white/10 border-y border-white/10">{filtered.map((artist) => <div key={artist.id} className="flex items-center gap-4 py-4"><div className="grid h-10 w-10 place-items-center rounded-full bg-emerald-400/10 font-semibold text-emerald-300">{artist.name.charAt(0).toUpperCase()}</div><div className="min-w-0 flex-1"><p className="truncate font-medium">{artist.name}</p><p className="text-xs text-zinc-500">{artist.country_code || 'Country not set'}</p></div><p className="text-xs text-zinc-400">{artist.release_count} releases</p></div>)}</div>}
+      <div className="divide-y divide-white/10 border-y border-white/10">{filtered.map((artist) => <div key={artist.id} className="flex items-center gap-4 py-4"><div className="grid h-10 w-10 place-items-center rounded-full bg-emerald-400/10 font-semibold text-emerald-300">{artist.name.charAt(0).toUpperCase()}</div><div className="min-w-0 flex-1"><p className="truncate font-medium">{artist.name}</p><p className="text-xs text-zinc-500">{artist.country_code || 'Country not set'}</p></div><p className="hidden text-xs text-zinc-400 sm:block">{artist.release_count} releases</p>{(artist.live_release_count ?? 0) > 0 && artist.slug && <Button asChild size="sm" variant="ghost"><Link to={`/artist/${artist.slug}`} target="_blank">Public page</Link></Button>}<ArtistProfileEditor artist={artist} /></div>)}</div>}
   </div>
+}
+
+/** Artist-facing wording for the release lifecycle. */
+function releaseStatusLabel(status: string): string {
+  const labels: Record<string, string> = {SUBMITTED: 'Submitted for MeJay Review', UNDER_REVIEW: 'In MeJay Review', CHANGES_REQUESTED: 'Changes requested', TAKEN_DOWN: 'Taken down'}
+  return labels[status] ?? status.replace(/_/g, ' ').toLowerCase().replace(/^./, (letter) => letter.toUpperCase())
+}
+
+/** Rights states the artist should know about (others need no action). */
+const rightsStatusNotes: Partial<Record<string, string>> = {
+  RIGHTS_REVIEW_REQUIRED: 'Rights review required before approval',
+  RIGHTS_DOCUMENTATION_ATTACHED: 'Rights documents under review',
+  RIGHTS_ISSUE_FLAGGED: 'Rights issue flagged — see review notes',
 }
 
 function Releases() {
@@ -225,7 +269,7 @@ function Releases() {
   return <div className="space-y-6"><SectionHeader title="My Releases" detail="Draft, submit, and monitor your catalog." action={<CreateReleaseDialog artists={artists.data ?? []} />} />
     <SearchInput value={search} onChange={setSearch} placeholder="Search releases" />
     {releases.isLoading ? <Skeleton className="h-48 bg-white/5" /> : releases.isError ? <ErrorState message={releases.error.message} /> : filtered.length === 0 ? <EmptyState title="No releases found" detail="Create your first release draft when an artist profile is ready." /> :
-      <div className="divide-y divide-white/10 border-y border-white/10">{filtered.map((release) => <button type="button" onClick={() => navigate(`/app/artist/releases/${release.id}/edit/${release.draft_step || 'release-information'}`)} key={release.id} className="grid w-full grid-cols-[1fr_auto] items-center gap-4 py-4 text-left hover:bg-white/[0.02] sm:grid-cols-[1fr_9rem_6rem_auto_auto]"><div className="min-w-0"><p className="truncate font-medium">{release.title}</p><p className="truncate text-xs text-zinc-500">{release.primary_artist_name}</p></div><p className="hidden text-sm capitalize text-zinc-400 sm:block">{release.release_type}</p><p className="hidden text-sm text-zinc-400 sm:block">{release.track_count} tracks</p><span className="rounded-full border border-white/10 px-2.5 py-1 text-xs">{release.status.replace(/_/g, ' ')}</span><ChevronRight className="h-4 w-4 text-zinc-500" /></button>)}</div>}
+      <div className="divide-y divide-white/10 border-y border-white/10">{filtered.map((release) => <button type="button" onClick={() => navigate(`/app/artist/releases/${release.id}/edit/${release.draft_step || 'release-information'}`)} key={release.id} className="grid w-full grid-cols-[1fr_auto] items-center gap-4 py-4 text-left hover:bg-white/[0.02] sm:grid-cols-[1fr_9rem_6rem_auto_auto]"><div className="min-w-0"><p className="truncate font-medium">{release.title}</p><p className="truncate text-xs text-zinc-500">{release.primary_artist_name}</p></div><p className="hidden text-sm capitalize text-zinc-400 sm:block">{release.release_type}</p><p className="hidden text-sm text-zinc-400 sm:block">{release.track_count} tracks</p><span className="flex flex-col items-end gap-1"><span className="rounded-full border border-white/10 px-2.5 py-1 text-xs">{releaseStatusLabel(release.status)}</span>{release.rights_status && rightsStatusNotes[release.rights_status] && <span className="text-[11px] text-amber-300">{rightsStatusNotes[release.rights_status]}</span>}</span><ChevronRight className="h-4 w-4 text-zinc-500" /></button>)}</div>}
   </div>
 }
 

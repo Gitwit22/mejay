@@ -72,6 +72,13 @@ All endpoints require the `mejay_session` cookie and JSON request bodies.
 | POST | `/api/marketplace/tracks/:trackId/isrc-assignments/generated` | Atomically assign the next MEJay QTA3L ISRC |
 | POST | `/api/marketplace/products` | Create a release or track product |
 | POST | `/api/marketplace/products/:productId/prices` | Add an effective-dated price in minor currency units |
+| GET/PUT | `/api/marketplace/artists/:artistId/profile` | Read or edit the artist's public profile (own account only) |
+| PUT | `/api/marketplace/tracks/:trackId/credits` | Replace featured artists (same account) and writer/composer/producer credits |
+| GET/PUT | `/api/marketplace/releases/:releaseId/certification` | Read or save the rights certification draft |
+| POST | `/api/marketplace/releases/:releaseId/rights-materials` | Declare third-party material (optional rights document) |
+| DELETE | `/api/marketplace/rights-materials/:materialId` | Remove a declared material while the release is editable |
+| PUT | `/api/marketplace/tracks/:trackId/price` | Optionally sell one song on its own (`{"amountMinor": 349}`, same minimum as releases) |
+| DELETE | `/api/marketplace/tracks/:trackId/price` | Stop selling the song on its own; it stays included in the release |
 | PUT | `/api/marketplace/tracks/:trackId/revenue-splits` | Atomically replace the track's complete split set |
 | POST | `/api/marketplace/releases/:releaseId/transitions` | Move a release to one adjacent state |
 
@@ -99,11 +106,11 @@ Release-owned tracks, assets, rights, ISRCs, products, prices, and splits are lo
 | `METADATA_COMPLETE` | Required release metadata, primary artist, one or more tracks, ready release artwork, ready audio for every track |
 | `RIGHTS_COMPLETE` | Distribution rights total 10000 bps; master and composition rights each total 10000 bps for every track |
 | `ISRC_COMPLETE` | Every track has one active, globally unique ISRC |
-| `PRICING_COMPLETE` | Active release product priced at least $1.00 USD, completed Stripe payout setup, and active 10000-bps split set for every track |
+| `PRICING_COMPLETE` | Active release product priced at least the minimum ($3.00 USD by default), completed Stripe payout setup, and active 10000-bps split set for every track |
 | `SUBMITTED` | All prior prerequisites are rechecked |
 | `UNDER_REVIEW`, `APPROVED` | Separate marketplace reviewer/admin |
 | `SCHEDULED` | Future `scheduled_release_at` |
-| `LIVE` | No future schedule remains; the $1.00 USD minimum and Stripe payout readiness are rechecked |
+| `LIVE` | No future schedule remains; the minimum price and Stripe payout readiness are rechecked |
 
 Every successful mutation and transition writes an append-only `marketplace_audit_events` row in the same transaction.
 
@@ -122,7 +129,9 @@ The consumer Marketplace reads directly from the publishing catalog:
 
 List, detail, and media queries independently require `releases.status = 'LIVE'`. Publishing an approved release therefore makes it appear automatically, while unpublishing or taking it down removes both catalog metadata and future media access. Store assets remain private in R2 and are streamed with `Cache-Control: private, no-store`; audio responses are limited to the first 5 MB of the uploaded master.
 
-Catalog purchases use authenticated Stripe Checkout sessions that are separate from plan billing. Verified Stripe webhooks create the Neon order, immutable ledger entries, equal-per-track payee allocations, and download entitlement. MEJay retains 10% of gross and transfers the remaining provider proceeds to the provider's Stripe Connect Express account using separate charges and transfers.
+Catalog purchases use authenticated Stripe Checkout sessions that are separate from plan billing. One Checkout Session buys one product from one artist account: either the whole release or a single song the artist priced on its own. There is no multi-seller cart. A song purchase snapshots, allocates, reports, and grants a download for that track only; a buyer who already owns the song (alone or through its release) is refused. Song products are activated and deactivated with their release on publish, unpublish, takedown, and provider suspension. Verified Stripe webhooks create the Neon order, immutable ledger entries, equal-per-track payee allocations, and download entitlement. MEJay retains `MARKETPLACE_PLATFORM_FEE_BPS` of gross (default 10%, `1000` bps) plus recovery of Stripe's processing fee, and transfers the remaining provider proceeds to the provider's Stripe Connect account using separate charges and transfers with `source_transaction`. The commission rate is snapshotted on each order, so changing the setting never alters past sales.
+
+New connected accounts are created with controller properties equivalent to Express (platform-liable for losses and fees, Stripe-collected requirements, Express Dashboard) and onboard only through Stripe-hosted Account Links. `GET /api/marketplace/connect` re-reads the account from Stripe, and `account.updated` keeps it in sync; the onboarding return URL is never treated as proof of completion. `GET /api/marketplace/pricing-policy?amountMinor=` returns the minimum price, commission, and the per-sale estimate from the fulfillment calculator. `GET /api/marketplace-admin/finance` gives marketplace admins read-only totals (gross, Stripe fees, commission, artist allocations, net revenue, refunds, disputes, failed payments, pending transfers) filtered by `from`, `to`, `providerId`, `releaseId`, and `status`.
 
 ## Music discovery
 
@@ -136,7 +145,7 @@ Marketplace admins maintain ordered release and artist picks through one atomic 
 
 Publishing does not insert or synchronize feed rows. The existing atomic transition to `LIVE` sets `published_at` and activates the product; both Store and Music read that same state on their next no-store request. Unpublish and takedown transitions therefore remove releases from both surfaces without a second write path.
 
-Providers connect Stripe from the Provider Portal. Every uploaded release is a paid marketplace release: its active USD price must be at least $1.00, and submission/publication is blocked until Stripe reports submitted details, enabled payouts, and an active transfers capability. Full refunds revoke downloads and reverse the provider transfer; open disputes suspend downloads until Stripe resolves them.
+Providers connect Stripe from the Provider Portal. Every uploaded release is a paid marketplace release: its active USD price must be at least the configured minimum ($3.00 by default), and submission/publication is blocked until Stripe reports submitted details, enabled payouts, and an active transfers capability. Full refunds revoke downloads and reverse the provider transfer; open disputes suspend downloads until Stripe resolves them.
 
 Purchased source files remain private in R2. `GET /api/store/purchases/:entitlementId/files/:fileId/download` requires the owning session and an active entitlement, supports byte ranges, and never exposes the storage key. Sprint 4 temporarily fulfills the original WAV/FLAC upload; standardized consumer derivatives are deferred.
 
@@ -280,3 +289,21 @@ npm run db:migrate
 ```
 
 The integration test creates and drops an isolated PostgreSQL schema, then proves the full provider, artist, release, track, asset, rights, ISRC, product, price, split, review, and publication flow. Never point destructive test setup at production.
+
+## Artist profiles
+
+Public artist identity is the existing `artists` row (an artist account can manage several artists). Migration 15 adds a unique URL `slug` (backfilled for existing artists), tagline, biography, location, up to five genres, domain-checked social/DSP links, Spotify/Apple Music artist IDs, and profile photo and banner assets. Images upload through the same signed R2 flow as release media (`kind: artist_photo | artist_banner`, JPG/PNG/WebP, signature and dimensions verified server-side).
+
+`GET /api/store/artists/:slug` is public and returns the profile plus the artist's releases from the same LIVE catalog query as the marketplace. An artist resolves only while their account is unsuspended and at least one release they are primary on is LIVE; drafts, rejected, unpublished and taken-down releases never appear. The frontend page is `/artist/:slug`, and store artist names link to it.
+
+## Release certification
+
+The release wizard runs `Release Information → Artwork → Tracks → Track Metadata → Credits → Existing ISRCs → Rights → Pricing → Splits → Rights Certification → Review & Submit`. The certification step asks whether the recording contains third-party material (`none`, `licensed`, `unsure`), collects material details and optional documents for `licensed`, and requires every certification statement (plus an ISRC statement when a track has no ISRC). Submitting requires a complete certification and writes an immutable `release_certifications` row in the same transaction: version, exact statement wording, third-party answer, materials, document IDs, a snapshot of the release metadata and credits, and a hashed IP/user agent. The draft is consumed, so every resubmission re-certifies. Certifications cannot be updated or deleted except by the account-deletion transaction.
+
+`releases.rights_status` is set at submission: `CERTIFIED_ORIGINAL` (no third-party material), `RIGHTS_DOCUMENTATION_ATTACHED` (every declared material has a document), or `RIGHTS_REVIEW_REQUIRED` (unsure, or missing documents). Reviewers can only approve `CERTIFIED_ORIGINAL` or `RIGHTS_CLEARED` releases. `clear_rights` records an explicit reviewer decision (note required); `flag_rights` returns the release to the artist as `CHANGES_REQUESTED` with `RIGHTS_ISSUE_FLAGGED`. Releases submitted before certification existed are `NOT_CERTIFIED` and must be cleared or sent back.
+
+ISRCs are no longer a submission prerequisite. Artists may register a legitimately assigned existing ISRC; on approval, MEJay assigns QTA3L ISRCs to the remaining tracks, attested by the certifying artist.
+
+`releases.distribution_status` (`MEJAY_EXCLUSIVE`, `DSP_SCHEDULED`, `DSP_DELIVERED`) is reserved for the later DSP delivery phase and is not changed by any workflow yet.
+
+Staff endpoints: `GET /api/marketplace-admin/releases/:releaseId/review` (metadata, credits, certifications, materials, readiness, warnings) and `GET /api/marketplace-admin/assets/:assetId` (private artwork and rights documents, staff only). The public store asset endpoint never serves rights documents.

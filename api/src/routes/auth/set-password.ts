@@ -9,6 +9,7 @@ import {
   nowIso,
   readJson,
   sha256Hex,
+  shouldUseSecureCookie,
   verifyVerifiedToken,
 } from '../_auth'
 import {parseAccountIntent} from '../../marketplace/onboarding'
@@ -143,7 +144,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
 
     if (!user) return json({ok: false, error: 'user_not_found'}, {status: 400})
 
-    const secure = new URL(request.url).protocol === 'https:'
+    const secure = shouldUseSecureCookie(request, env as {COOKIE_SECURE?: string})
     const cookie = makeSessionCookie(sessionToken, {
       secure,
       sameSite: env.COOKIE_SAME_SITE,

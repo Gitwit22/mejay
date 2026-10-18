@@ -21,6 +21,8 @@ export type AppConfig = NodeJS.ProcessEnv & {
 }
 
 import {readIsrcGenerationConfig} from '../marketplace/isrc'
+import {DEFAULT_PLATFORM_FEE_BPS} from '../marketplace/commerce-money'
+import {resolveMinimumReleasePriceMinor} from '../marketplace/sale-policy'
 
 const developmentSecrets = {
   SESSION_PEPPER: 'dev-session-pepper',
@@ -83,7 +85,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     STRIPE_PRICE_FULL_PROGRAM: production
       ? requireValue(env, 'STRIPE_PRICE_FULL_PROGRAM')
       : env.STRIPE_PRICE_FULL_PROGRAM?.trim() || '',
-    MARKETPLACE_PLATFORM_FEE_BPS: env.MARKETPLACE_PLATFORM_FEE_BPS?.trim() || '1000',
+    MARKETPLACE_PLATFORM_FEE_BPS: env.MARKETPLACE_PLATFORM_FEE_BPS?.trim() || String(DEFAULT_PLATFORM_FEE_BPS),
     ISRC_PREFIX: isrc?.prefix ?? '',
     ISRC_COUNTRY_CODE: isrc?.countryCode ?? '',
     ISRC_REGISTRANT_CODE: isrc?.registrantCode ?? '',
@@ -99,6 +101,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (!Number.isInteger(marketplaceFeeBps) || marketplaceFeeBps < 0 || marketplaceFeeBps > 10000) {
     throw new Error('MARKETPLACE_PLATFORM_FEE_BPS must be an integer between 0 and 10000')
   }
+  // Throws on an invalid override so a bad minimum price fails the deploy, not the first price save.
+  resolveMinimumReleasePriceMinor(env)
   if (production && sameSite === 'none' && env.COOKIE_SECURE === 'false') {
     throw new Error('COOKIE_SAME_SITE=none cannot be used with COOKIE_SECURE=false')
   }

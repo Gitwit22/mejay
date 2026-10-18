@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { Track, TrackStatus, Settings, getAllTracks, getSettings, addTrack, updateTrack, deleteTrack, updateSettings, generateId, getAllPlaylists, Playlist, addPlaylist, updatePlaylist, deletePlaylist, PartySource, resetLocalDatabase, clearTracksAndPlaylists, markTrackMissing as dbMarkTrackMissing } from '@/lib/db';
 import { audioEngine, isStaleLoadError, DeckId } from '@/lib/audioEngine';
+import { isSupportedAudioFile, SUPPORTED_FORMATS_LABEL } from '@/lib/audioFormats';
+import { autoAdvanceCutoffSec, effectiveStartTimeSec } from '@/lib/playbackWindow';
 import { detectBPM } from '@/lib/bpmDetector';
 import { computeClampedTempoRatio, computeRequiredTempoShiftPercent, isOverTempoCap, resolveMaxTempoPercent } from '@/lib/tempoMatch';
 import { computePresetTempo } from '@/lib/tempoPresets';
@@ -108,7 +110,8 @@ interface DJState {
   loadTracks: () => Promise<void>;
   loadPlaylists: () => Promise<void>;
   loadSettings: () => Promise<void>;
-  importTracks: (files: FileList) => Promise<void>;
+  /** skipQuota: for music bought in the MEJay store, which never counts toward the Free import limit. */
+  importTracks: (files: FileList | File[], opts?: { skipQuota?: boolean }) => Promise<void>;
   clearAllImports: () => Promise<void>;
   deleteTrackById: (id: string) => Promise<void>;
 
@@ -171,7 +174,8 @@ interface DJState {
   resetLocalData: () => Promise<void>;
   
   // Playlists
-  createPlaylist: (name: string) => Promise<void>;
+  /** Returns the new playlist's id. */
+  createPlaylist: (name: string) => Promise<string>;
   addTrackToPlaylist: (playlistId: string, trackId: string) => Promise<void>;
   removeTrackFromPlaylist: (playlistId: string, trackId: string) => Promise<void>;
   clearPlaylistTracks: (playlistId: string) => Promise<void>;
@@ -242,6 +246,19 @@ export const useDJStore = create<DJState>()(
   
   // Grace period after restart - blocks all auto-mix triggers for 5 seconds
   let restartGraceUntilMs: number = 0;
+
+  // Wall-clock time a scheduled transition should complete by; null until its stop is scheduled.
+  // Auto-mix transitions routinely run 30s+ (ramp + phrase alignment + crossfade), so a fixed
+  // timeout would cancel healthy mixes and snap playback back to the outgoing track.
+  let scheduledMixEndAtMs: number | null = null;
+  const MIX_STUCK_FALLBACK_MS = 15000;
+  const MIX_STUCK_GRACE_MS = 5000;
+
+  const isMixStuck = (mixInProgressSince: number | null): boolean => {
+    const now = Date.now();
+    if (scheduledMixEndAtMs !== null) return now > scheduledMixEndAtMs + MIX_STUCK_GRACE_MS;
+    return mixInProgressSince !== null && now - mixInProgressSince > MIX_STUCK_FALLBACK_MS;
+  };
 
   const FREE_UPLOAD_LIMIT_SECONDS = 30 * 60;
   // Allow a little overage for a single additional track.
@@ -518,6 +535,13 @@ export const useDJStore = create<DJState>()(
     return { nextIds, nextNow, shouldAdvance: false };
   };
 
+  /** Follow a queue position to the same track after the queue is reordered. */
+  const remapQueueIndex = (before: string[], after: string[], index: number | null): number | null => {
+    if (index === null || index < 0 || index >= before.length) return null;
+    const next = after.indexOf(before[index]);
+    return next >= 0 ? next : null;
+  };
+
   /** Mark a track that the browser can't decode so the queue skips it instead of stalling. */
   const markTrackUnplayable = (trackId: string) => {
     const track = get().tracks.find(t => t.id === trackId);
@@ -613,33 +637,13 @@ export const useDJStore = create<DJState>()(
     armAutoMixTriggerForState(after);
   };
 
-  const getEffectiveStartTimeSec = (track: Track | undefined, settings: Settings | undefined) => {
-    const userOffset = (settings?.nextSongStartOffset ?? 0);
-    // If the track has a detected leading-silence boundary, use it as a floor so
-    // playback always skips past silence even when the user offset is lower.
-    const silenceSkip = (typeof track?.trueStartTime === 'number' && Number.isFinite(track.trueStartTime) && track.trueStartTime > 0)
-      ? track.trueStartTime
-      : 0;
-    const base = Math.max(userOffset, silenceSkip);
-    const duration = track?.duration;
-    if (!duration || !Number.isFinite(duration)) return Math.max(0, base);
-    return clamp(base, 0, Math.max(0, duration - 0.25));
-  };
+  const getEffectiveStartTimeSec = (track: Track | undefined, settings: Settings | undefined) =>
+    effectiveStartTimeSec(track, settings);
 
   /** Compute the hard cutoff time (track-seconds) at which the deck should auto-advance.
    *  Stacks trueEndTime (silence trim) and endEarlySeconds (user setting). */
-  const computeAutoAdvanceCutoff = (track: Track | undefined, settings: Settings | undefined): number => {
-    if (!track) return 0;
-    const duration = track.duration ?? 0;
-    if (!duration || !Number.isFinite(duration) || duration <= 0) return 0;
-    const musicalEnd = (typeof track.trueEndTime === 'number' && Number.isFinite(track.trueEndTime) && track.trueEndTime > 0)
-      ? track.trueEndTime
-      : duration;
-    const endEarly = clamp(settings?.endEarlySeconds ?? 0, 0, 60);
-    const cutoff = musicalEnd - endEarly;
-    // Ensure at least 1 second of playback
-    return Math.max(1, cutoff);
-  };
+  const computeAutoAdvanceCutoff = (track: Track | undefined, settings: Settings | undefined): number =>
+    track ? autoAdvanceCutoffSec(track, settings) : 0;
 
   /** Set the autoAdvanceCutoff on the engine for a given deck based on its track + settings. */
   const applyAutoAdvanceCutoff = (deck: DeckId, track: Track | undefined, settings: Settings | undefined) => {
@@ -667,6 +671,7 @@ export const useDJStore = create<DJState>()(
 
     // Invalidate any in-flight .then() callbacks from a previous transition.
     ++transitionNonce;
+    scheduledMixEndAtMs = null;
 
     // Cancels any scheduled transition timeouts (state updates, pause/stop hooks, etc).
     clearScheduledTimeouts();
@@ -822,11 +827,9 @@ export const useDJStore = create<DJState>()(
 
           try {
             const settings = get().settings;
-            if (settings.autoVolumeMatch) {
-              loudnessDb = audioEngine.measureLoudness(audioBuffer);
-              const targetDb = -20 + (settings.targetLoudness * 12);
-              gainDb = audioEngine.calculateGain(loudnessDb, targetDb);
-            }
+            // Always measure: the buffer is already decoded, and Auto Volume may be enabled later.
+            loudnessDb = audioEngine.measureLoudness(audioBuffer);
+            gainDb = audioEngine.calculateGain(loudnessDb, targetLoudnessDb(settings));
           } catch (e) {
             console.error('[DJ Store] Starter loudness analysis failed:', e);
           }
@@ -878,7 +881,11 @@ export const useDJStore = create<DJState>()(
       }
     }
 
-    if (seeded.length === 0) return false;
+    if (seeded.length === 0) {
+      // Nothing could be fetched (offline, server error): allow another attempt this session.
+      didAttemptStarterSeedThisSession = false;
+      return false;
+    }
 
     // Ensure in-memory state immediately reflects seeded tracks,
     // even if IndexedDB persistence fails.
@@ -994,31 +1001,24 @@ export const useDJStore = create<DJState>()(
 
     const targetBpm = getCanonicalTargetBpm(state.settings);
     if (targetBpm === null) {
-      // Preset "Original": explicitly restore neutral speed.
-    // Preset mode: use relative ratio based on track's original BPM
-    if (state.settings.tempoMode === 'preset') {
-      const track = state.tracks.find(t => t.id === deckState.trackId);
-      const preset = state.settings.tempoPreset ?? 'original';
-      const result = computePresetTempo(track?.bpm, preset);
-      
-      const ctxNow = audioEngine.getAudioContextTime();
-      if (ctxNow !== null) {
-        lastManualTempoChangeAtCtx[deck] = ctxNow;
+      // Preset mode without an absolute target: use the preset's ratio relative to the track BPM.
+      if (state.settings.tempoMode === 'preset') {
+        const track = state.tracks.find(t => t.id === deckState.trackId);
+        const preset = state.settings.tempoPreset ?? 'original';
+        const result = computePresetTempo(track?.bpm, preset);
+        const ctxNow = audioEngine.getAudioContextTime();
+        if (ctxNow !== null) {
+          lastManualTempoChangeAtCtx[deck] = ctxNow;
+        }
+        get().setTempo(deck, result.ratio);
+        return;
       }
-      
-      get().setTempo(deck, result.ratio);
-      return;
-    }
-
-    // Locked/Auto modes: compute ratio from absolute target BPM
-    const targetBpm = getCanonicalTargetBpm(state.settings);
-    if (targetBpm === null) {
-      // No valid target in locked/auto mode - fall back to neutral
-      }
+      // No valid target (e.g. "Original"): restore neutral speed.
       get().setTempo(deck, 1);
       return;
     }
 
+    // Absolute target BPM (auto/locked, or presets that resolve to a BPM).
     const { ratio, debug } = computeTempoForDeck(deck, targetBpm, getEffectiveMaxTempoPercent(state.settings));
     const ctxNow = audioEngine.getAudioContextTime();
     if (ctxNow !== null) {
@@ -1028,17 +1028,25 @@ export const useDJStore = create<DJState>()(
     get().setTempo(deck, ratio);
   };
 
+  /** Auto Volume is a paid feature: honour the user's toggle only when the plan includes it. */
+  const isAutoVolumeEnabled = (settings: Settings): boolean =>
+    Boolean(settings.autoVolumeMatch) && usePlanStore.getState().hasFeature('autoVolume');
+
+  /** Loudness target in dB: targetLoudness 0 → -20 dB, 1 → -8 dB. */
+  const targetLoudnessDb = (settings: Settings): number => -20 + (settings.targetLoudness * 12);
+
   const ensureGainDbForTrack = async (track: Track, settings: Settings): Promise<number | undefined> => {
-    if (!settings.autoVolumeMatch) return undefined;
-    if (typeof track.gainDb === 'number' && Number.isFinite(track.gainDb)) return track.gainDb;
+    if (!isAutoVolumeEnabled(settings)) return undefined;
+    // Gain is derived from the stored loudness and the *current* target, so changing Target
+    // Loudness applies to tracks imported earlier as well.
+    if (typeof track.loudnessDb === 'number' && Number.isFinite(track.loudnessDb)) {
+      return audioEngine.calculateGain(track.loudnessDb, targetLoudnessDb(settings));
+    }
     if (!track.fileBlob) return undefined;
 
     try {
       const loudnessResult = await audioEngine.analyzeLoudness(track.fileBlob);
-      // Per-track normalization target.
-      // Baseline -14 dB (streaming-ish), adjusted by user preference.
-      const targetDb = -14 + ((settings.targetLoudness - 0.5) * 12);
-      const gainDb = audioEngine.calculateGain(loudnessResult.loudnessDb, targetDb);
+      const gainDb = audioEngine.calculateGain(loudnessResult.loudnessDb, targetLoudnessDb(settings));
       const updates = { loudnessDb: loudnessResult.loudnessDb, gainDb };
       await updateTrack(track.id, updates);
       set((s) => ({
@@ -1047,6 +1055,18 @@ export const useDJStore = create<DJState>()(
       return gainDb;
     } catch {
       return undefined;
+    }
+  };
+
+  /** Re-apply (or clear) per-track gain on loaded decks after Auto Volume settings change. */
+  const reapplyDeckGains = async () => {
+    const s = get();
+    for (const deck of ['A', 'B'] as const) {
+      const trackId = deck === 'A' ? s.deckA.trackId : s.deckB.trackId;
+      const track = trackId ? s.tracks.find(t => t.id === trackId) : undefined;
+      if (!track) continue;
+      const gainDb = await ensureGainDbForTrack(track, get().settings);
+      audioEngine.setTrackGain(deck, gainDb ?? 0);
     }
   };
 
@@ -1175,6 +1195,12 @@ export const useDJStore = create<DJState>()(
     } catch {
       // ignore
     }
+
+    // The engine ticks from rAF, a 250 ms interval and a worker (~70 calls/s). Only publish
+    // position changes the UI can show (100 ms steps) or jumps backwards (seek/restart), so
+    // every subscribed component isn't re-rendered on each tick.
+    const prevTime = deck === 'A' ? get().deckA.currentTime : get().deckB.currentTime;
+    if (time >= prevTime && time - prevTime < 0.1) return;
 
     if (deck === 'A') {
       set(state => ({ deckA: { ...state.deckA, currentTime: time } }));
@@ -1397,11 +1423,9 @@ export const useDJStore = create<DJState>()(
 
             try {
               const settings = get().settings;
-              if (settings.autoVolumeMatch) {
-                loudnessDb = audioEngine.measureLoudness(audioBuffer);
-                const targetDb = -20 + (settings.targetLoudness * 12);
-                gainDb = audioEngine.calculateGain(loudnessDb, targetDb);
-              }
+              // Always measure: the buffer is already decoded, and Auto Volume may be enabled later.
+              loudnessDb = audioEngine.measureLoudness(audioBuffer);
+              gainDb = audioEngine.calculateGain(loudnessDb, targetLoudnessDb(settings));
             } catch (e) {
               console.error('[DJ Store] Loudness analysis failed:', e);
             }
@@ -1471,24 +1495,14 @@ export const useDJStore = create<DJState>()(
       const starterTracks = get().tracks.filter(t => t.isStarter);
       if (starterTracks.length === 0) return 0;
 
-      // Remove from IndexedDB
+      // removeFromLibrary also drops the track from playlists, the party queue and the decks,
+      // so no stale starter IDs are left behind.
       for (const track of starterTracks) {
         try {
-          await deleteTrack(track.id);
+          await get().removeFromLibrary(track.id, { reason: 'user' });
         } catch (e) {
-          console.error('[DJ Store] Failed to delete starter track:', track.id, e);
+          console.error('[DJ Store] Failed to remove starter track:', track.id, e);
         }
-      }
-
-      // Update state
-      try {
-        const tracks = await getAllTracks();
-        set({ tracks });
-      } catch {
-        // Fallback: filter in-memory
-        set(state => ({
-          tracks: state.tracks.filter(t => !t.isStarter),
-        }));
       }
 
       return starterTracks.length;
@@ -1621,58 +1635,9 @@ export const useDJStore = create<DJState>()(
       });
     },
 
-    importTracks: async (files: FileList) => {
-      const supportedMimeTypes = new Set([
-        'audio/mpeg',
-        'audio/mp4',
-        'audio/aac',
-        'audio/wav',
-        'audio/x-m4a',
-        // Non-standard but seen in the wild (especially mobile browsers)
-        'audio/mp3',
-        'audio/x-mp3',
-        'audio/x-mpeg',
-        'audio/m4a',
-      ]);
-
-      const supportedExtensions = new Set(['mp3', 'm4a', 'aac', 'wav', 'mp4']);
-
-      const isSupportedAudioFile = (file: File) => {
-        const mime = (file.type || '').toLowerCase().trim();
-
-        const name = (file.name || '').toLowerCase();
-        const ext = name.includes('.') ? name.split('.').pop() : '';
-        const hasSupportedExt = !!ext && supportedExtensions.has(ext);
-
-        // Prefer extension checks first. On iOS, MIME can be empty or wrong.
-        // Gmail attachments are often `application/octet-stream` even for MP3.
-        if (hasSupportedExt) {
-          if (!mime) return true;
-          if (mime === 'application/octet-stream') return true;
-          if (supportedMimeTypes.has(mime)) return true;
-          if (mime.startsWith('audio/')) return true;
-          // Some providers incorrectly label audio files as video/*.
-          // Only allow video/* when the extension clearly indicates audio.
-          if (mime.startsWith('video/')) return true;
-          return false;
-        }
-
-        if (mime) {
-          if (supportedMimeTypes.has(mime)) return true;
-          // If browser reports a generic audio/* but not one of our exact types, still allow.
-          if (mime.startsWith('audio/')) return true;
-          // Some providers incorrectly label audio as octet-stream.
-          if (mime === 'application/octet-stream') return true;
-          return false;
-        }
-
-        // iOS Safari / Files can return an empty MIME type; fall back to extension.
-        if (!ext) return false;
-        return supportedExtensions.has(ext);
-      };
-
+    importTracks: async (files: FileList | File[], opts?: { skipQuota?: boolean }) => {
       const planState = usePlanStore.getState();
-      const isFree = planState.plan === 'free';
+      const isFree = planState.plan === 'free' && !opts?.skipQuota;
 
       if (!files || files.length === 0) return;
 
@@ -1883,16 +1848,12 @@ export const useDJStore = create<DJState>()(
           let loudnessDb: number | undefined;
           let gainDb: number | undefined;
 
-          if (settings.autoVolumeMatch) {
-            try {
-              loudnessDb = audioEngine.measureLoudness(audioBuffer);
-              // Adjust gain based on target loudness setting (0-1 scale)
-              // targetLoudness 0 = -20dB, 1 = -8dB
-              const targetDb = -20 + (settings.targetLoudness * 12);
-              gainDb = audioEngine.calculateGain(loudnessDb, targetDb);
-            } catch (e) {
-              console.error('Loudness analysis failed:', e);
-            }
+          // Always measure: the buffer is already decoded, and Auto Volume may be enabled later.
+          try {
+            loudnessDb = audioEngine.measureLoudness(audioBuffer);
+            gainDb = audioEngine.calculateGain(loudnessDb, targetLoudnessDb(settings));
+          } catch (e) {
+            console.error('Loudness analysis failed:', e);
           }
 
           const updates = {
@@ -1963,7 +1924,7 @@ export const useDJStore = create<DJState>()(
         if (skippedUnsupportedCount > 0) {
           toast({
             title: 'No supported audio files',
-            description: 'Those files were skipped. Try .mp3, .m4a, .aac, .wav, or .mp4 (audio).',
+            description: `Those files were skipped. Try ${SUPPORTED_FORMATS_LABEL}.`,
             variant: 'destructive',
           });
         }
@@ -2147,6 +2108,8 @@ export const useDJStore = create<DJState>()(
 
     play: (deck?: DeckId) => {
       const targetDeck = deck || get().activeDeck;
+      // Nothing loaded on this deck: don't flip the UI to "playing" over silence.
+      if (!audioEngine.hasLoadedTrack(targetDeck)) return;
 
       // Defensive: resync tempo to settings before starting playback.
       // This helps after navigation/reloads where the engine may have reset to 1.0.
@@ -2359,6 +2322,9 @@ export const useDJStore = create<DJState>()(
           queuedSourceSwitch: null,
           playHistoryTrackIds: nextHistory,
           crossfadeValue: targetDeck === 'A' ? 0 : 1,
+          // The interrupted mix is over; leaving this set blocked auto-mix until the safety reset.
+          mixInProgress: false,
+          _mixInProgressSince: null,
         });
         audioEngine.setCrossfade(targetDeck === 'A' ? 0 : 1);
 
@@ -2391,6 +2357,7 @@ export const useDJStore = create<DJState>()(
       const effectiveCrossfadeSeconds = clamp(state.settings.crossfadeSeconds ?? 8, 1, 20);
       const gainDbPromise = ensureGainDbForTrack(previousTrack, state.settings);
 
+      scheduledMixEndAtMs = null;
       set({ mixInProgress: true, _mixInProgressSince: Date.now() });
 
       audioEngine.loadTrackWithOffset(
@@ -2432,11 +2399,13 @@ export const useDJStore = create<DJState>()(
           // Guard against onended firing from the scheduled stop — it's not a natural track end.
           const stopGuardMs = Math.max(1000, (stopAt - (audioEngine.getAudioContextTime() ?? ctxNow)) * 1000 + 500);
           audioEngine.ignoreEndedFor(targetDeck, stopGuardMs);
+          audioEngine.markTrackEndHandled(targetDeck);
           audioEngine.scheduleStop(targetDeck, stopAt + 0.02);
 
           const now = audioEngine.getAudioContextTime() ?? ctxNow;
           const startDelayMs = Math.max(0, (startAt - now) * 1000);
           const stopDelayMs = Math.max(0, (stopAt - now) * 1000);
+          scheduledMixEndAtMs = Date.now() + stopDelayMs;
 
           scheduledTimeouts.push(setTimeout(() => {
             if (prevDeck === 'A') {
@@ -2520,9 +2489,9 @@ export const useDJStore = create<DJState>()(
           // User-initiated skip should always work — cancel the in-progress mix
           // and start a new transition immediately.
           cancelPendingTransition({ mixInProgress: false, reason: 'user_skip_override' });
-        } else if (state._mixInProgressSince && Date.now() - state._mixInProgressSince > 15000) {
-          // Safety: auto-reset if mixInProgress has been stuck for over 15 seconds
-          console.warn('[DJ Store] mixInProgress stuck for >15s, force-resetting');
+        } else if (isMixStuck(state._mixInProgressSince)) {
+          // Safety: auto-reset only if the mix overran its own schedule (or never got scheduled).
+          console.warn('[DJ Store] mixInProgress stuck past its scheduled end, force-resetting');
           cancelPendingTransition({ mixInProgress: false, reason: 'stuck_safety_reset' });
         } else {
           return;
@@ -2816,6 +2785,7 @@ export const useDJStore = create<DJState>()(
 
       // Bump transition nonce so any previously-pending .then() becomes a no-op.
       const myNonce = ++transitionNonce;
+      scheduledMixEndAtMs = null;
       set({ mixInProgress: true, _mixInProgressSince: Date.now() });
 
       // Load next track with offset
@@ -2963,11 +2933,14 @@ export const useDJStore = create<DJState>()(
         // Guard against onended firing from the scheduled stop — it's not a natural track end.
         const stopGuardMs = Math.max(1000, (stopAt - (audioEngine.getAudioContextTime() ?? ctxNow)) * 1000 + 500);
         audioEngine.ignoreEndedFor(currentDeck, stopGuardMs);
+        // The transition owns the outgoing ending; a late cutoff tick must not re-trigger skip('end').
+        audioEngine.markTrackEndHandled(currentDeck);
         audioEngine.scheduleStop(currentDeck, stopAt + 0.02);
 
         const now = audioEngine.getAudioContextTime() ?? ctxNow;
         const startDelayMs = Math.max(0, (incomingStartAt - now) * 1000);
         const stopDelayMs = Math.max(0, (stopAt - now) * 1000);
+        scheduledMixEndAtMs = Date.now() + stopDelayMs;
 
         scheduledTimeouts.push(setTimeout(() => {
           if (myNonce !== transitionNonce) return;
@@ -3305,6 +3278,8 @@ export const useDJStore = create<DJState>()(
         return { 
           partyTrackIds: newTrackIds,
           nowPlayingIndex: newNowPlayingIndex,
+          // Keep "Play Next" pointing at the same track after the reorder.
+          pendingNextIndex: remapQueueIndex(state.partyTrackIds, newTrackIds, state.pendingNextIndex),
         };
       });
     },
@@ -3355,15 +3330,17 @@ export const useDJStore = create<DJState>()(
 
     shufflePartyTracks: () => {
       set(state => {
+        const ids = state.partyTrackIds;
+        if (ids.length < 2 || state.nowPlayingIndex < 0 || state.nowPlayingIndex >= ids.length) return {};
         // Keep current track, shuffle the rest
-        const currentTrackId = state.partyTrackIds[state.nowPlayingIndex];
-        const beforeCurrent = state.partyTrackIds.slice(0, state.nowPlayingIndex);
-        const afterCurrent = state.partyTrackIds.slice(state.nowPlayingIndex + 1);
+        const currentTrackId = ids[state.nowPlayingIndex];
+        const beforeCurrent = ids.slice(0, state.nowPlayingIndex);
+        const afterCurrent = ids.slice(state.nowPlayingIndex + 1);
 
-        const shuffled = shuffleArray(afterCurrent);
-        
+        const nextIds = [...beforeCurrent, currentTrackId, ...shuffleArray(afterCurrent)];
         return {
-          partyTrackIds: [...beforeCurrent, currentTrackId, ...shuffled],
+          partyTrackIds: nextIds,
+          pendingNextIndex: remapQueueIndex(ids, nextIds, state.pendingNextIndex),
         };
       });
     },
@@ -3596,6 +3573,10 @@ export const useDJStore = create<DJState>()(
         }
       }
 
+      if (updates.autoVolumeMatch !== undefined || updates.targetLoudness !== undefined) {
+        void reapplyDeckGains();
+      }
+
       // When endEarlySeconds changes, recompute the auto-advance cutoff for all loaded decks.
       if (updates.endEarlySeconds !== undefined && state.isPartyMode) {
         const s = get();
@@ -3651,6 +3632,7 @@ export const useDJStore = create<DJState>()(
       };
       await addPlaylist(playlist);
       set(state => ({ playlists: [...state.playlists, playlist] }));
+      return playlist.id;
     },
 
     addTrackToPlaylist: async (playlistId: string, trackId: string) => {
@@ -3660,11 +3642,22 @@ export const useDJStore = create<DJState>()(
       if (!playlist.trackIds.includes(trackId)) {
         const newTrackIds = [...playlist.trackIds, trackId];
         await updatePlaylist(playlistId, { trackIds: newTrackIds });
-        set(state => ({
-          playlists: state.playlists.map(p =>
+        set(state => {
+          const playlists = state.playlists.map(p =>
             p.id === playlistId ? { ...p, trackIds: newTrackIds } : p
-          ),
-        }));
+          );
+          // If this playlist is the running party source, the new track joins the queue too.
+          const track = state.tracks.find(t => t.id === trackId);
+          const appendToQueue =
+            state.isPartyMode &&
+            state.partySource?.type === 'playlist' &&
+            state.partySource.playlistId === playlistId &&
+            !state.partyTrackIds.includes(trackId) &&
+            Boolean(track?.fileBlob) && track?.status === 'ready';
+          return appendToQueue
+            ? { playlists, partyTrackIds: [...state.partyTrackIds, trackId] }
+            : { playlists };
+        });
       }
 
       const state = get();

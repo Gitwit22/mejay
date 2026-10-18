@@ -30,6 +30,8 @@ export type ProviderSalesReport = {
   salesByTerritory: Array<{countryCode: string | null; units: number; grossMinor: number; earningsMinor: number}>
   downloads: Array<{release_id: string; release_title: string; track_id: string | null; track_title: string; download_count: number}>
   refunds: Array<{orderId: string; saleDate: string; releaseId: string; releaseTitle: string; amountMinor: number; status: string}>
+  /** Optional so reports from an older API still render. orderId is an internal reference, never buyer data. */
+  transactions?: Array<{orderId: string; saleDate: string; releaseId: string; releaseTitle: string; songTitle?: string | null; priceMinor: number; earningsMinor: number; status: string; payoutStatus: string}>
   recipientLiabilities: Array<{name: string; email: string | null; role: string | null; allocatedMinor: number; refundAdjustmentMinor: number; owedMinor: number}>
 }
 
@@ -48,6 +50,67 @@ export type ProviderArtist = {
   country_code: string | null
   release_count: number
   created_at: string
+  /** Public URL slug; the page at /artist/:slug is public while live_release_count > 0. */
+  slug?: string
+  live_release_count?: number
+}
+
+export type ArtistLinks = Partial<Record<'website' | 'instagram' | 'tiktok' | 'youtube' | 'facebook' | 'x' | 'spotify' | 'appleMusic' | 'soundcloud' | 'bandcamp' | 'tidal' | 'amazonMusic' | 'deezer' | 'booking', string>>
+
+export type ArtistGalleryImage = {asset_id: string; caption: string | null; position: number}
+
+export type ArtistProfile = {
+  id: string
+  name: string
+  slug: string
+  tagline: string | null
+  bio: string | null
+  location: string | null
+  genres: string[]
+  links: ArtistLinks
+  spotify_artist_id: string | null
+  apple_music_artist_id: string | null
+  profile_photo_asset_id: string | null
+  banner_asset_id: string | null
+  cutout_asset_id?: string | null
+  story_photo_asset_id?: string | null
+  featured_release_id?: string | null
+  accent_color?: string | null
+  highlight_quote?: string | null
+  liveReleaseCount?: number
+  liveReleases?: Array<{id: string; title: string}>
+  gallery?: ArtistGalleryImage[]
+}
+
+export type ArtistProfileInput = {
+  name: string
+  slug?: string
+  tagline?: string | null
+  bio?: string | null
+  location?: string | null
+  genres: string[]
+  links: ArtistLinks
+  spotifyArtistId?: string | null
+  appleMusicArtistId?: string | null
+  profilePhotoAssetId?: string | null
+  bannerAssetId?: string | null
+  cutoutAssetId?: string | null
+  storyPhotoAssetId?: string | null
+  featuredReleaseId?: string | null
+  accentColor?: string | null
+  highlightQuote?: string | null
+}
+
+export function getArtistProfile(artistId: string): Promise<ArtistProfile> {
+  return request(`/api/marketplace/artists/${encodeURIComponent(artistId)}/profile`)
+}
+
+export function updateArtistProfile(artistId: string, input: ArtistProfileInput): Promise<ArtistProfile> {
+  return request(`/api/marketplace/artists/${encodeURIComponent(artistId)}/profile`, {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
+}
+
+export function replaceArtistGallery(artistId: string, items: Array<{assetId: string; caption: string | null}>): Promise<ArtistGalleryImage[]> {
+  return request(`/api/marketplace/artists/${encodeURIComponent(artistId)}/gallery`, {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({items})})
 }
 
 export type ProviderRelease = {
@@ -56,6 +119,8 @@ export type ProviderRelease = {
   release_type: 'single' | 'ep' | 'album'
   status: string
   version: number
+  /** Rights review state set at submission (absent from older API responses). */
+  rights_status?: RightsStatus
   primary_artist_id: string
   primary_artist_name: string
   track_count: number
@@ -79,6 +144,59 @@ export type ProviderTrack = {
   instrumental?: boolean
   recording_year?: number | null
   recording_location?: string | null
+  contributors?: TrackContributor[]
+  featured_artist_ids?: string[]
+}
+
+export type ContributorRole = 'writer' | 'composer' | 'producer' | 'featured_artist' | 'remixer' | 'other'
+export type TrackContributor = {name: string; role: ContributorRole; publisherName?: string | null}
+
+export type RightsStatus = 'NOT_CERTIFIED' | 'CERTIFIED_ORIGINAL' | 'RIGHTS_DOCUMENTATION_ATTACHED' | 'RIGHTS_REVIEW_REQUIRED' | 'RIGHTS_CLEARED' | 'RIGHTS_ISSUE_FLAGGED'
+export type ThirdPartyMaterial = 'none' | 'licensed' | 'unsure'
+export type RightsMaterialType = 'sample' | 'interpolation' | 'leased_beat' | 'licensed_beat' | 'purchased_instrumental' | 'other'
+export type RightsLicenseType = 'exclusive_license' | 'non_exclusive_lease' | 'sample_clearance' | 'work_for_hire' | 'producer_agreement' | 'other'
+
+export type RightsMaterial = {
+  id: string
+  material_type: RightsMaterialType
+  licensor_name: string
+  description: string
+  license_type: RightsLicenseType
+  document_asset_id: string | null
+}
+
+export type ReleaseCertificationState = {
+  version: string
+  policy: string
+  statements: Array<{key: string; title: string; text: string}>
+  requiredKeys: string[]
+  tracksWithoutIsrc: number
+  rightsStatus: RightsStatus
+  thirdPartyMaterial: ThirdPartyMaterial | null
+  draft: {version: string; thirdPartyMaterial: ThirdPartyMaterial; accepted: string[]; savedAt: string} | null
+  materials: RightsMaterial[]
+  problems: string[]
+  history: Array<{id: string; certification_version: string; third_party_material: ThirdPartyMaterial; rights_status: RightsStatus; certified_at: string}>
+}
+
+export function replaceTrackCredits(trackId: string, input: {featuredArtistIds: string[]; contributors: TrackContributor[]}): Promise<unknown> {
+  return request(`/api/marketplace/tracks/${encodeURIComponent(trackId)}/credits`, {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
+}
+
+export function getReleaseCertification(releaseId: string): Promise<ReleaseCertificationState> {
+  return request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}/certification`)
+}
+
+export function saveReleaseCertification(releaseId: string, input: {version: string; thirdPartyMaterial: ThirdPartyMaterial; accepted: string[]}): Promise<unknown> {
+  return request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}/certification`, {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
+}
+
+export function addRightsMaterial(releaseId: string, input: {materialType: RightsMaterialType; licensorName: string; description: string; licenseType: RightsLicenseType; documentAssetId?: string | null}): Promise<RightsMaterial> {
+  return request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}/rights-materials`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
+}
+
+export function deleteRightsMaterial(materialId: string): Promise<unknown> {
+  return request(`/api/marketplace/rights-materials/${encodeURIComponent(materialId)}`, {method: 'DELETE'})
 }
 
 export type ProviderReleaseDetail = {
@@ -101,12 +219,14 @@ export type ProviderReleaseDetail = {
   assets: Array<{id: string; release_id: string | null; track_id: string | null; kind: 'artwork' | 'audio'; processing_status: string; metadata: Record<string, unknown>}>
   rights: Array<{id: string; release_id: string | null; track_id: string | null; declaration_type: 'distribution' | 'master' | 'composition'; rights_holder: string; ownership_bps: number; territories: string[]}>
   product: {id: string; name: string; amount_minor: number | null; currency: string | null} | null
+  /** Optional single-song offers (absent from older API responses). */
+  trackProducts?: Array<{track_id: string; product_id: string; amount_minor: number; currency: string}>
   splits: Array<{id: string; track_id: string; entry_id: string; payee_name: string; payee_email: string | null; role: string | null; share_bps: number}>
   reviewEvents: Array<{decision: string; note: string | null; from_status: string; to_status: string; created_at: string}>
   prerequisites: string[]
 }
 
-export type ReleaseDraftStep = 'release-information' | 'artwork' | 'tracks' | 'track-metadata' | 'isrc' | 'rights' | 'pricing' | 'splits' | 'review'
+export type ReleaseDraftStep = 'release-information' | 'artwork' | 'tracks' | 'track-metadata' | 'credits' | 'isrc' | 'rights' | 'pricing' | 'splits' | 'certification' | 'review'
 
 type ApiEnvelope<T> = {ok: true; data: T} | {ok: false; error: string; message?: string}
 
@@ -217,11 +337,15 @@ export function createProviderTrack(releaseId: string, input: {
   })
 }
 
+type ImageMime = 'image/jpeg' | 'image/png' | 'image/webp'
 type UploadInput =
-  | {kind: 'artwork'; releaseId: string; fileName: string; mimeType: 'image/jpeg' | 'image/png' | 'image/webp'; byteSize: number; width: number; height: number}
+  | {kind: 'artwork'; releaseId: string; fileName: string; mimeType: ImageMime; byteSize: number; width: number; height: number}
   | {kind: 'audio'; trackId: string; fileName: string; mimeType: 'audio/wav' | 'audio/x-wav' | 'audio/flac' | 'audio/x-flac'; byteSize: number}
+  | {kind: 'artist_photo' | 'artist_banner' | 'artist_cutout' | 'artist_gallery'; artistId: string; fileName: string; mimeType: ImageMime; byteSize: number; width: number; height: number}
+  | {kind: 'rights_document'; releaseId: string; fileName: string; mimeType: 'application/pdf' | 'image/jpeg' | 'image/png'; byteSize: number}
 
-export async function uploadProviderAsset(input: UploadInput, file: File): Promise<void> {
+/** Signed upload: start, PUT to private storage, then server-side verification. Returns the ready asset id. */
+export async function uploadProviderAsset(input: UploadInput, file: File): Promise<string> {
   const initiated = await request<{asset: {id: string}; upload: {url: string; headers: Record<string, string>}}>('/api/marketplace/uploads', {
     method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input),
   })
@@ -230,6 +354,7 @@ export async function uploadProviderAsset(input: UploadInput, file: File): Promi
   await request('/api/marketplace/uploads/finalize', {
     method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({assetId: initiated.asset.id}),
   })
+  return initiated.asset.id
 }
 
 export function assignProviderIsrc(trackId: string, isrc: string): Promise<{isrc: string}> {
@@ -271,9 +396,40 @@ export function createProviderRights(input: {releaseId?: string; trackId?: strin
   return request('/api/marketplace/rights-declarations', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
 }
 
+export type MarketplacePricingPolicy = {
+  currency: 'USD'
+  minimumPriceMinor: number
+  platformFeeBps: number
+  estimate: {
+    grossAmountMinor: number
+    platformCommissionMinor: number
+    estimatedProcessingFeeMinor: number
+    estimatedArtistProceedsMinor: number
+  } | null
+}
+
+/**
+ * The server's marketplace sale policy (minimum price, commission) and, for an amount, the per-sale
+ * estimate from the same calculator fulfillment uses. The UI keeps no copy of the fee model.
+ */
+export function getMarketplacePricingPolicy(amountMinor?: number): Promise<MarketplacePricingPolicy> {
+  const query = amountMinor === undefined ? '' : `?amountMinor=${encodeURIComponent(String(amountMinor))}`
+  return request(`/api/marketplace/pricing-policy${query}`)
+}
+
+/** Create or update the release's price in one atomic request. */
 export async function createProviderPricing(releaseId: string, title: string, amountMinor: number): Promise<void> {
-  const product = await request<{id: string}>('/api/marketplace/products', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({releaseId, name: title})})
-  await request(`/api/marketplace/products/${encodeURIComponent(product.id)}/prices`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({amountMinor, currency: 'USD'})})
+  await request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}/price`, {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({name: title, amountMinor})})
+}
+
+/** Sell one song on its own, alongside the release (locked once the release is submitted). */
+export async function setProviderTrackPrice(trackId: string, amountMinor: number): Promise<void> {
+  await request(`/api/marketplace/tracks/${encodeURIComponent(trackId)}/price`, {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify({amountMinor})})
+}
+
+/** Stop selling a song on its own; it stays available as part of the release. */
+export async function clearProviderTrackPrice(trackId: string): Promise<void> {
+  await request(`/api/marketplace/tracks/${encodeURIComponent(trackId)}/price`, {method: 'DELETE'})
 }
 
 export function replaceProviderSplits(trackId: string, entries: Array<{payeeName: string; payeeEmail?: string; role?: string; shareBps: number}>): Promise<unknown> {

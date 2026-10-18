@@ -51,7 +51,14 @@ describe('loadConfig', () => {
     expect(config.ISRC_PREFIX).toBe('QTA3L')
   })
 
-  it('rejects partial ISRC configuration', () => {
-    expect(() => loadConfig({...productionEnv, ISRC_PREFIX: 'QTA3L'})).toThrow('ISRC generation requires')
+  it('accepts ISRC_PREFIX on its own and derives the country and registrant codes', () => {
+    const config = loadConfig({...productionEnv, ISRC_PREFIX: 'QTA3L'})
+    expect(config.ISRC_COUNTRY_CODE).toBe('QT')
+    expect(config.ISRC_REGISTRANT_CODE).toBe('A3L')
+  })
+
+  it('rejects partial or contradictory ISRC configuration', () => {
+    expect(() => loadConfig({...productionEnv, ISRC_COUNTRY_CODE: 'QT'})).toThrow('ISRC generation requires')
+    expect(() => loadConfig({...productionEnv, ISRC_PREFIX: 'QTA3L', ISRC_REGISTRANT_CODE: 'XYZ'})).toThrow('ISRC generation requires')
   })
 })

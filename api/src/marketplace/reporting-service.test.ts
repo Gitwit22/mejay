@@ -47,6 +47,8 @@ describe('provider sales reporting', () => {
     expect(report.salesByDay.find(({date}) => date === '2026-09-15')).toMatchObject({units: 1, grossMinor: 1000, earningsMinor: 720})
     expect(report.salesByTerritory).toEqual([{countryCode: 'US', units: 1, grossMinor: 1000, earningsMinor: 720}])
     expect(report.refunds[0]).toMatchObject({orderId: 'order-1', amountMinor: 200, status: 'partially_refunded'})
+    expect(report.transactions).toEqual([expect.objectContaining({orderId: 'order-1', releaseId: 'release-1', priceMinor: 1000, earningsMinor: 720, status: 'partially_refunded'})])
+    expect(report.transactions[0]).not.toHaveProperty('buyerEmail')
     expect(report.recipientLiabilities).toEqual([
       {name: 'Artist', email: 'artist@example.com', role: 'artist', allocatedMinor: 600, refundAdjustmentMinor: 120, owedMinor: 480},
       {name: 'Producer', email: 'producer@example.com', role: 'producer', allocatedMinor: 300, refundAdjustmentMinor: 60, owedMinor: 240},

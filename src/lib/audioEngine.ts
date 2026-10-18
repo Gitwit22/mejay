@@ -458,6 +458,9 @@ class AudioEngine {
       if (deckState.isPlaying) {
         deckState.isPlaying = false;
         deckState.pausedAt = 0;
+        // The tick loop (or a scheduled transition) may already own this ending.
+        if (deckState.trackEndFired) return;
+        deckState.trackEndFired = true;
         this.onTrackEnd?.(deck);
       }
     };
@@ -512,6 +515,10 @@ class AudioEngine {
     } catch {
       // ignore; a later gesture will retry
     }
+  }
+
+  hasLoadedTrack(deck: DeckId): boolean {
+    return this.decks[deck].audioBuffer !== null;
   }
 
   isUnlocked(): boolean {
@@ -907,6 +914,9 @@ class AudioEngine {
       if (deckState.isPlaying) {
         deckState.isPlaying = false;
         deckState.pausedAt = 0;
+        // The tick loop (or a scheduled transition) may already own this ending.
+        if (deckState.trackEndFired) return;
+        deckState.trackEndFired = true;
         this.onTrackEnd?.(deck);
       }
     };
@@ -924,6 +934,11 @@ class AudioEngine {
     deckState.sourceNode.disconnect();
     deckState.sourceNode = null;
     deckState.isPlaying = false;
+  }
+
+  /** A scheduled transition owns this deck's ending: suppress onTrackEnd until the next play(). */
+  markTrackEndHandled(deck: DeckId): void {
+    this.decks[deck].trackEndFired = true;
   }
 
   // Call before stop() when you *don't* want onended to be treated as a real ending

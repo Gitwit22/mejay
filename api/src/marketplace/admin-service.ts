@@ -1,6 +1,8 @@
 import type {DiscoveryFeaturesInput, ProviderAdminCommand, ReleaseAdminCommand, SplitDisputeInput} from './admin-schemas'
-import {MarketplaceError} from './service'
-import {getReleaseSaleReadiness} from './sale-policy'
+import {APPROVABLE_RIGHTS_STATUSES, ISRC_STATEMENT, type RightsStatus} from './release-certification'
+import {insertGeneratedIsrc, MarketplaceError} from './service'
+import type {IsrcGenerationConfig} from './isrc'
+import {formatMinimumPrice, getReleaseSaleReadiness} from './sale-policy'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -15,23 +17,28 @@ type Database = {
 }
 
 type Staff = {role: 'reviewer' | 'admin'; protected_owner: boolean}
-type Release = {id: string; provider_profile_id: string; status: string; version: number; scheduled_release_at: string | null}
+type Release = {id: string; provider_profile_id: string; status: string; version: number; scheduled_release_at: string | null; rights_status: RightsStatus}
 type IsrcRegistryFilters = {isrc?: string; track?: string; artist?: string; provider?: string; year?: number | null}
 
-const reviewActions = new Set<ReleaseAdminCommand['action']>(['start_review', 'approve', 'request_changes', 'reject'])
+const reviewActions = new Set<ReleaseAdminCommand['action']>(['start_review', 'approve', 'request_changes', 'reject', 'clear_rights', 'flag_rights'])
 // Must match the release_review_events.decision CHECK constraint.
 const reviewDecision = {
   start_review: 'review_started',
   approve: 'approved',
   request_changes: 'changes_requested',
   reject: 'rejected',
+  clear_rights: 'rights_cleared',
+  flag_rights: 'rights_flagged',
 } as const
-const adminActions = new Set<ReleaseAdminCommand['action']>(['publish_now', 'schedule', 'publish_due', 'unpublish', 'takedown'])
+/** Rights states a reviewer can clear after examining the documentation or the artist's answers. */
+const CLEARABLE_RIGHTS_STATUSES: readonly RightsStatus[] = ['NOT_CERTIFIED', 'RIGHTS_DOCUMENTATION_ATTACHED', 'RIGHTS_REVIEW_REQUIRED']
+const adminActions = new Set<ReleaseAdminCommand['action']>(['publish_now', 'schedule', 'publish_due', 'unpublish', 'takedown', 'restore'])
 
 export function releaseCommandTarget(action: ReleaseAdminCommand['action']): string {
   if (action === 'start_review') return 'UNDER_REVIEW'
-  if (action === 'approve' || action === 'unpublish') return 'APPROVED'
-  if (action === 'request_changes') return 'CHANGES_REQUESTED'
+  // A restored takedown goes back to APPROVED so an admin re-publishes it deliberately.
+  if (action === 'approve' || action === 'unpublish' || action === 'restore') return 'APPROVED'
+  if (action === 'request_changes' || action === 'flag_rights') return 'CHANGES_REQUESTED'
   if (action === 'reject') return 'REJECTED'
   if (action === 'schedule') return 'SCHEDULED'
   if (action === 'takedown') return 'TAKEN_DOWN'
@@ -49,11 +56,14 @@ export function releaseCommandAllowed(action: ReleaseAdminCommand['action'], sta
     publish_due: ['SCHEDULED'],
     unpublish: ['LIVE'],
     takedown: ['LIVE', 'SCHEDULED'],
+    restore: ['TAKEN_DOWN'],
+    clear_rights: ['SUBMITTED', 'UNDER_REVIEW'],
+    flag_rights: ['SUBMITTED', 'UNDER_REVIEW'],
   }
   return expected[action].includes(status)
 }
 
-async function insertAudit(db: Database, userId: string, release: Release, action: string, target: string): Promise<void> {
+async function insertAudit(db: Database, userId: string | null, release: Release, action: string, target: string): Promise<void> {
   await db.prepare(
     `INSERT INTO marketplace_audit_events
       (id, provider_profile_id, actor_user_id, entity_type, entity_id, action, before_data, after_data, metadata)
@@ -82,6 +92,78 @@ function escapeCsvCell(value: unknown): string {
 
 export class MarketplaceAdminService {
   constructor(private readonly database: Database) {}
+
+  /**
+   * Everything a reviewer needs to decide on a submission: metadata, credits, rights certification
+   * history, third-party material and documents, ISRC and sale readiness, plus computed warnings.
+   */
+  async getReleaseReview(userId: string, releaseId: string): Promise<unknown> {
+    const staff = await requireStaff(this.database, userId)
+    const release = await this.database.prepare(
+      `SELECT r.*, provider.display_name AS provider_name, provider.status AS provider_status,
+         artist.id AS primary_artist_id, artist.name AS primary_artist_name, artist.slug AS primary_artist_slug,
+         (SELECT asset.id FROM marketplace_assets asset WHERE asset.release_id = r.id AND asset.kind = 'artwork'
+            AND asset.processing_status = 'ready' ORDER BY asset.created_at DESC LIMIT 1) AS artwork_asset_id
+       FROM releases r JOIN provider_profiles provider ON provider.id = r.provider_profile_id
+       LEFT JOIN release_artists credit ON credit.release_id = r.id AND credit.is_primary = TRUE
+       LEFT JOIN artists artist ON artist.id = credit.artist_id
+       WHERE r.id = ?1`,
+    ).bind(releaseId).first<Record<string, unknown> & {id: string; rights_status: string; status: string}>()
+    if (!release) throw new MarketplaceError(404, 'not_found', 'Release was not found')
+    const {certification_draft: _draft, ...releaseRow} = release
+    const {results: tracks} = await this.database.prepare(
+      `SELECT t.id, t.title, t.version_title, t.disc_number, t.track_number, t.duration_ms, t.explicit, t.language_code,
+         t.genre, t.instrumental, isrc.isrc, isrc.source AS isrc_source,
+         EXISTS (SELECT 1 FROM marketplace_assets a WHERE a.track_id = t.id AND a.kind = 'audio' AND a.processing_status = 'ready') AS audio_ready,
+         COALESCE((SELECT json_agg(json_build_object('name', c.name, 'role', c.role, 'publisherName', c.publisher_name) ORDER BY c.created_at, c.id)
+           FROM track_contributors c WHERE c.track_id = t.id), '[]'::json) AS contributors,
+         COALESCE((SELECT json_agg(json_build_object('id', fa.id, 'name', fa.name) ORDER BY fa.name)
+           FROM track_artists ta JOIN artists fa ON fa.id = ta.artist_id WHERE ta.track_id = t.id AND ta.role = 'featured'), '[]'::json) AS featured_artists
+       FROM tracks t LEFT JOIN isrc_assignments isrc ON isrc.track_id = t.id AND isrc.revoked_at IS NULL
+       WHERE t.release_id = ?1 ORDER BY t.disc_number, t.track_number`,
+    ).bind(releaseId).all<{isrc: string | null; contributors: Array<{role: string}>; audio_ready: boolean}>()
+    const {results: certifications} = await this.database.prepare(
+      `SELECT id, certified_by_user_id, certification_version, accepted_certifications, third_party_material,
+         third_party_materials, rights_document_ids, rights_status, release_version, certified_at
+       FROM release_certifications WHERE release_id = ?1 ORDER BY certified_at DESC`,
+    ).bind(releaseId).all()
+    const {results: materials} = await this.database.prepare(
+      `SELECT material.id, material.material_type, material.licensor_name, material.description, material.license_type,
+         material.document_asset_id, document.mime_type AS document_mime_type, document.metadata->>'fileName' AS document_file_name
+       FROM release_rights_materials material
+       LEFT JOIN marketplace_assets document ON document.id = material.document_asset_id
+       WHERE material.release_id = ?1 ORDER BY material.created_at, material.id`,
+    ).bind(releaseId).all()
+    const {results: reviewEvents} = await this.database.prepare(
+      `SELECT decision, note, from_status, to_status, created_at FROM release_review_events
+       WHERE release_id = ?1 ORDER BY created_at DESC LIMIT 50`,
+    ).bind(releaseId).all()
+    const sale = await getReleaseSaleReadiness(this.database, releaseId)
+    const tracksWithoutIsrc = tracks.filter((track) => !track.isrc).length
+    const warnings = [
+      ...(!APPROVABLE_RIGHTS_STATUSES.includes(release.rights_status as RightsStatus)
+        ? [`Rights status ${release.rights_status}: clear the rights or request changes before approving`] : []),
+      ...(certifications.length === 0 ? ['No rights certification on file (submitted before certification was required)'] : []),
+      ...(tracks.some((track) => !track.audio_ready) ? ['A track is missing ready audio'] : []),
+      ...(tracks.some((track) => !track.contributors.some((contributor) => ['writer', 'composer'].includes(contributor.role)))
+        ? ['A track has no songwriter or composer credit'] : []),
+      ...(tracksWithoutIsrc > 0 ? [`${tracksWithoutIsrc} track(s) will receive a MEJay ISRC on approval`] : []),
+      ...(!sale.hasMinimumPrice ? ['No active price at or above the minimum'] : []),
+      ...(!sale.stripeReady ? ['Artist Stripe payouts are not ready'] : []),
+    ]
+    return {role: staff.role, release: releaseRow, tracks, certifications, materials, reviewEvents, readiness: sale, warnings}
+  }
+
+  /** Staff-only access to private submission files (artwork, rights documents) for review. */
+  async getReviewAsset(userId: string, assetId: string): Promise<{storageKey: string; mimeType: string; fileName: string}> {
+    await requireStaff(this.database, userId)
+    const asset = await this.database.prepare(
+      `SELECT storage_key, mime_type, kind, metadata->>'fileName' AS file_name FROM marketplace_assets
+       WHERE id = ?1 AND processing_status = 'ready' AND kind IN ('artwork', 'rights_document', 'artist_photo', 'artist_banner', 'artist_cutout', 'artist_gallery')`,
+    ).bind(assetId).first<{storage_key: string; mime_type: string; kind: string; file_name: string | null}>()
+    if (!asset || !asset.storage_key.startsWith('marketplace/')) throw new MarketplaceError(404, 'not_found', 'Asset was not found')
+    return {storageKey: asset.storage_key, mimeType: asset.mime_type, fileName: (asset.file_name || `${asset.kind}-${assetId}`).replace(/["\r\n]/g, '_')}
+  }
 
   async getOverview(userId: string): Promise<unknown> {
     const staff = await requireStaff(this.database, userId)
@@ -132,7 +214,7 @@ export class MarketplaceAdminService {
        ORDER BY pr.created_at DESC`,
     ).all()
     const splits = await this.database.prepare(
-      `SELECT s.id, s.version, s.active, t.title AS track_title, p.display_name AS provider_name,
+      `SELECT s.id, s.version, s.active, t.title AS track_title, p.display_name AS provider_name, s.provider_profile_id AS provider_id,
         COALESCE(SUM(e.share_bps), 0)::integer AS total_bps, COUNT(e.id)::integer AS payee_count
        FROM revenue_split_sets s JOIN tracks t ON t.id = s.track_id
        JOIN provider_profiles p ON p.id = s.provider_profile_id
@@ -141,7 +223,8 @@ export class MarketplaceAdminService {
     ).all()
     const takedowns = await this.database.prepare(
       `SELECT td.id, td.reason, td.prior_status, td.created_at, td.restored_at,
-        r.title AS release_title, p.display_name AS provider_name
+        r.title AS release_title, p.display_name AS provider_name,
+        r.id AS release_id, r.version AS release_version, r.status AS release_status
        FROM release_takedowns td JOIN releases r ON r.id = td.release_id
        JOIN provider_profiles p ON p.id = td.provider_profile_id ORDER BY td.created_at DESC`,
     ).all()
@@ -336,8 +419,10 @@ export class MarketplaceAdminService {
         // Restore sales for releases that are still live; drafts/taken-down releases stay inactive.
         await db.prepare(
           `UPDATE products SET active = TRUE, updated_at = CURRENT_TIMESTAMP
-           WHERE provider_profile_id = ?1 AND release_id IN (
-             SELECT id FROM releases WHERE provider_profile_id = ?1 AND status = 'LIVE'
+           WHERE provider_profile_id = ?1 AND (
+             release_id IN (SELECT id FROM releases WHERE provider_profile_id = ?1 AND status = 'LIVE')
+             OR track_id IN (SELECT track.id FROM tracks track JOIN releases release ON release.id = track.release_id
+               WHERE release.provider_profile_id = ?1 AND release.status = 'LIVE')
            )`,
         ).bind(providerId).run()
       }
@@ -389,7 +474,40 @@ export class MarketplaceAdminService {
     })
   }
 
-  async commandRelease(userId: string, releaseId: string, command: ReleaseAdminCommand): Promise<unknown> {
+  /**
+   * System job: publish SCHEDULED releases whose time has come. Releases that are no longer
+   * sale-ready (price or payouts) stay scheduled and are reported back so staff can follow up.
+   */
+  async publishDueReleases(limit = 50): Promise<{published: string[]; notReady: string[]}> {
+    const {results: due} = await this.database.prepare(
+      `SELECT id FROM releases WHERE status = 'SCHEDULED' AND scheduled_release_at <= CURRENT_TIMESTAMP
+       ORDER BY scheduled_release_at LIMIT ?1`,
+    ).bind(limit).all<{id: string}>()
+    const published: string[] = []
+    const notReady: string[] = []
+    for (const {id} of due) {
+      const outcome = await this.database.transaction(async (db) => {
+        const release = await db.prepare('SELECT * FROM releases WHERE id = ?1 FOR UPDATE').bind(id).first<Release>()
+        if (!release || release.status !== 'SCHEDULED' || !release.scheduled_release_at
+          || new Date(release.scheduled_release_at).getTime() > Date.now()) return 'skipped' as const
+        const sale = await getReleaseSaleReadiness(db, release.id)
+        if (!sale.hasMinimumPrice || !sale.stripeReady) return 'not_ready' as const
+        const now = new Date().toISOString()
+        await db.prepare(
+          `UPDATE releases SET status = 'LIVE', version = version + 1, updated_at = ?1, published_at = ?1
+           WHERE id = ?2`,
+        ).bind(now, release.id).run()
+        await db.prepare('UPDATE products SET active = TRUE, updated_at = ?1 WHERE (release_id = ?2 OR track_id IN (SELECT id FROM tracks WHERE release_id = ?2))').bind(now, release.id).run()
+        await insertAudit(db, null, release, 'publish_due', 'LIVE')
+        return 'published' as const
+      })
+      if (outcome === 'published') published.push(id)
+      if (outcome === 'not_ready') notReady.push(id)
+    }
+    return {published, notReady}
+  }
+
+  async commandRelease(userId: string, releaseId: string, command: ReleaseAdminCommand, options: {isrcConfig?: IsrcGenerationConfig | null} = {}): Promise<unknown> {
     return this.database.transaction(async (db) => {
       const staff = await db.prepare(
         'SELECT role, protected_owner FROM marketplace_staff WHERE user_id = ?1',
@@ -428,7 +546,7 @@ export class MarketplaceAdminService {
       if (['schedule', 'publish_now', 'publish_due'].includes(command.action)) {
         const sale = await getReleaseSaleReadiness(db, release.id)
         const unmet = [
-          ...(!sale.hasMinimumPrice ? ['active release product priced at least $1.00 USD'] : []),
+          ...(!sale.hasMinimumPrice ? [`active release product priced at least ${formatMinimumPrice()} USD`] : []),
           ...(!sale.stripeReady ? ['completed Stripe payout setup'] : []),
         ]
         if (unmet.length > 0) {
@@ -436,7 +554,30 @@ export class MarketplaceAdminService {
         }
       }
 
-      const target = releaseCommandTarget(command.action)
+      if (command.action === 'approve' && !APPROVABLE_RIGHTS_STATUSES.includes(release.rights_status)) {
+        // Never approve uncertain or documented third-party material without an explicit rights decision.
+        throw new MarketplaceError(409, 'rights_review_required', release.rights_status === 'NOT_CERTIFIED'
+          ? 'This release has no rights certification. Clear its rights explicitly or request changes before approving.'
+          : 'Review the rights information and clear it before approving this release.')
+      }
+      if (command.action === 'clear_rights' && !CLEARABLE_RIGHTS_STATUSES.includes(release.rights_status)) {
+        throw new MarketplaceError(409, 'rights_not_clearable', `Rights in state ${release.rights_status} do not need clearing`)
+      }
+      if (command.action === 'approve') await assignApprovalIsrcs(db, release, userId, options.isrcConfig ?? null)
+
+      // Clearing rights records a decision without moving the release through the lifecycle.
+      const target = command.action === 'clear_rights' ? release.status : releaseCommandTarget(command.action)
+      if (command.action === 'restore') {
+        const duplicate = await db.prepare(
+          `SELECT other.id FROM releases other JOIN releases target ON target.id = ?1
+           WHERE other.provider_profile_id = target.provider_profile_id AND other.id <> target.id
+             AND other.duplicate_fingerprint = target.duplicate_fingerprint AND other.status <> 'TAKEN_DOWN'
+           LIMIT 1`,
+        ).bind(release.id).first()
+        if (duplicate) {
+          throw new MarketplaceError(409, 'duplicate_release', 'The provider already has an active copy of this release')
+        }
+      }
       const scheduledAt = command.action === 'schedule' ? command.scheduledReleaseAt : null
       const row = await db.prepare(
         `UPDATE releases SET status = ?1, version = version + 1, updated_at = ?2,
@@ -446,6 +587,11 @@ export class MarketplaceAdminService {
          WHERE id = ?4 AND version = ?5 RETURNING *`,
       ).bind(target, now, scheduledAt, release.id, command.expectedVersion).first()
       if (!row) throw new MarketplaceError(409, 'stale_release_version', 'The release was modified by another request')
+      if (command.action === 'clear_rights' || command.action === 'flag_rights') {
+        const rightsStatus: RightsStatus = command.action === 'clear_rights' ? 'RIGHTS_CLEARED' : 'RIGHTS_ISSUE_FLAGGED'
+        await db.prepare('UPDATE releases SET rights_status = ?1 WHERE id = ?2').bind(rightsStatus, release.id).run()
+        ;(row as Record<string, unknown>).rights_status = rightsStatus
+      }
 
       if (reviewActions.has(command.action)) {
         await db.prepare(
@@ -458,6 +604,12 @@ export class MarketplaceAdminService {
           'note' in command ? command.note : null, release.status, target,
         ).run()
       }
+      if (command.action === 'restore') {
+        await db.prepare(
+          `UPDATE release_takedowns SET restored_at = ?1, restored_by_user_id = ?2
+           WHERE release_id = ?3 AND restored_at IS NULL`,
+        ).bind(now, userId, release.id).run()
+      }
       if (command.action === 'takedown') {
         await db.prepare(
           `INSERT INTO release_takedowns
@@ -467,12 +619,44 @@ export class MarketplaceAdminService {
       }
 
       if (['publish_now', 'publish_due'].includes(command.action)) {
-        await db.prepare('UPDATE products SET active = TRUE, updated_at = ?1 WHERE release_id = ?2').bind(now, release.id).run()
+        await db.prepare('UPDATE products SET active = TRUE, updated_at = ?1 WHERE (release_id = ?2 OR track_id IN (SELECT id FROM tracks WHERE release_id = ?2))').bind(now, release.id).run()
       } else if (['unpublish', 'takedown'].includes(command.action)) {
-        await db.prepare('UPDATE products SET active = FALSE, updated_at = ?1 WHERE release_id = ?2').bind(now, release.id).run()
+        await db.prepare('UPDATE products SET active = FALSE, updated_at = ?1 WHERE (release_id = ?2 OR track_id IN (SELECT id FROM tracks WHERE release_id = ?2))').bind(now, release.id).run()
       }
       await insertAudit(db, userId, release, command.action, target)
       return row
+    })
+  }
+}
+
+/**
+ * Approval assigns MEJay ISRCs to tracks that still lack one. The rights attestation comes from the
+ * artist's latest release certification, which must include the ISRC statement.
+ */
+async function assignApprovalIsrcs(db: Database, release: Release, staffUserId: string, config: IsrcGenerationConfig | null): Promise<void> {
+  const {results: tracks} = await db.prepare(
+    `SELECT t.id FROM tracks t WHERE t.release_id = ?1 AND NOT EXISTS (
+       SELECT 1 FROM isrc_assignments i WHERE i.track_id = t.id AND i.revoked_at IS NULL)
+     ORDER BY t.disc_number, t.track_number FOR UPDATE OF t`,
+  ).bind(release.id).all<{id: string}>()
+  if (tracks.length === 0) return
+  if (!config) throw new MarketplaceError(503, 'isrc_generation_unavailable', 'MEJay ISRC generation is not configured, so tracks without an ISRC cannot be approved')
+  const certification = await db.prepare(
+    `SELECT certified_by_user_id, accepted_certifications FROM release_certifications
+     WHERE release_id = ?1 ORDER BY certified_at DESC LIMIT 1`,
+  ).bind(release.id).first<{certified_by_user_id: string; accepted_certifications: Array<{key: string}>}>()
+  const attested = certification?.accepted_certifications?.some((statement) => statement.key === ISRC_STATEMENT.key)
+  if (!certification || !attested) {
+    throw new MarketplaceError(409, 'isrc_certification_missing', 'The artist has not authorized MEJay ISRC assignment for this release; request changes so they can re-certify')
+  }
+  for (const track of tracks) {
+    await insertGeneratedIsrc(db as never, {
+      trackId: track.id,
+      providerId: release.provider_profile_id,
+      assignedByUserId: staffUserId,
+      attestedByUserId: certification.certified_by_user_id,
+      config,
+      attestation: {controlsRecording: true, neverAssignedIsrc: true, authorizeAssignment: true},
     })
   }
 }

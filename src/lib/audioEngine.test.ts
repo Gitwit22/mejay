@@ -99,6 +99,46 @@ describe('AudioEngine source lifecycle', () => {
     engine.audioContext = null
   })
 
+  it('a natural source end does not report a track end the transition already owns', async () => {
+    const { audioEngine } = await import('./audioEngine')
+    const engine = audioEngine as unknown as EngineInternals
+    const {ctx, sources} = fakeContext()
+    engine.audioContext = ctx
+    engine.decks.A.audioBuffer = {duration: 200}
+    engine.decks.A.duration = 200
+    engine.decks.A.trackGainNode = {gain: {value: 1, cancelScheduledValues: vi.fn(), setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn()}}
+    const onTrackEnd = vi.fn()
+    engine.onTrackEnd = onTrackEnd
+
+    audioEngine.play('A')
+    audioEngine.markTrackEndHandled('A')
+    // Buffer runs out (or the transition's scheduled stop lands) after the ignore window.
+    sources[sources.length - 1].onended?.()
+
+    expect(onTrackEnd).not.toHaveBeenCalled()
+    expect(engine.decks.A.isPlaying).toBe(false)
+    engine.audioContext = null
+  })
+
+  it('a natural source end still reports a track end once', async () => {
+    const { audioEngine } = await import('./audioEngine')
+    const engine = audioEngine as unknown as EngineInternals
+    const {ctx, sources} = fakeContext()
+    engine.audioContext = ctx
+    engine.decks.A.audioBuffer = {duration: 200}
+    engine.decks.A.duration = 200
+    engine.decks.A.trackGainNode = {gain: {value: 1, cancelScheduledValues: vi.fn(), setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn()}}
+    const onTrackEnd = vi.fn()
+    engine.onTrackEnd = onTrackEnd
+
+    audioEngine.play('A')
+    sources[sources.length - 1].onended?.()
+
+    expect(onTrackEnd).toHaveBeenCalledTimes(1)
+    expect(onTrackEnd).toHaveBeenCalledWith('A')
+    engine.audioContext = null
+  })
+
   it('discards a decode that finishes after a newer load on the same deck', async () => {
     const { audioEngine, isStaleLoadError } = await import('./audioEngine')
     const engine = audioEngine as unknown as EngineInternals

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ListMusic, Music, Library, Settings } from 'lucide-react';
 import { useDJStore } from '@/stores/djStore';
 import { cn } from '@/lib/utils';
@@ -22,7 +22,23 @@ import { PartySourceChooser } from './party/PartySourceChooser';
 
 type PanelView = 'queue' | 'settings';
 
+/** Tailwind `lg` breakpoint; render only one layout instead of mounting both and hiding one. */
+function useIsDesktopLayout(): boolean {
+  const query = '(min-width: 1024px)';
+  const [matches, setMatches] = useState(() => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(query).matches);
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const mql = window.matchMedia(query);
+    const onChange = () => setMatches(mql.matches);
+    mql.addEventListener('change', onChange);
+    onChange();
+    return () => mql.removeEventListener('change', onChange);
+  }, []);
+  return matches;
+}
+
 export function PartyModeView() {
+  const isDesktopLayout = useIsDesktopLayout();
   const [activePanel, setActivePanel] = useState<PanelView>('queue');
   const [saveOpen, setSaveOpen] = useState(false);
   const [playlistName, setPlaylistName] = useState('');
@@ -174,6 +190,7 @@ export function PartyModeView() {
       ) : (
         <div className="flex-1 min-h-0 overflow-visible md:overflow-hidden">
           {/* Mobile: stable panel (inner scroll) */}
+          {!isDesktopLayout && (
           <div className="lg:hidden h-full min-h-0 flex flex-col gap-4 overflow-visible">
             <div className="shrink-0">
               <NowPlaying />
@@ -234,8 +251,10 @@ export function PartyModeView() {
               </div>
             </div>
           </div>
+          )}
 
           {/* Desktop: Now Playing + (Queue <-> Settings) panel */}
+          {isDesktopLayout && (
           <div className="hidden lg:grid h-full min-h-0 grid-cols-2 gap-4 overflow-hidden">
             <div className="min-h-0 overflow-hidden">
               <NowPlaying />
@@ -295,6 +314,7 @@ export function PartyModeView() {
               </div>
             </div>
           </div>
+          )}
         </div>
       )}
     </div>

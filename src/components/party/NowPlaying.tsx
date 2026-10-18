@@ -1,4 +1,5 @@
 import { Play, Pause, SkipBack, SkipForward, Music, Shuffle, RotateCcw, Volume2 } from 'lucide-react';
+import { effectiveEndEarlySec, effectiveStartTimeSec, musicalEndSec } from '@/lib/playbackWindow';
 import { motion } from 'framer-motion';
 import { useDJStore } from '@/stores/djStore';
 import { cn } from '@/lib/utils';
@@ -38,18 +39,13 @@ export function NowPlaying() {
     ? (currentDeck.currentTime / currentDeck.duration) * 100 
     : 0;
 
-  const startAt = currentTrack
-    ? Math.max(0, Math.min(settings.nextSongStartOffset ?? 0, Math.max(0, currentTrack.duration - 0.25)))
-    : 0;
+  const startAt = currentTrack ? effectiveStartTimeSec(currentTrack, settings) : 0;
   const startPct = currentDeck.duration > 0 ? (startAt / currentDeck.duration) * 100 : 0;
 
-  const endEarlySeconds = Math.max(0, Math.min(settings.endEarlySeconds ?? 0, 60));
   // End marker stacks trueEndTime (silence trim) and endEarlySeconds (user setting)
-  const musicalEnd = (currentTrack?.trueEndTime && currentTrack.trueEndTime > 0)
-    ? Math.min(currentTrack.trueEndTime, currentDeck.duration)
-    : currentDeck.duration;
+  const endEarlySeconds = currentDeck.duration > 0 ? effectiveEndEarlySec(currentTrack, settings, currentDeck.duration) : 0;
   const endAt = currentDeck.duration > 0
-    ? Math.max(0, musicalEnd - endEarlySeconds)
+    ? Math.max(0, musicalEndSec(currentTrack, currentDeck.duration) - endEarlySeconds)
     : 0;
   const endPct = currentDeck.duration > 0 ? (endAt / currentDeck.duration) * 100 : 0;
 

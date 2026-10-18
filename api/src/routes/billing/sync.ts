@@ -1,5 +1,5 @@
 import {getSessionUserId} from '../_auth'
-import {cadenceFromPrice, persistSubscriptionState, stripeTimestampToIso, subscriptionGrantsPro} from '../../services/billing'
+import {cadenceFromPrice, persistSubscriptionState, stripeTimestampToIso, subscriptionGrantsPro, upsertPurchasedEntitlement} from '../../services/billing'
 
 type D1Database = any
 
@@ -69,63 +69,8 @@ async function stripeGet(secretKey: string, path: string): Promise<any> {
   return JSON.parse(text)
 }
 
-function mapToDbAccessType(accessType: AccessType): 'free' | 'pro' | 'full' {
-  if (accessType === 'pro') return 'pro'
-  if (accessType === 'full_program') return 'full'
-  return 'free'
-}
 
-async function upsertEntitlementsInD1(args: {
-  db: D1Database
-  userId: string
-  customerId: string | null
-  email?: string | null
-  subscriptionId?: string | null
-  accessType: AccessType
-  hasFullAccess: boolean
-}): Promise<void> {
-  const {db, userId, customerId, email, subscriptionId, accessType, hasFullAccess} = args
-
-  // Never persist "free" as a result of a sync call.
-  if (!hasFullAccess) return
-  if (accessType !== 'pro' && accessType !== 'full_program') return
-
-  const effectiveUserId = await (async () => {
-    const byId = (await db.prepare('SELECT id FROM users WHERE id = ?1').bind(userId).first()) as {id: string} | null
-    if (byId?.id) return userId
-
-    if (email) {
-      const byEmail = (await db.prepare('SELECT id FROM users WHERE email = ?1').bind(email).first()) as {id: string} | null
-      if (byEmail?.id) return byEmail.id
-    }
-
-    await db
-      .prepare('INSERT INTO users (id, email) VALUES (?1, ?2)')
-      .bind(userId, email ?? `unknown+${userId}@example.invalid`)
-      .run()
-    return userId
-  })()
-
-  const dbAccessType = mapToDbAccessType(accessType)
-  const hasFull = hasFullAccess ? 1 : 0
-
-  const stmt = db
-    .prepare(
-      [
-        'INSERT INTO entitlements (user_id, access_type, has_full_access, stripe_customer_id, stripe_subscription_id, updated_at)',
-        'VALUES (?1, ?2, ?3, ?4, ?5, (strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\')))',
-        'ON CONFLICT(user_id) DO UPDATE SET',
-        'access_type=excluded.access_type,',
-        'has_full_access=excluded.has_full_access,',
-        'stripe_customer_id=COALESCE(excluded.stripe_customer_id, entitlements.stripe_customer_id),',
-        "stripe_subscription_id=CASE WHEN excluded.access_type = 'full' THEN entitlements.stripe_subscription_id ELSE excluded.stripe_subscription_id END,",
-        'updated_at=excluded.updated_at',
-      ].join(' '),
-    )
-    .bind(effectiveUserId, dbAccessType, hasFull, customerId, subscriptionId ?? null)
-
-  await db.batch([stmt])
-}
+const upsertEntitlementsInD1 = upsertPurchasedEntitlement
 
 function normalizeSessionPlan(raw: unknown): AccessType | null {
   if (raw === 'pro') return 'pro'

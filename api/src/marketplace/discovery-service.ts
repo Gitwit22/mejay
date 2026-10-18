@@ -6,13 +6,13 @@ type Database = {prepare: (sql: string) => Statement}
 
 const releaseProjection = `
   SELECT r.id, r.title, r.release_type, r.genre, r.original_release_date, r.published_at,
-    artist.id AS artist_id, artist.name AS artist_name,
+    artist.id AS artist_id, artist.name AS artist_name, artist.slug AS artist_slug,
     artwork.id AS artwork_asset_id,
     offer.product_id, offer.amount_minor, offer.currency,
-    (provider.stripe_details_submitted AND provider.stripe_payouts_enabled
+    (provider.suspended_at IS NULL AND provider.stripe_details_submitted AND provider.stripe_payouts_enabled
       AND provider.stripe_transfers_status = 'active') AS purchase_available,
     COUNT(DISTINCT track.id)::integer AS track_count,
-    MIN(preview.id) AS preview_asset_id`
+    (ARRAY_AGG(preview.id ORDER BY track.disc_number, track.track_number, preview.created_at DESC) FILTER (WHERE preview.id IS NOT NULL))[1] AS preview_asset_id`
 
 const releaseJoins = `
   FROM releases r
@@ -38,7 +38,7 @@ const releaseJoins = `
 
 const releaseGroup = `
   GROUP BY r.id, artist.id, artist.name, artwork.id, offer.product_id, offer.amount_minor, offer.currency,
-    provider.stripe_details_submitted, provider.stripe_payouts_enabled, provider.stripe_transfers_status`
+    provider.suspended_at, provider.stripe_details_submitted, provider.stripe_payouts_enabled, provider.stripe_transfers_status`
 
 export type DiscoveryRelease = Record<string, unknown>
 export type DiscoveryArtist = {
@@ -103,7 +103,7 @@ export class DiscoveryService {
 
   private async featuredArtists(): Promise<DiscoveryArtist[]> {
     const {results} = await this.database.prepare(
-      `SELECT artist.id, artist.name, latest_artwork.artwork_asset_id,
+      `SELECT artist.id, artist.name, artist.slug, latest_artwork.artwork_asset_id,
         COUNT(DISTINCT release_credit.release_id)::integer AS release_count
        FROM marketplace_discovery_features feature
        JOIN artists artist ON artist.id = feature.artist_id

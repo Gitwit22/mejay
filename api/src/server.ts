@@ -7,6 +7,7 @@ import {createDownloadsBucket} from './services/r2'
 import {loadConfig} from './config/env'
 import {apiOriginGuard} from './middleware/origin-guard'
 import {CommerceService} from './marketplace/commerce-service'
+import {MarketplaceAdminService} from './marketplace/admin-service'
 
 const config = loadConfig()
 const port = Number(config.PORT)
@@ -59,4 +60,23 @@ if (config.STRIPE_SECRET_KEY && Number.isFinite(transferRetryMinutes) && transfe
         running = false
       })
   }, transferRetryMinutes * 60_000).unref()
+}
+// Publish SCHEDULED marketplace releases whose release time has passed.
+// Set MARKETPLACE_PUBLISH_DUE_MINUTES=0 to disable (e.g. when a separate worker runs it).
+const publishDueMinutes = Number(config.MARKETPLACE_PUBLISH_DUE_MINUTES ?? 5)
+if (Number.isFinite(publishDueMinutes) && publishDueMinutes > 0) {
+  const admin = new MarketplaceAdminService(database as never)
+  let publishing = false
+  setInterval(() => {
+    if (publishing) return
+    publishing = true
+    admin.publishDueReleases()
+      .then((result) => {
+        if (result.published.length > 0 || result.notReady.length > 0) console.log('[marketplace] scheduled publish', result)
+      })
+      .catch((error) => console.error('[marketplace] scheduled publish failed', error))
+      .finally(() => {
+        publishing = false
+      })
+  }, publishDueMinutes * 60_000).unref()
 }

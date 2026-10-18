@@ -4,13 +4,16 @@ import {previewByteLimit, resolvePreviewRange, StoreService} from './store-servi
 
 describe('public music store policy', () => {
   it('filters catalog listings to LIVE releases in the database query', async () => {
-    const prepare = vi.fn((sql: string) => ({
-      bind: vi.fn(),
-      first: vi.fn(),
-      all: vi.fn().mockResolvedValue({results: []}),
-      run: vi.fn(),
-      sql,
-    }))
+    const prepare = vi.fn((sql: string) => {
+      const statement = {
+        bind: vi.fn(() => statement),
+        first: vi.fn(),
+        all: vi.fn().mockResolvedValue({results: []}),
+        run: vi.fn(),
+        sql,
+      }
+      return statement
+    })
 
     await expect(new StoreService({prepare} as never).listCatalog()).resolves.toEqual([])
     expect(prepare.mock.calls[0][0]).toContain("WHERE r.status = 'LIVE'")

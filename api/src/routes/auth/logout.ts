@@ -1,4 +1,4 @@
-import {cookieHeaderForLogout, deleteSession} from '../_auth'
+import {cookieHeaderForLogout, deleteSession, shouldUseSecureCookie} from '../_auth'
 
 type Env = {
   DB: any
@@ -24,7 +24,7 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
 
   try {
     await deleteSession(request, env)
-    const secure = new URL(request.url).protocol === 'https:'
+    const secure = shouldUseSecureCookie(request, env as {COOKIE_SECURE?: string})
     return new Response(JSON.stringify({ok: true}), {
       status: 200,
       headers: {

@@ -1,9 +1,13 @@
 const DEFAULT_PRODUCTION_API_URL = 'https://mejay-api.onrender.com'
+// Frontend hosts served by the Pages project, whose /api Function proxies to the API. Calling the
+// API through it keeps the session cookie first-party; a direct cross-site call loses it.
+const SAME_ORIGIN_API_HOSTS = new Set(['mejayapp.com', 'www.mejayapp.com'])
 export function resolveApiBase(configuredUrl: string, production: boolean, hostname: string): string {
   const normalizedHostname = hostname.toLowerCase()
   if (
     normalizedHostname === 'mejay2.pages.dev' ||
     normalizedHostname.endsWith('.mejay2.pages.dev') ||
+    SAME_ORIGIN_API_HOSTS.has(normalizedHostname) ||
     import.meta.env.VITE_USE_SAME_ORIGIN_API === '1'
   ) {
     return ''

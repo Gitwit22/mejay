@@ -28,6 +28,13 @@ describe('account deletion eligibility', () => {
     })
   })
 
+  it('blocks deletion while a Full Program owner still has a live Pro subscription', () => {
+    expect(accountDeletionEligibility(entitlement('full', 'active'), true)).toEqual({
+      allowed: false,
+      code: 'subscription_active',
+    })
+  })
+
   it('requires explicit Full Program forfeiture', () => {
     expect(accountDeletionEligibility(entitlement('full', null), false)).toEqual({
       allowed: false,

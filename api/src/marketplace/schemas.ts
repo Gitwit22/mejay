@@ -1,5 +1,7 @@
 import {z} from 'zod'
 import {externalIsrcProblem} from './isrc'
+import {formatMinimumPrice, MINIMUM_RELEASE_PRICE_MINOR} from './sale-policy'
+import {ARTIST_IMAGE_RULES} from './upload-validation'
 
 const id = z.string().trim().min(1).max(128)
 const nonEmpty = z.string().trim().min(1).max(300)
@@ -35,7 +37,7 @@ export const releaseSchema = z.object({
 
 export const releaseDraftSchema = z.object({
   expectedVersion: z.number().int().positive(),
-  draftStep: z.enum(['release-information', 'artwork', 'tracks', 'track-metadata', 'isrc', 'rights', 'pricing', 'splits', 'review']),
+  draftStep: z.enum(['release-information', 'artwork', 'tracks', 'track-metadata', 'credits', 'isrc', 'rights', 'pricing', 'splits', 'certification', 'review']),
   title: nonEmpty,
   versionTitle: nonEmpty.nullable().optional(),
   releaseType: z.enum(['single', 'ep', 'album']),
@@ -142,6 +144,17 @@ export const generatedIsrcSchema = z.object({
   authorizeAssignment: z.literal(true),
 })
 
+/** Maximum upload size per asset kind, enforced at upload start and by the signed URL. */
+export const UPLOAD_MAX_BYTES = {
+  artwork: 20 * 1024 * 1024,
+  audio: 500 * 1024 * 1024,
+  artist_photo: 10 * 1024 * 1024,
+  artist_banner: 15 * 1024 * 1024,
+  artist_cutout: 15 * 1024 * 1024,
+  artist_gallery: 10 * 1024 * 1024,
+  rights_document: 15 * 1024 * 1024,
+} as const
+
 const uploadBase = z.object({
   fileName: z.string().trim().min(1).max(255),
   byteSize: z.number().int().positive(),
@@ -160,13 +173,48 @@ export const uploadInitSchema = z.discriminatedUnion('kind', [
     trackId: id,
     mimeType: z.enum(['audio/wav', 'audio/x-wav', 'audio/flac', 'audio/x-flac']),
   }),
+  uploadBase.extend({
+    kind: z.literal('artist_photo'),
+    artistId: id,
+    mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+    width: z.number().int().min(ARTIST_IMAGE_RULES.artist_photo.minWidth),
+    height: z.number().int().min(ARTIST_IMAGE_RULES.artist_photo.minHeight),
+  }),
+  uploadBase.extend({
+    kind: z.literal('artist_banner'),
+    artistId: id,
+    mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+    width: z.number().int().min(ARTIST_IMAGE_RULES.artist_banner.minWidth),
+    height: z.number().int().min(ARTIST_IMAGE_RULES.artist_banner.minHeight),
+  }),
+  uploadBase.extend({
+    kind: z.literal('artist_cutout'),
+    artistId: id,
+    mimeType: z.enum(['image/png', 'image/webp']),
+    width: z.number().int().min(ARTIST_IMAGE_RULES.artist_cutout.minWidth),
+    height: z.number().int().min(ARTIST_IMAGE_RULES.artist_cutout.minHeight),
+  }),
+  uploadBase.extend({
+    kind: z.literal('artist_gallery'),
+    artistId: id,
+    mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+    width: z.number().int().min(ARTIST_IMAGE_RULES.artist_gallery.minWidth),
+    height: z.number().int().min(ARTIST_IMAGE_RULES.artist_gallery.minHeight),
+  }),
+  uploadBase.extend({
+    kind: z.literal('rights_document'),
+    releaseId: id,
+    mimeType: z.enum(['application/pdf', 'image/jpeg', 'image/png']),
+  }),
 ]).superRefine((value, context) => {
   if (value.kind === 'artwork' && value.width !== value.height) {
     context.addIssue({code: z.ZodIssueCode.custom, message: 'Artwork must be square'})
   }
-  const maximum = value.kind === 'artwork' ? 20 * 1024 * 1024 : 500 * 1024 * 1024
-  if (value.byteSize > maximum) {
-    context.addIssue({code: z.ZodIssueCode.custom, message: `${value.kind === 'artwork' ? 'Artwork' : 'Audio'} exceeds the maximum size`})
+  if (value.kind === 'artist_banner' && value.width <= value.height) {
+    context.addIssue({code: z.ZodIssueCode.custom, message: 'Banner images must be wider than they are tall'})
+  }
+  if (value.byteSize > UPLOAD_MAX_BYTES[value.kind]) {
+    context.addIssue({code: z.ZodIssueCode.custom, message: `File exceeds the ${Math.round(UPLOAD_MAX_BYTES[value.kind] / 1024 / 1024)} MB limit`})
   }
 })
 
@@ -183,7 +231,7 @@ export const productSchema = z.object({
 })
 
 export const priceSchema = z.object({
-  amountMinor: z.number().int().min(100, 'Marketplace releases must cost at least $1.00'),
+  amountMinor: z.number().int().min(MINIMUM_RELEASE_PRICE_MINOR, `Marketplace releases must cost at least ${formatMinimumPrice()}`),
   currency: z.literal('USD'),
   effectiveFrom: z.string().datetime({offset: true}).optional(),
   effectiveUntil: z.string().datetime({offset: true}).optional(),
@@ -222,6 +270,18 @@ export type TrackInput = z.infer<typeof trackSchema>
 export type TrackDraftInput = z.infer<typeof trackDraftSchema>
 export type AssetInput = z.infer<typeof assetSchema>
 export type RightsDeclarationInput = z.infer<typeof rightsDeclarationSchema>
+export const releasePriceSchema = z.object({
+  name: nonEmpty,
+  amountMinor: z.number().int().min(MINIMUM_RELEASE_PRICE_MINOR, `Marketplace releases must cost at least ${formatMinimumPrice()}`).max(100_000_00),
+}).strict()
+
+/** Optional per-song price on a multi-track release; same USD minimum as the release itself. */
+export const trackPriceSchema = z.object({
+  amountMinor: z.number().int().min(MINIMUM_RELEASE_PRICE_MINOR, `Songs must cost at least ${formatMinimumPrice()}`).max(100_000_00),
+}).strict()
+
+export type ReleasePriceInput = z.infer<typeof releasePriceSchema>
+export type TrackPriceInput = z.infer<typeof trackPriceSchema>
 export type IsrcAssignmentInput = z.infer<typeof isrcAssignmentSchema>
 export type GeneratedIsrcInput = z.infer<typeof generatedIsrcSchema>
 export type UploadInitInput = z.infer<typeof uploadInitSchema>

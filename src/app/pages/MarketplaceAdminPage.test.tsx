@@ -3,7 +3,7 @@ import {fireEvent, render, screen} from '@testing-library/react'
 import {MemoryRouter} from 'react-router-dom'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview} from '@/lib/marketplaceAdminApi'
+import {getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview, getMarketplaceFinance} from '@/lib/marketplaceAdminApi'
 import MarketplaceAdminPage from './MarketplaceAdminPage'
 
 vi.mock('@/lib/marketplaceAdminApi', async (importOriginal) => ({
@@ -13,6 +13,7 @@ vi.mock('@/lib/marketplaceAdminApi', async (importOriginal) => ({
   getIsrcRegistry: vi.fn(),
   getIsrcRegistryRecord: vi.fn(),
   getIsrcSequence: vi.fn(),
+  getMarketplaceFinance: vi.fn(),
 }))
 
 describe('MarketplaceAdminPage industry reporting', () => {
@@ -113,5 +114,36 @@ describe('MarketplaceAdminPage industry reporting', () => {
     expect(await screen.findByText('cert-1')).toBeInTheDocument()
     expect(screen.getByText('00001')).toBeInTheDocument()
     expect(screen.getAllByText('Example Provider').length).toBeGreaterThan(0)
+  })
+
+  it('shows read-only finance totals and filters by artist account', async () => {
+    vi.mocked(getMarketplaceAdminOverview).mockResolvedValue({
+      role: 'admin', counts: {}, pending: [], catalog: [{id: 'release-1', title: 'Night Drive'}], providers: [{id: 'provider-1', display_name: 'Example Provider'}],
+      artists: [], isrcs: [], rights: [], pricing: [], splits: [], takedowns: [],
+      discovery: {featuredReleases: [], featuredArtists: [], eligibleReleases: [], eligibleArtists: []},
+    })
+    vi.mocked(getMarketplaceFinance).mockResolvedValue({
+      currency: 'USD',
+      totals: {
+        orders: 2, grossSalesMinor: 1998, stripeFeesMinor: 118, ordersWithUnknownStripeFee: 0, platformCommissionMinor: 200,
+        processingFeesRecoveredMinor: 118, artistAllocationMinor: 1680, artistEarningsAfterAdjustmentsMinor: 1259, refundsMinor: 500, refundedOrders: 1,
+        netPlatformRevenueMinor: 121, disputes: {open: 1, won: 0, lost: 0, openAmountMinor: 999, lostAmountMinor: 0}, failedPayments: 3,
+        pendingTransfers: {count: 1, amountMinor: 840}, failedTransfers: {count: 0, amountMinor: 0},
+      },
+      transactions: [{orderId: 'order-1', paidAt: '2026-10-01T12:00:00.000Z', providerName: 'Example Provider', releaseTitle: 'Night Drive', artistName: 'Example Artist', grossMinor: 999, platformCommissionMinor: 100, stripeFeeMinor: 59, artistAllocationMinor: 840, refundedMinor: 0, paymentStatus: 'paid', transferStatus: 'transferred', disputeStatus: 'none', livemode: false}],
+    })
+    const queryClient = new QueryClient({defaultOptions: {queries: {retry: false}}})
+    render(<QueryClientProvider client={queryClient}><MemoryRouter><MarketplaceAdminPage /></MemoryRouter></QueryClientProvider>)
+    fireEvent.click(await screen.findByRole('button', {name: 'Finance'}))
+    expect(await screen.findByText('Gross Marketplace Sales')).toBeInTheDocument()
+    for (const label of ['Stripe Fees', 'Artist Allocations', 'MEJay Commission', 'MEJay Net Revenue', 'Failed Payments', 'Pending Transfers']) {
+      expect(screen.getByText(label)).toBeInTheDocument()
+    }
+    expect(screen.getByText('$19.98')).toBeInTheDocument()
+    expect(screen.getByText('$1.21')).toBeInTheDocument()
+    expect(screen.getByText('1 open · 0 lost')).toBeInTheDocument()
+    expect(getMarketplaceFinance).toHaveBeenLastCalledWith({})
+    fireEvent.change(screen.getByLabelText('Artist account'), {target: {value: 'provider-1'}})
+    expect(getMarketplaceFinance).toHaveBeenLastCalledWith({providerId: 'provider-1'})
   })
 })

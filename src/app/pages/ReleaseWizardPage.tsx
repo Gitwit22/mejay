@@ -1,10 +1,11 @@
-import {useState} from 'react'
-import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
+import {useEffect, useState} from 'react'
+import {keepPreviousData, useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {ArrowLeft, Check, ChevronRight, Disc3, Upload} from 'lucide-react'
 import {Link, useNavigate, useParams} from 'react-router-dom'
 
+import {CertificationStep, CreditsStep} from '@/app/components/provider/ReleaseSubmissionSteps'
+
 import {Button} from '@/components/ui/button'
-import {Checkbox} from '@/components/ui/checkbox'
 import {Input} from '@/components/ui/input'
 import {Label} from '@/components/ui/label'
 import {Switch} from '@/components/ui/switch'
@@ -14,7 +15,6 @@ import {
   createProviderPricing,
   createProviderRights,
   createProviderTrack,
-  generateProviderIsrc,
   getProviderRelease,
   listProviderArtists,
   replaceProviderSplits,
@@ -25,6 +25,9 @@ import {
   updateProviderRelease,
   updateProviderTrack,
   uploadProviderAsset,
+  getMarketplacePricingPolicy,
+  setProviderTrackPrice,
+  clearProviderTrackPrice,
 } from '@/lib/providerApi'
 
 const steps: Array<{id: ReleaseDraftStep; label: string}> = [
@@ -32,10 +35,12 @@ const steps: Array<{id: ReleaseDraftStep; label: string}> = [
   {id: 'artwork', label: 'Upload Artwork'},
   {id: 'tracks', label: 'Upload Tracks'},
   {id: 'track-metadata', label: 'Track Metadata'},
-  {id: 'isrc', label: 'ISRC'},
+  {id: 'credits', label: 'Credits'},
+  {id: 'isrc', label: 'Existing ISRCs'},
   {id: 'rights', label: 'Rights'},
   {id: 'pricing', label: 'Pricing'},
   {id: 'splits', label: 'Splits'},
+  {id: 'certification', label: 'Rights Certification'},
   {id: 'review', label: 'Review & Submit'},
 ]
 
@@ -88,13 +93,15 @@ export default function ReleaseWizardPage() {
         {activeStep === 'artwork' && <ArtworkStep releaseId={releaseId} detail={detail.data} />}
         {activeStep === 'tracks' && <TracksStep releaseId={releaseId} detail={detail.data} />}
         {activeStep === 'track-metadata' && <MetadataStep detail={detail.data} />}
+        {activeStep === 'credits' && <CreditsStep detail={detail.data} />}
         {activeStep === 'isrc' && <IsrcStep detail={detail.data} />}
         {activeStep === 'rights' && <RightsStep detail={detail.data} />}
         {activeStep === 'pricing' && <PricingStep detail={detail.data} />}
         {activeStep === 'splits' && <SplitsStep detail={detail.data} />}
+        {activeStep === 'certification' && <CertificationStep detail={detail.data} onBack={() => navigate(`/app/artist/releases/${releaseId}/edit/splits`)} onContinue={() => advance.mutate('review')} />}
         {activeStep === 'review' && <ReviewStep detail={detail.data} />}
         {advance.isError && <p className="mt-5 text-sm text-red-400">{advance.error.message}</p>}
-        {next && <div className="mt-8 flex justify-end border-t border-white/10 pt-5"><Button onClick={() => advance.mutate(next)} disabled={advance.isPending} className="gap-2 bg-emerald-400 text-zinc-950 hover:bg-emerald-300">Save and continue <ChevronRight className="h-4 w-4" /></Button></div>}
+        {next && activeStep !== 'certification' && <div className="mt-8 flex justify-end border-t border-white/10 pt-5"><Button onClick={() => advance.mutate(next)} disabled={advance.isPending} className="gap-2 bg-emerald-400 text-zinc-950 hover:bg-emerald-300">Save and continue <ChevronRight className="h-4 w-4" /></Button></div>}
       </main>
     </div>
   </div>
@@ -160,25 +167,16 @@ function TrackMetadataForm({track, artistId, releaseId}: {track: ProviderTrack; 
 }
 
 function IsrcStep({detail}: {detail: ProviderReleaseDetail}) {
-  return <><StepHeading title="ISRC" detail="Register an existing ISRC or certify the recording so MEJay can permanently assign the next QTA3L code." /><div className="divide-y divide-white/10 border-y border-white/10">{detail.tracks.map((track) => <IsrcRow key={track.id} track={track} releaseId={detail.release.id} />)}</div>{detail.tracks.length === 0 && <p className="text-sm text-zinc-500">Add tracks before assigning ISRCs.</p>}</>
+  return <><StepHeading title="Existing ISRCs" detail="Already have an ISRC for a recording? Register it here. Tracks without one get a MeJay ISRC automatically after the release is approved." /><div className="divide-y divide-white/10 border-y border-white/10">{detail.tracks.map((track) => <IsrcRow key={track.id} track={track} releaseId={detail.release.id} />)}</div>{detail.tracks.length === 0 && <p className="text-sm text-zinc-500">Add tracks before assigning ISRCs.</p>}</>
 }
 
 function IsrcRow({track, releaseId}: {track: ProviderTrack; releaseId: string}) {
   const queryClient = useQueryClient()
   const [value, setValue] = useState('')
-  const [controlsRecording, setControlsRecording] = useState(false)
-  const [neverAssignedIsrc, setNeverAssignedIsrc] = useState(false)
-  const [authorizeAssignment, setAuthorizeAssignment] = useState(false)
-  const mejayReady = controlsRecording && neverAssignedIsrc && authorizeAssignment
   const assign = useMutation({
-    mutationFn: (generated: boolean) => generated
-      ? generateProviderIsrc(track.id, {controlsRecording: true, neverAssignedIsrc: true, authorizeAssignment: true})
-      : assignProviderIsrc(track.id, value),
+    mutationFn: () => assignProviderIsrc(track.id, value),
     onSuccess: async () => {
       setValue('')
-      setControlsRecording(false)
-      setNeverAssignedIsrc(false)
-      setAuthorizeAssignment(false)
       await queryClient.invalidateQueries({queryKey: ['provider', 'release', releaseId]})
     },
   })
@@ -186,28 +184,17 @@ function IsrcRow({track, releaseId}: {track: ProviderTrack; releaseId: string}) 
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
         <p className="font-medium">{track.track_number}. {track.title}</p>
-        <p className="mt-1 text-sm text-zinc-500">Does this recording already have an ISRC?</p>
+        <p className="mt-1 text-sm text-zinc-500">{track.isrc ? 'ISRC registered.' : 'No ISRC yet. Only enter one that was legitimately assigned to this recording.'}</p>
       </div>
       {track.isrc && <div className="text-right">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-400">ISRC Assigned</p>
         <p className="mt-1 font-mono text-sm text-emerald-300">{formatIsrc(track.isrc)}</p>
       </div>}
     </div>
-    {!track.isrc && <div className="grid gap-4 rounded-md border border-white/10 bg-[#141417] p-4 lg:grid-cols-2">
-      <div className="space-y-3">
-        <p className="text-sm font-medium text-zinc-100">Enter Existing ISRC</p>
-        <Input className="max-w-full font-mono" value={value} onChange={(event) => setValue(event.target.value)} placeholder="QT-A3L-YY-NNNNN" />
-        <Button variant="outline" disabled={!value.trim() || assign.isPending} onClick={() => assign.mutate(false)}>Register existing ISRC</Button>
-      </div>
-      <div className="space-y-3">
-        <p className="text-sm font-medium text-zinc-100">Have MEJay Assign One</p>
-        <div className="space-y-2 text-sm text-zinc-300">
-          <Label className="flex items-start gap-3"><Checkbox checked={controlsRecording} onCheckedChange={(checked) => setControlsRecording(checked === true)} /><span>I control this recording</span></Label>
-          <Label className="flex items-start gap-3"><Checkbox checked={neverAssignedIsrc} onCheckedChange={(checked) => setNeverAssignedIsrc(checked === true)} /><span>This recording has never received an ISRC</span></Label>
-          <Label className="flex items-start gap-3"><Checkbox checked={authorizeAssignment} onCheckedChange={(checked) => setAuthorizeAssignment(checked === true)} /><span>I authorize MEJay to assign the identifier</span></Label>
-        </div>
-        <Button disabled={!mejayReady || assign.isPending} onClick={() => assign.mutate(true)}>Have MEJay Assign One</Button>
-      </div>
+    {!track.isrc && <div className="space-y-3 rounded-md border border-white/10 bg-[#141417] p-4">
+      <p className="text-sm font-medium text-zinc-100">Enter Existing ISRC</p>
+      <div className="flex flex-wrap gap-3"><Input className="max-w-xs font-mono" value={value} onChange={(event) => setValue(event.target.value)} placeholder="CC-XXX-YY-NNNNN" /><Button variant="outline" disabled={!value.trim() || assign.isPending} onClick={() => assign.mutate()}>Register existing ISRC</Button></div>
+      <p className="text-xs text-zinc-500">No ISRC? Leave this empty. MeJay assigns one when the release is approved.</p>
     </div>}
     {assign.isError && <p className="text-sm text-red-400">{assign.error.message}</p>}
   </div>
@@ -226,16 +213,74 @@ function RightsStep({detail}: {detail: ProviderReleaseDetail}) {
   return <><StepHeading title="Rights" detail="Affirm worldwide distribution, master, and composition ownership before submission." /><div className="space-y-5"><Field label="Rights holder"><Input value={holder} onChange={(event) => setHolder(event.target.value)} required /></Field><div className="border-y border-white/10 py-4 text-sm text-zinc-400">{missing.length === 0 ? <span className="text-emerald-400">All required rights are declared at 100%.</span> : `${missing.length} declarations will be recorded at 100% worldwide ownership.`}</div><Button disabled={!holder.trim() || missing.length === 0 || save.isPending} onClick={() => save.mutate()}>{save.isPending ? 'Saving...' : missing.length === 0 ? 'Rights complete' : 'Affirm and save rights'}</Button>{save.isError && <p className="text-sm text-red-400">{save.error.message}</p>}</div></>
 }
 
+const usd = (minor: number) => `$${(minor / 100).toFixed(2)}`
+
+/** Whole cents from a dollar string; null for anything that is not a non-negative amount with at most 2 decimals. */
+function parseUsdToMinor(value: string): number | null {
+  const trimmed = value.trim()
+  if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return null
+  const [dollars, cents = ''] = trimmed.split('.')
+  return Number(dollars) * 100 + Number(cents.padEnd(2, '0'))
+}
+
 function PricingStep({detail}: {detail: ProviderReleaseDetail}) {
   const queryClient = useQueryClient()
-  const [price, setPrice] = useState(detail.product?.amount_minor != null ? (detail.product.amount_minor / 100).toFixed(2) : '1.00')
-  const numericPrice = Number(price)
-  const save = useMutation({mutationFn: () => createProviderPricing(detail.release.id, detail.release.title, Math.round(Number(price) * 100)), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', detail.release.id]}); toast({title: 'Release price saved'})}})
-  return <><StepHeading title="Pricing" detail="Every MEJay release is sold in USD for at least $1.00." /><div className="max-w-sm space-y-5"><Field label="USD price"><Input type="number" min="1" step="0.01" value={price} onChange={(event) => setPrice(event.target.value)} disabled={Boolean(detail.product)} /></Field>{detail.product ? <p className="text-sm text-emerald-400">Current price: ${(Number(detail.product.amount_minor) / 100).toFixed(2)} USD</p> : <Button disabled={!Number.isFinite(numericPrice) || numericPrice < 1 || save.isPending} onClick={() => save.mutate()}>Save price</Button>}{Number.isFinite(numericPrice) && numericPrice >= 1 && <PayoutEstimate amountMinor={Math.round(numericPrice * 100)} />}{save.isError && <p className="text-sm text-red-400">{save.error.message}</p>}</div></>
+  const policy = useQuery({queryKey: ['marketplace', 'pricing-policy'], queryFn: () => getMarketplacePricingPolicy(), staleTime: 5 * 60_000})
+  const minimumMinor = policy.data?.minimumPriceMinor
+  const [price, setPrice] = useState(detail.product?.amount_minor != null ? (detail.product.amount_minor / 100).toFixed(2) : '')
+  // New releases start at the server-configured minimum once it is known.
+  useEffect(() => {
+    if (minimumMinor !== undefined && detail.product?.amount_minor == null) setPrice((current) => current || (minimumMinor / 100).toFixed(2))
+  }, [minimumMinor, detail.product?.amount_minor])
+  const amountMinor = parseUsdToMinor(price)
+  const meetsMinimum = amountMinor !== null && minimumMinor !== undefined && amountMinor >= minimumMinor
+  const pricingEditable = ['DRAFT', 'METADATA_COMPLETE', 'RIGHTS_COMPLETE', 'ISRC_COMPLETE', 'PRICING_COMPLETE', 'CHANGES_REQUESTED'].includes(detail.release.status)
+  const save = useMutation({mutationFn: () => createProviderPricing(detail.release.id, detail.release.title, amountMinor!), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', detail.release.id]}); toast({title: 'Release price saved'})}})
+  const headline = minimumMinor === undefined ? 'Every MEJay release is sold in USD.' : `Every MEJay release is sold in USD for at least ${usd(minimumMinor)}.`
+  return <><StepHeading title="Pricing" detail={headline} /><div className="max-w-sm space-y-5">
+    <Field label="Track price (USD)"><Input type="number" inputMode="decimal" min={minimumMinor !== undefined ? minimumMinor / 100 : undefined} step="0.01" value={price} onChange={(event) => setPrice(event.target.value)} disabled={!pricingEditable} /></Field>
+    {policy.isError && <p className="text-sm text-red-400">Pricing rules are unavailable right now. Try again shortly.</p>}
+    {detail.product?.amount_minor != null && <p className="text-sm text-emerald-400">Current price: {usd(Number(detail.product.amount_minor))} USD</p>}
+    {amountMinor !== null && minimumMinor !== undefined && !meetsMinimum && <p className="text-sm text-amber-300">The minimum price is {usd(minimumMinor)} USD.</p>}
+    {pricingEditable && <Button disabled={!meetsMinimum || save.isPending} onClick={() => save.mutate()}>{detail.product?.amount_minor != null ? 'Update price' : 'Save price'}</Button>}
+    {meetsMinimum && <PayoutEstimate amountMinor={amountMinor!} />}
+    {save.isError && <p className="text-sm text-red-400">{save.error.message}</p>}
+  </div>
+  {detail.tracks.length > 1 && <SongPricing detail={detail} minimumMinor={minimumMinor} editable={pricingEditable} />}
+  </>
+}
+
+/** Optional per-song prices on multi-track releases. Songs without a price are sold only with the release. */
+function SongPricing({detail, minimumMinor, editable}: {detail: ProviderReleaseDetail; minimumMinor: number | undefined; editable: boolean}) {
+  return <section className="mt-10 max-w-2xl"><h3 className="text-base font-semibold">Sell songs individually</h3><p className="mt-1 text-sm text-zinc-400">Optional. Fans can buy a priced song on its own; every song is always included when they buy the release.</p>
+    <div className="mt-4 divide-y divide-white/10 border-y border-white/10">{detail.tracks.map((track) => <SongPriceRow key={track.id} track={track} detail={detail} minimumMinor={minimumMinor} editable={editable} />)}</div>
+  </section>
+}
+
+function SongPriceRow({track, detail, minimumMinor, editable}: {track: ProviderTrack; detail: ProviderReleaseDetail; minimumMinor: number | undefined; editable: boolean}) {
+  const queryClient = useQueryClient()
+  const current = detail.trackProducts?.find((product) => product.track_id === track.id)
+  const [price, setPrice] = useState(current ? (current.amount_minor / 100).toFixed(2) : '')
+  const amountMinor = parseUsdToMinor(price)
+  const meetsMinimum = amountMinor !== null && minimumMinor !== undefined && amountMinor >= minimumMinor
+  const refresh = () => queryClient.invalidateQueries({queryKey: ['provider', 'release', detail.release.id]})
+  const save = useMutation({mutationFn: () => setProviderTrackPrice(track.id, amountMinor!), onSuccess: async () => {await refresh(); toast({title: `${track.title} price saved`})}})
+  const remove = useMutation({mutationFn: () => clearProviderTrackPrice(track.id), onSuccess: async () => {setPrice(''); await refresh(); toast({title: `${track.title} is sold with the release only`})}})
+  return <div className="space-y-3 py-4">
+    <div className="flex flex-wrap items-center gap-3"><p className="min-w-0 flex-1 truncate text-sm font-medium">{track.track_number}. {track.title}</p>
+      <Input aria-label={`${track.title} price (USD)`} className="w-28" type="number" inputMode="decimal" step="0.01" min={minimumMinor !== undefined ? minimumMinor / 100 : undefined} placeholder="Not sold alone" value={price} onChange={(event) => setPrice(event.target.value)} disabled={!editable} />
+      {editable && <Button size="sm" disabled={!meetsMinimum || save.isPending || (current !== undefined && amountMinor === current.amount_minor)} onClick={() => save.mutate()}>{current ? 'Update' : 'Sell song'}</Button>}
+      {editable && current && <Button size="sm" variant="ghost" disabled={remove.isPending} onClick={() => remove.mutate()}>Remove</Button>}
+    </div>
+    {current && <p className="text-xs text-emerald-400">Selling for {usd(current.amount_minor)} USD</p>}
+    {amountMinor !== null && minimumMinor !== undefined && !meetsMinimum && <p className="text-xs text-amber-300">The minimum price is {usd(minimumMinor)} USD.</p>}
+    {meetsMinimum && amountMinor !== current?.amount_minor && <PayoutEstimate amountMinor={amountMinor!} />}
+    {(save.isError || remove.isError) && <p className="text-xs text-red-400">{(save.error ?? remove.error)?.message}</p>}
+  </div>
 }
 
 function SplitsStep({detail}: {detail: ProviderReleaseDetail}) {
-  return <><StepHeading title="Splits" detail="Every track needs an active split totaling exactly 100%." /><div className="space-y-4">{detail.tracks.map((track) => <TrackSplitForm key={track.id} track={track} detail={detail} />)}</div></>
+  return <><StepHeading title="Splits" detail="Every track needs an active split totaling exactly 100%." /><p className="mb-4 max-w-2xl border border-white/10 bg-white/[0.03] p-3 text-xs text-zinc-400">Splits drive earnings reports for each collaborator. MEJay pays the full release payout to your Stripe account; you settle collaborator shares from there.</p><div className="space-y-4">{detail.tracks.map((track) => <TrackSplitForm key={track.id} track={track} detail={detail} />)}</div></>
 }
 
 function TrackSplitForm({track, detail}: {track: ProviderTrack; detail: ProviderReleaseDetail}) {
@@ -248,16 +293,31 @@ function TrackSplitForm({track, detail}: {track: ProviderTrack; detail: Provider
 
 function ReviewStep({detail}: {detail: ProviderReleaseDetail}) {
   const navigate = useNavigate()
-  const submit = useMutation({mutationFn: () => submitProviderRelease(detail.release.id, detail.release.version), onSuccess: () => {toast({title: 'Release submitted for review'}); navigate('/app/artist')}})
+  const submit = useMutation({mutationFn: () => submitProviderRelease(detail.release.id, detail.release.version), onSuccess: () => {toast({title: 'Submitted for MeJay Review', description: 'We will let you know when the review is complete.'}); navigate('/app/artist')}})
   const editable = ['DRAFT', 'METADATA_COMPLETE', 'RIGHTS_COMPLETE', 'ISRC_COMPLETE', 'PRICING_COMPLETE', 'CHANGES_REQUESTED'].includes(detail.release.status)
   const latestFeedback = detail.reviewEvents.find((event) => event.note)?.note
   return <><StepHeading title="Review & Submit" detail="Confirm the release package before sending it to MEJay Publishing." />{latestFeedback && <div className="mb-5 border border-amber-400/30 bg-amber-400/5 p-4 text-sm text-amber-200"><p className="font-medium">Review feedback</p><p className="mt-1">{latestFeedback}</p></div>}<div className="divide-y divide-white/10 border-y border-white/10">{detail.prerequisites.length === 0 ? <div className="flex items-center gap-3 py-4 text-emerald-400"><Check className="h-4 w-4" />All submission requirements are complete</div> : detail.prerequisites.map((item) => <div key={item} className="py-3 text-sm text-zinc-400">Required: {item}</div>)}</div><Button className="mt-6 bg-emerald-400 text-zinc-950 hover:bg-emerald-300" disabled={!editable || detail.prerequisites.length > 0 || submit.isPending} onClick={() => submit.mutate()}>{submit.isPending ? 'Submitting...' : editable ? 'Submit to MEJay Review' : `Release is ${detail.release.status.replace(/_/g, ' ')}`}</Button>{submit.isError && <p className="mt-3 text-sm text-red-400">{submit.error.message}</p>}</>
 }
-/** Mirrors the API's default fee model: 10% MEJay commission plus Stripe's 2.9% + 30¢ processing fee. */
+/** Per-sale estimate computed by the API with the same calculator used when a sale is fulfilled. */
 function PayoutEstimate({amountMinor}: {amountMinor: number}) {
-  const commission = Math.round(amountMinor * 0.1)
-  const processing = Math.round(amountMinor * 0.029) + 30
-  const payout = Math.max(0, amountMinor - commission - processing)
-  const format = (value: number) => `$${(value / 100).toFixed(2)}`
-  return <p className="text-xs text-zinc-400">Estimated payout per sale: <span className="text-zinc-200">{format(payout)}</span> after the {format(commission)} MEJay fee and ~{format(processing)} Stripe processing fee (deducted from your share).</p>
+  const estimate = useQuery({
+    queryKey: ['marketplace', 'pricing-estimate', amountMinor],
+    queryFn: () => getMarketplacePricingPolicy(amountMinor),
+    placeholderData: keepPreviousData,
+    staleTime: 5 * 60_000,
+  })
+  if (estimate.isError) return <p className="text-xs text-red-400">The earnings estimate is unavailable right now.</p>
+  const policy = estimate.data
+  if (!policy?.estimate) return null
+  const {platformCommissionMinor, estimatedProcessingFeeMinor, estimatedArtistProceedsMinor, grossAmountMinor} = policy.estimate
+  const rows: Array<[string, string]> = [
+    ['Track price', `${usd(grossAmountMinor)} USD`],
+    [`MEJay commission (${(policy.platformFeeBps / 100).toFixed(policy.platformFeeBps % 100 === 0 ? 0 : 2)}%)`, `-${usd(platformCommissionMinor)}`],
+    ['Estimated Stripe processing', `-${usd(estimatedProcessingFeeMinor)}`],
+  ]
+  return <div className="border border-white/10 bg-white/[0.03] p-3 text-xs text-zinc-400" aria-live="polite">
+    <dl className="space-y-1">{rows.map(([label, value]) => <div key={label} className="flex justify-between gap-4"><dt>{label}</dt><dd className="tabular-nums text-zinc-300">{value}</dd></div>)}
+      <div className="flex justify-between gap-4 border-t border-white/10 pt-1 font-medium text-zinc-100"><dt>Estimated artist share</dt><dd className="tabular-nums">{usd(estimatedArtistProceedsMinor)}</dd></div></dl>
+    <p className="mt-2">Stripe sets the actual processing fee per payment (for example, international cards cost more), and it comes out of your share. Your exact earnings for each sale appear in Sales.</p>
+  </div>
 }
