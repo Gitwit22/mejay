@@ -11,6 +11,7 @@ import type {
   PriceInput,
   ProductInput,
   ProviderInput,
+  ProviderSettingsInput,
   ReleaseDraftInput,
   ReleaseInput,
   ReleasePriceInput,
@@ -569,6 +570,31 @@ export class MarketplaceService {
       await db.prepare("UPDATE users SET account_intent = 'provider', updated_at = ?1 WHERE id = ?2").bind(now, userId).run()
       await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'provider', entityId: context.providerId, action: 'provider.completed', after: row})
       return row
+    })
+  }
+
+  /**
+   * Saves the account's business details from Settings. Owners and admins only. Unlike
+   * completeProvider (onboarding), this never changes review status or account intent.
+   */
+  async updateProviderSettings(userId: string, input: ProviderSettingsInput): Promise<unknown> {
+    return this.database.transaction(async (db: Database) => {
+      const context = await providerContext(db, userId)
+      if (!['owner', 'admin'].includes(context.role)) {
+        throw new MarketplaceError(403, 'provider_settings_forbidden', 'Only the account owner or an admin can change these settings')
+      }
+      const before = await db.prepare(
+        `SELECT display_name, legal_name, contact_email, country_code, bio FROM provider_profiles WHERE id = ?1 FOR UPDATE`,
+      ).bind(context.providerId).first()
+      if (!before) throw new MarketplaceError(404, 'not_found', 'Provider profile was not found')
+      const row = await inserted<Record<string, unknown>>(db.prepare(
+        `UPDATE provider_profiles SET display_name = ?1, legal_name = ?2, contact_email = ?3, country_code = ?4, bio = ?5,
+           updated_at = ?6
+         WHERE id = ?7
+         RETURNING id, display_name, legal_name, slug, contact_email, country_code, bio, status, created_at, updated_at`,
+      ).bind(input.displayName, input.legalName || null, input.contactEmail, input.countryCode, input.bio || null, nowIso(), context.providerId))
+      await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'provider', entityId: context.providerId, action: 'provider.settings_updated', before, after: row})
+      return {...row, role: context.role}
     })
   }
 

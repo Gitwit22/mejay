@@ -14,6 +14,7 @@ import {ArtistProfileService} from './artist-profile-service'
 import {CERTIFICATION_VERSION} from './release-certification'
 import {claimStripeWebhookEvent} from './webhook-events'
 import {MarketplaceService} from './service'
+import {providerSettingsSchema} from './schemas'
 import {sendOrderConfirmation} from './order-email'
 import {onRequest as stripeWebhook} from '../routes/stripe-webhook'
 import {createHmac} from 'node:crypto'
@@ -1033,6 +1034,32 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
     })
   })
   describe('artist profiles and release certification', () => {
+    it('saves account settings for owners only, without touching review status or the page address', async () => {
+      const fixture = await createProviderFixture('Settings')
+      const before = await pool.query<{slug: string; status: string}>('SELECT slug, status FROM provider_profiles WHERE id = $1', [fixture.provider.id])
+      // Parsed with the route's schema, exactly as the API applies it.
+      const saved = await service.updateProviderSettings(fixture.userId, providerSettingsSchema.parse({
+        displayName: 'Settings Music', legalName: 'Settings Music LLC', contactEmail: 'Team@Example.TEST', countryCode: 'ca', bio: '',
+      })) as Record<string, unknown>
+      expect(() => providerSettingsSchema.parse({displayName: 'X', legalName: null, contactEmail: 'x@example.test', countryCode: 'US', bio: null, slug: 'taken'})).toThrow()
+      expect(saved).toMatchObject({display_name: 'Settings Music', legal_name: 'Settings Music LLC', contact_email: 'team@example.test', country_code: 'CA', bio: null, role: 'owner'})
+      const after = await pool.query<{slug: string; status: string}>('SELECT slug, status FROM provider_profiles WHERE id = $1', [fixture.provider.id])
+      expect(after.rows[0]).toEqual(before.rows[0])
+      const audits = await pool.query(`SELECT 1 FROM marketplace_audit_events WHERE provider_profile_id = $1 AND action = 'provider.settings_updated'`, [fixture.provider.id])
+      expect(audits.rowCount).toBe(1)
+
+      // A viewer on the account cannot change them; a user with no account gets nothing.
+      await pool.query(`UPDATE provider_members SET role = 'viewer' WHERE user_id = $1`, [fixture.userId])
+      await expect(service.updateProviderSettings(fixture.userId, {displayName: 'Hijack', legalName: null, contactEmail: 'x@example.test', countryCode: 'US', bio: null}))
+        .rejects.toMatchObject({code: 'provider_write_forbidden'})
+      await pool.query(`UPDATE provider_members SET role = 'editor' WHERE user_id = $1`, [fixture.userId])
+      await expect(service.updateProviderSettings(fixture.userId, {displayName: 'Hijack', legalName: null, contactEmail: 'x@example.test', countryCode: 'US', bio: null}))
+        .rejects.toMatchObject({code: 'provider_settings_forbidden'})
+      await expect(service.updateProviderSettings(crypto.randomUUID(), {displayName: 'Nobody', legalName: null, contactEmail: 'x@example.test', countryCode: 'US', bio: null}))
+        .rejects.toMatchObject({status: 403})
+      expect((await pool.query('SELECT display_name FROM provider_profiles WHERE id = $1', [fixture.provider.id])).rows[0].display_name).toBe('Settings Music')
+    })
+
     afterEach(() => {
       vi.unstubAllGlobals()
     })

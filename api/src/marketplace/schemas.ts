@@ -17,6 +17,18 @@ export const providerSchema = z.object({
   bio: z.string().trim().max(2000).optional(),
 })
 
+/**
+ * Business details an artist account can edit from Settings. The page address (slug) is fixed after
+ * onboarding, and review status is never changed from here.
+ */
+export const providerSettingsSchema = z.object({
+  displayName: nonEmpty,
+  legalName: z.string().trim().max(300).nullable(),
+  contactEmail: z.string().trim().toLowerCase().email(),
+  countryCode,
+  bio: z.string().trim().max(2000).nullable(),
+}).strict()
+
 export const artistSchema = z.object({
   name: nonEmpty,
   sortName: nonEmpty.optional(),
@@ -263,6 +275,7 @@ export const submitReleaseSchema = z.object({
 })
 
 export type ProviderInput = z.infer<typeof providerSchema>
+export type ProviderSettingsInput = z.infer<typeof providerSettingsSchema>
 export type ArtistInput = z.infer<typeof artistSchema>
 export type ReleaseInput = z.infer<typeof releaseSchema>
 export type ReleaseDraftInput = z.infer<typeof releaseDraftSchema>

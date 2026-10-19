@@ -29,6 +29,7 @@ import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
 import {getProviderStatusLabel, parseProviderStatus} from '@/lib/marketplace'
 import {ArtistProfileEditor} from '@/app/components/provider/ArtistProfileEditor'
+import {ProviderSettings} from '@/app/components/provider/ProviderSettings'
 import {getConnectStatus, openConnectDashboard, startConnectOnboarding, type ConnectOnboardingStatus, type ConnectStatus} from '@/lib/marketplaceCommerceApi'
 import {ProviderEarningsReporting, ProviderOverviewReporting, ProviderSalesReporting} from '@/app/components/provider/ProviderReporting'
 import {
@@ -143,9 +144,9 @@ function PortalSection({section, dashboard, loading, onNavigate, range, onRangeC
   if (section === 'sales') return <ProviderSalesReporting range={range} onRangeChange={onRangeChange} />
   if (section === 'earnings') return <ProviderEarningsReporting range={range} onRangeChange={onRangeChange} />
   if (section === 'payout') return <PayoutAccount />
-  const labels: Record<Exclude<Section, 'overview' | 'artists' | 'releases' | 'sales' | 'earnings' | 'payout'>, {title: string; detail: string}> = {
+  if (section === 'settings') return loading || !dashboard ? <Skeleton className="h-96 bg-white/5" /> : <ProviderSettings provider={dashboard.provider} onOpenPayout={() => onNavigate('payout')} />
+  const labels: Record<Exclude<Section, 'overview' | 'artists' | 'releases' | 'sales' | 'earnings' | 'payout' | 'settings'>, {title: string; detail: string}> = {
     isrcs: {title: 'ISRC registry is next', detail: 'Assigned and imported ISRC history will appear here as release creation comes online.'},
-    settings: {title: 'Provider settings are next', detail: 'Business identity, contact, and team settings will be managed here.'},
   }
   const state = labels[section]
   return <EmptyState title={state.title} detail={state.detail} />

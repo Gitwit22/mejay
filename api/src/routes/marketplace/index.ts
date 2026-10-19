@@ -8,6 +8,7 @@ import {
   priceSchema,
   productSchema,
   providerSchema,
+  providerSettingsSchema,
   releaseSchema,
   releaseDraftSchema,
   releasePriceSchema,
@@ -115,6 +116,7 @@ function requiredParam(params: Record<string, string | undefined>, name: string)
 
 export const createProvider = handler(providerSchema, (service, userId, input) => service.completeProvider(userId, input))
 export const getDashboard = readHandler((service, userId) => service.getDashboard(userId))
+export const updateProviderSettings = handler(providerSettingsSchema, (service, userId, input) => service.updateProviderSettings(userId, input), 200)
 export const listArtists = readHandler((service, userId) => service.listArtists(userId))
 export const createArtist = handler(artistSchema, (service, userId, input) => service.createArtist(userId, input))
 export const listReleases = readHandler((service, userId) => service.listReleases(userId))

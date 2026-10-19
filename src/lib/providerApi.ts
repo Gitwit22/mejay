@@ -4,6 +4,12 @@ export type ProviderDashboard = {
   provider: {
     id: string
     display_name: string | null
+    legal_name?: string | null
+    slug?: string | null
+    contact_email?: string | null
+    country_code?: string | null
+    bio?: string | null
+    created_at?: string
     status: string
     role: string
   }
@@ -258,6 +264,19 @@ export function submitProviderProfile(input: ProviderProfileInput): Promise<{id:
 
 export function getProviderDashboard(): Promise<ProviderDashboard> {
   return request('/api/marketplace/dashboard')
+}
+
+/** Business details editable from portal Settings; the page address and review status are not. */
+export type ProviderSettingsInput = {
+  displayName: string
+  legalName: string | null
+  contactEmail: string
+  countryCode: string
+  bio: string | null
+}
+
+export function updateProviderSettings(input: ProviderSettingsInput): Promise<ProviderDashboard['provider']> {
+  return request('/api/marketplace/provider/settings', {method: 'PATCH', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
 }
 
 export function getProviderReporting(range: ReportingRange): Promise<ProviderSalesReport> {
