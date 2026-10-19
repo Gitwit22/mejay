@@ -86,6 +86,19 @@ export function getPublicArtist(slug: string): Promise<{artist: PublicArtist; re
   return request(`/api/store/artists/${encodeURIComponent(slug)}`)
 }
 
+/** Why an artist page is or is not public; shown to the artist on their preview. */
+export type ArtistPageVisibility = {public: boolean; suspended: boolean; payoutsReady: boolean; hasLiveRelease: boolean}
+
+/** The signed-in owner's view of their own artist page, available before it is public. */
+export function getArtistPagePreview(artistId: string): Promise<{artist: PublicArtist; releases: StoreRelease[]; visibility: ArtistPageVisibility}> {
+  return request(`/api/marketplace/artists/${encodeURIComponent(artistId)}/page-preview`)
+}
+
+/** One of the owner's profile images, served only to the owning account. */
+export function artistPreviewImageUrl(artistId: string, assetId: string | null | undefined): string | null {
+  return assetId ? apiUrl(`/api/marketplace/artists/${encodeURIComponent(artistId)}/page-preview/images/${encodeURIComponent(assetId)}`) : null
+}
+
 export function getStoreRelease(releaseId: string): Promise<StoreReleaseDetail> {
   return request(`/api/store/releases/${encodeURIComponent(releaseId)}`)
 }

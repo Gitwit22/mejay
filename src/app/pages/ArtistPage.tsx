@@ -1,6 +1,6 @@
-import {useEffect, useState, type CSSProperties} from 'react'
+import {useEffect, useState, type CSSProperties, type ReactNode} from 'react'
 import {useQuery} from '@tanstack/react-query'
-import {BadgeCheck, ExternalLink, Mail, MapPin, Pause, Play, ShoppingBag} from 'lucide-react'
+import {ArrowLeft, BadgeCheck, ExternalLink, Mail, MapPin, Pause, Play, ShoppingBag} from 'lucide-react'
 import {Link, useParams} from 'react-router-dom'
 
 import {Cover, ProductCard, PurchaseButton, StoreError, StoreLoading} from '@/app/pages/MusicStorePage'
@@ -9,7 +9,7 @@ import {Dialog, DialogContent, DialogTitle} from '@/components/ui/dialog'
 import {usePreview} from '@/hooks/useStorePreview'
 import {getPublicArtist, storeAssetUrl, type PublicArtist, type StoreRelease} from '@/lib/musicStoreApi'
 import {accentForeground, artistAccent} from '@/lib/artistTheme'
-import {usePlanStore} from '@/stores/planStore'
+import {useResolvedAuthStatus} from '@/hooks/useResolvedAuthStatus'
 
 const linkLabels: Record<string, string> = {
   website: 'Website', instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube', facebook: 'Facebook', x: 'X',
@@ -78,30 +78,47 @@ function DetroitSkyline() {
   </svg>
 }
 
-/** Public artist page at /artist/:slug. Only artists with LIVE music resolve; releases come from the marketplace catalog. */
+/** The bar above every artist page that leads back into MeJay. */
+export function ArtistPageTopBar({to, label = 'Back to MeJay', children}: {to: string; label?: string; children?: ReactNode}) {
+  return <div className="sticky top-0 z-40 border-b border-white/10 bg-[#0a0a0b]/85 backdrop-blur">
+    <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 sm:px-8">
+      <Button asChild size="sm" variant="ghost" className="gap-2 text-zinc-200"><Link to={to}><ArrowLeft className="h-4 w-4" />{label}</Link></Button>
+      {children}
+    </div>
+  </div>
+}
+
+/** Public artist page at /artist/:slug. Visibility is decided by the API; releases come from the marketplace catalog. */
 export default function ArtistPage() {
   const {slug = ''} = useParams()
-  const authStatus = usePlanStore((state) => state.authStatus)
-  // This page lives outside the app shell; resolve the session so Buy goes straight to checkout.
-  useEffect(() => {
-    if (authStatus === 'unknown') void usePlanStore.getState().refreshFromServer({reason: 'appEntry'}).catch(() => undefined)
-  }, [authStatus])
+  const authStatus = useResolvedAuthStatus()
   const page = useQuery({queryKey: ['artist-page', slug], queryFn: () => getPublicArtist(slug), enabled: Boolean(slug), retry: false})
-  const preview = usePreview()
-  const [openImage, setOpenImage] = useState<{src: string; caption: string | null} | null>(null)
   useEffect(() => {
     if (page.data) document.title = `${page.data.artist.name} | MeJay`
   }, [page.data])
 
   if (page.isLoading) return <StoreLoading />
   if (page.isError || !page.data) return <StoreError message="This artist page is not available." />
-  const {artist, releases} = page.data
+  return <ArtistPageView artist={page.data.artist} releases={page.data.releases} imageUrl={storeAssetUrl}
+    topBar={<ArtistPageTopBar to={authStatus === 'authenticated' ? '/app' : '/'} />} />
+}
+
+/** The artist page itself, shared by the public page and the owner's preview. */
+export function ArtistPageView({artist, releases, imageUrl, topBar}: {
+  artist: PublicArtist
+  releases: StoreRelease[]
+  /** Builds the URL of one of the artist's profile images; the preview serves them to the owner only. */
+  imageUrl: (assetId: string | null | undefined) => string | null
+  topBar?: ReactNode
+}) {
+  const preview = usePreview()
+  const [openImage, setOpenImage] = useState<{src: string; caption: string | null} | null>(null)
   const accent = artistAccent(artist.accent_color)
   const accentText = accentForeground(accent)
-  const background = storeAssetUrl(artist.banner_asset_id)
-  const cutout = storeAssetUrl(artist.cutout_asset_id)
-  const photo = storeAssetUrl(artist.profile_photo_asset_id)
-  const storyPhoto = storeAssetUrl(artist.story_photo_asset_id) ?? photo
+  const background = imageUrl(artist.banner_asset_id)
+  const cutout = imageUrl(artist.cutout_asset_id)
+  const photo = imageUrl(artist.profile_photo_asset_id)
+  const storyPhoto = imageUrl(artist.story_photo_asset_id) ?? photo
   const featured = releases.find((release) => release.id === artist.featured_release_id) ?? releases[0]
   const catalog = releases.filter((release) => release.id !== featured?.id)
   const links = artistLinks(artist)
@@ -111,6 +128,7 @@ export default function ArtistPage() {
   const style = {'--artist-accent': accent, '--artist-accent-foreground': accentText} as CSSProperties
 
   return <div className="min-h-screen bg-[#0a0a0b] text-zinc-100" style={style}>
+    {topBar}
     <header className="relative isolate">
       <div className="absolute inset-0 -z-10 overflow-hidden">
         {background ? <img src={background} alt="" className="h-full w-full object-cover" /> : <DetroitSkyline />}
@@ -189,7 +207,7 @@ export default function ArtistPage() {
         <SectionHeading id="gallery-heading" accent={accent} eyebrow="Gallery" title="Photos" />
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {gallery.map((image) => {
-            const src = storeAssetUrl(image.asset_id)
+            const src = imageUrl(image.asset_id)
             if (!src) return null
             return <button key={image.asset_id} type="button" className="group overflow-hidden rounded-xl focus-visible:outline focus-visible:outline-2" onClick={() => setOpenImage({src, caption: image.caption})}>
               <img src={src} alt={image.caption ?? `${artist.name} photo`} loading="lazy" className="aspect-square w-full object-cover transition duration-300 group-hover:scale-105" />

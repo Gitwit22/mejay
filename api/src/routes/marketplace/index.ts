@@ -235,6 +235,43 @@ export const getArtistProfile = async (context: Context): Promise<Response> => {
   }
 }
 
+export const getArtistPagePreview = async (context: Context): Promise<Response> => {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+  const userId = await getSessionUserId(context.request, context.env)
+  if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+  try {
+    return json({ok: true, data: await new ArtistProfileService(context.env.DB).getOwnerPreview(userId, requiredParam(context.params ?? {}, 'artistId'))})
+  } catch (error) {
+    return errorResponse(error)
+  }
+}
+
+/** Streams one of the owner's own profile images for the page preview; ownership is checked per request. */
+export const getArtistPagePreviewImage = async (context: Context): Promise<Response> => {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+  if (!context.env.DOWNLOADS) return json({ok: false, error: 'storage_unavailable'}, {status: 503})
+  const userId = await getSessionUserId(context.request, context.env)
+  if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+  try {
+    const params = context.params ?? {}
+    const asset = await new ArtistProfileService(context.env.DB).getOwnedProfileImage(userId, requiredParam(params, 'artistId'), requiredParam(params, 'assetId'))
+    const object = await context.env.DOWNLOADS.getExact(asset.storageKey)
+    if (!object) return json({ok: false, error: 'not_found'}, {status: 404})
+    return new Response(object.body, {
+      status: 200,
+      headers: {
+        'content-type': asset.mimeType,
+        'cache-control': 'private, no-store, max-age=0',
+        'content-disposition': 'inline',
+        'x-content-type-options': 'nosniff',
+        ...(object.contentLength ? {'content-length': String(object.contentLength)} : {}),
+      },
+    })
+  } catch (error) {
+    return errorResponse(error)
+  }
+}
+
 export const updateArtistProfile = async (context: Context): Promise<Response> => {
   if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
   const userId = await getSessionUserId(context.request, context.env)

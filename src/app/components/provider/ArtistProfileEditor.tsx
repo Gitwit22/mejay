@@ -173,7 +173,6 @@ function ProfileForm({artistId, onSaved}: {artistId: string; onSaved: () => void
 
   if (profile.isLoading || !form || !gallery) return <p className="text-sm text-zinc-400">Loading profile...</p>
   if (profile.isError) return <p className="text-sm text-red-400">{profile.error.message}</p>
-  const live = (profile.data?.liveReleaseCount ?? 0) > 0
   const liveReleases = profile.data?.liveReleases ?? []
   const set = (patch: Partial<FormState>) => setForm({...form, ...patch})
   const updateGallery = (next: GalleryItem[]) => {
@@ -193,7 +192,7 @@ function ProfileForm({artistId, onSaved}: {artistId: string; onSaved: () => void
       <div className="space-y-1"><Label htmlFor="artist-name">Artist / stage name</Label><Input id="artist-name" required maxLength={120} value={form.name} onChange={(event) => set({name: event.target.value})} /></div>
       <div className="space-y-1"><Label htmlFor="artist-slug">Page address</Label><div className="flex items-center gap-1 text-sm text-zinc-500">/artist/<Input id="artist-slug" className="h-9" value={form.slug} maxLength={80} onChange={(event) => set({slug: event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-')})} /></div></div>
     </div>
-    <p className="text-xs text-zinc-500">{live ? <Link to={`/artist/${profile.data?.slug}`} target="_blank" className="inline-flex items-center gap-1 text-emerald-400 hover:underline">View public page <ExternalLink className="h-3 w-3" /></Link> : 'Your public page goes live with your first approved, published release.'}</p>
+    <p className="text-xs text-zinc-500"><Link to={`/artist-preview/${artistId}`} className="inline-flex items-center gap-1 text-emerald-400 hover:underline">View my artist page <ExternalLink className="h-3 w-3" /></Link> Your page goes public once Stripe payouts are connected or a release is live.</p>
 
     <fieldset className="space-y-3"><legend className="text-sm font-semibold">Page look</legend>
       <div className="grid gap-4 sm:grid-cols-2">

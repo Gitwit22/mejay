@@ -1,5 +1,6 @@
 import {MarketplaceError} from './service'
 import {isMarketplaceStorageKey} from './storage-keys'
+import {artistPubliclyVisibleSql} from './artist-visibility'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -169,7 +170,7 @@ export class StoreService {
   async getAsset(assetId: string): Promise<StoreAsset> {
     const asset = await this.database.prepare(
       // Only public kinds: release artwork and audio previews of LIVE releases, and profile imagery
-      // of artists who have a LIVE release. Rights documents are never served from here.
+      // of artists whose page is public (artistPubliclyVisibleSql). Rights documents are never served from here.
       `SELECT asset.storage_key, asset.mime_type, asset.byte_size, track.duration_ms
        FROM marketplace_assets asset
        LEFT JOIN tracks track ON track.id = asset.track_id
@@ -177,8 +178,8 @@ export class StoreService {
          (asset.kind IN ('artwork', 'audio') AND EXISTS (
            SELECT 1 FROM releases r WHERE r.id = COALESCE(asset.release_id, track.release_id) AND r.status = 'LIVE'))
          OR (asset.kind IN ('artist_photo', 'artist_banner', 'artist_cutout', 'artist_gallery') AND EXISTS (
-           SELECT 1 FROM release_artists credit JOIN releases r ON r.id = credit.release_id
-           WHERE credit.artist_id = asset.artist_id AND credit.is_primary = TRUE AND r.status = 'LIVE'))
+           SELECT 1 FROM artists a JOIN provider_profiles provider ON provider.id = a.provider_profile_id
+           WHERE a.id = asset.artist_id AND ${artistPubliclyVisibleSql('a', 'provider')}))
        )`,
     ).bind(assetId).first<{storage_key: string; mime_type: string; byte_size: number | string; duration_ms: number | null}>()
     if (!asset || !isMarketplaceStorageKey(asset.storage_key)) {

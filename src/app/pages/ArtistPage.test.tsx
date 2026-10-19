@@ -58,6 +58,8 @@ describe('public artist page', () => {
 
     fireEvent.click(screen.getByRole('button', {name: 'Purchase'}))
     await waitFor(() => expect(startStoreCheckout).toHaveBeenCalledWith('release-new-product'))
+    // Signed-in visitors get a way back into the app.
+    expect(screen.getByRole('link', {name: /Back to MeJay/})).toHaveAttribute('href', '/app')
   })
 
   it('builds the release-website layout from the artist page fields', async () => {
@@ -112,6 +114,19 @@ describe('public artist page', () => {
     expect(accentForeground('#ffffff')).toBe('#0a0a0b')
     expect(accentForeground('#facc15')).toBe('#0a0a0b')
     expect(accentForeground('#1e3a8a')).toBe('#ffffff')
+  })
+
+  it('sends signed-out visitors back to the MeJay home page', async () => {
+    usePlanStore.setState({authStatus: 'anonymous'})
+    vi.mocked(getPublicArtist).mockResolvedValue({
+      artist: {
+        id: 'artist-1', name: 'John Blaze', slug: 'john-blaze', tagline: null, bio: null, location: null, genres: [], links: {},
+        spotify_artist_id: null, apple_music_artist_id: null, profile_photo_asset_id: null, banner_asset_id: null, verified: false,
+      },
+      releases: [],
+    })
+    renderPage()
+    expect(await screen.findByRole('link', {name: /Back to MeJay/})).toHaveAttribute('href', '/')
   })
 
   it('shows a not-available message for unknown or non-public artists', async () => {

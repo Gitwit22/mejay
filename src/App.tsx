@@ -26,6 +26,7 @@ import PrivacyPage from "./app/pages/PrivacyPage";
 import DevAdminPage from "./app/pages/DevAdminPage";
 import MusicStorePage from "./app/pages/MusicStorePage";
 import ArtistPage from "./app/pages/ArtistPage";
+import ArtistPagePreview from "./app/pages/ArtistPagePreview";
 import {StoreReleasePage} from "./app/pages/MusicStorePage";
 import ProviderOnboardingPage from "./app/pages/ProviderOnboardingPage";
 import ProviderPortalPage from "./app/pages/ProviderPortalPage";
@@ -518,6 +519,7 @@ const AnimatedRoutes = () => {
         <Route path="/privacy" element={<PrivacyPage mode="public" />} />
         <Route path="/contact" element={<ContactPage mode="public" />} />
         <Route path="/artist/:slug" element={<ArtistPage />} />
+        <Route path="/artist-preview/:artistId" element={<ArtistPagePreview />} />
         {/* App routes - auth required */}
         <Route path="/app" element={<AppShellLayout />}>
           <Route index element={<Index />} />

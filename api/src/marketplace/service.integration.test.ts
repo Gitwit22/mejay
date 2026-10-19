@@ -1178,11 +1178,24 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       expect(updated).toMatchObject({tagline: 'Hello', profile_photo_asset_id: photoId, links: {instagram: 'https://instagram.com/ownera'}})
     })
 
-    it('shows a public artist page only while the artist has LIVE music, and never exposes rights documents', async () => {
+    it('shows a public artist page while the artist has LIVE music or Stripe payouts, and never exposes rights documents', async () => {
       await resetIsrcState()
       const draft = await prepareLiveRelease('Hidden', {stage: 'pricing'})
       const hiddenSlug = (await pool.query<{slug: string}>('SELECT slug FROM artists WHERE id = $1', [draft.artist.id])).rows[0].slug
+      const setPayouts = (providerId: string, ready: boolean) => pool.query(
+        `UPDATE provider_profiles SET stripe_payouts_enabled = $2, stripe_transfers_status = $3 WHERE id = $1`,
+        [providerId, ready, ready ? 'active' : 'inactive'],
+      )
+      // No LIVE music and no Stripe payouts: not public.
+      await setPayouts(draft.provider.id, false)
       await expect(profiles().getPublicArtist(hiddenSlug)).rejects.toMatchObject({code: 'not_found'})
+      // Connecting Stripe makes the page public before any music is live; the draft is not listed.
+      await setPayouts(draft.provider.id, true)
+      expect((await profiles().getPublicArtist(hiddenSlug)).releases).toEqual([])
+      // Suspension hides it again whatever else is true.
+      await pool.query('UPDATE provider_profiles SET suspended_at = CURRENT_TIMESTAMP WHERE id = $1', [draft.provider.id])
+      await expect(profiles().getPublicArtist(hiddenSlug)).rejects.toMatchObject({code: 'not_found'})
+      await pool.query('UPDATE provider_profiles SET suspended_at = NULL WHERE id = $1', [draft.provider.id])
 
       const live = await prepareLiveRelease('Shown')
       const slug = (await pool.query<{slug: string}>('SELECT slug FROM artists WHERE id = $1', [live.artist.id])).rows[0].slug
@@ -1211,13 +1224,31 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       )
       await expect(store.getAsset(photoId)).resolves.toMatchObject({mimeType: 'image/jpeg'})
 
-      // Taking the only LIVE release down removes the page and its imagery.
+      // With Stripe payouts off, the LIVE release alone keeps the page up...
+      await setPayouts(live.provider.id, false)
+      await expect(profiles().getPublicArtist(slug)).resolves.toMatchObject({artist: {name: 'Shown Artist'}})
+      // ...and taking it down removes the page and its imagery.
       await adminService().commandRelease(adminUserId, live.release.id, {action: 'takedown', expectedVersion: live.version, note: 'Rights claim'})
       await expect(profiles().getPublicArtist(slug)).rejects.toMatchObject({code: 'not_found'})
       await expect(store.getAsset(photoId)).rejects.toMatchObject({code: 'not_found'})
+
+      // The owner can still preview the hidden page and its imagery, and is told why it is hidden.
+      const preview = await profiles().getOwnerPreview(live.userId, live.artist.id)
+      expect(preview.artist).toMatchObject({name: 'Shown Artist'})
+      expect(preview.artist).not.toHaveProperty('provider_profile_id')
+      expect(preview.visibility).toEqual({public: false, suspended: false, payoutsReady: false, hasLiveRelease: false})
+      await expect(profiles().getOwnedProfileImage(live.userId, live.artist.id, photoId)).resolves.toMatchObject({mimeType: 'image/jpeg'})
+      // Rights documents are never served as profile images, even to the owner.
+      await expect(profiles().getOwnedProfileImage(live.userId, live.artist.id, documentId)).rejects.toMatchObject({code: 'not_found'})
+      // Another account can neither preview the page nor read its images.
+      await expect(profiles().getOwnerPreview(draft.userId, live.artist.id)).rejects.toMatchObject({code: 'not_found'})
+      await expect(profiles().getOwnedProfileImage(draft.userId, live.artist.id, photoId)).rejects.toMatchObject({code: 'not_found'})
+      await setPayouts(live.provider.id, true)
+      expect((await profiles().getOwnerPreview(live.userId, live.artist.id)).visibility).toEqual({public: true, suspended: false, payoutsReady: true, hasLiveRelease: false})
+      await expect(store.getAsset(photoId)).resolves.toMatchObject({mimeType: 'image/jpeg'})
     })
 
-    it('saves release-page fields and galleries for the owning artist only, exposing them only while LIVE', async () => {
+    it('saves release-page fields and galleries for the owning artist only, exposing them only while the page is public', async () => {
       await resetIsrcState()
       const live = await prepareLiveRelease('PageOwner')
       const other = await prepareLiveRelease('PageIntruder')
@@ -1271,6 +1302,8 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       await expect(store.getAsset(cutout)).resolves.toMatchObject({mimeType: 'image/png'})
       await expect(store.getAsset(galleryA)).resolves.toMatchObject({mimeType: 'image/png'})
 
+      // Without Stripe payouts, the page (and its imagery) lasts only as long as the LIVE release.
+      await pool.query(`UPDATE provider_profiles SET stripe_payouts_enabled = FALSE, stripe_transfers_status = 'inactive' WHERE id = $1`, [live.provider.id])
       await adminService().commandRelease(adminUserId, live.release.id, {action: 'takedown', expectedVersion: live.version, note: 'Rights claim'})
       await expect(store.getAsset(cutout)).rejects.toMatchObject({code: 'not_found'})
       await expect(store.getAsset(galleryA)).rejects.toMatchObject({code: 'not_found'})
