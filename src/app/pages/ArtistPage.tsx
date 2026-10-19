@@ -17,6 +17,8 @@ const linkLabels: Record<string, string> = {
   amazonMusic: 'Amazon Music', deezer: 'Deezer',
 }
 
+const GALLERY_PREVIEW_COUNT = 3
+
 function formatPrice(amount: number, currency: string) {
   return new Intl.NumberFormat('en-US', {style: 'currency', currency: currency || 'USD'}).format(Number(amount) / 100)
 }
@@ -115,6 +117,7 @@ export function ArtistPageView({artist, releases, imageUrl, topBar}: {
 }) {
   const preview = usePreview()
   const [openImage, setOpenImage] = useState<{src: string; caption: string | null} | null>(null)
+  const [showAllPhotos, setShowAllPhotos] = useState(false)
   const accent = artistAccent(artist.accent_color)
   const accentText = accentForeground(accent)
   const background = imageUrl(artist.banner_asset_id)
@@ -126,6 +129,9 @@ export function ArtistPageView({artist, releases, imageUrl, topBar}: {
   const links = artistLinks(artist)
   const booking = bookingLink(artist)
   const gallery = artist.gallery ?? []
+  // The page leads with three photos; the rest stay one tap away so the gallery never dominates.
+  const visiblePhotos = showAllPhotos ? gallery : gallery.slice(0, GALLERY_PREVIEW_COUNT)
+  const hiddenPhotoCount = gallery.length - GALLERY_PREVIEW_COUNT
   const playing = featured ? preview.playingId === featured.id : false
   const style = {'--artist-accent': accent, '--artist-accent-foreground': accentText} as CSSProperties
 
@@ -207,8 +213,8 @@ export function ArtistPageView({artist, releases, imageUrl, topBar}: {
 
       {gallery.length > 0 && <section aria-labelledby="gallery-heading">
         <SectionHeading id="gallery-heading" accent={accent} eyebrow="Gallery" title="Photos" />
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-          {gallery.map((image) => {
+        <div className="grid grid-cols-3 gap-2 sm:gap-3">
+          {visiblePhotos.map((image) => {
             const src = imageUrl(image.asset_id)
             if (!src) return null
             return <button key={image.asset_id} type="button" className="group overflow-hidden rounded-xl focus-visible:outline focus-visible:outline-2" onClick={() => setOpenImage({src, caption: image.caption})}>
@@ -216,6 +222,11 @@ export function ArtistPageView({artist, releases, imageUrl, topBar}: {
             </button>
           })}
         </div>
+        {hiddenPhotoCount > 0 && <div className="mt-4 flex justify-center">
+          <Button variant="outline" aria-expanded={showAllPhotos} onClick={() => setShowAllPhotos((value) => !value)}>
+            {showAllPhotos ? 'Show fewer photos' : `See more photos (${hiddenPhotoCount})`}
+          </Button>
+        </div>}
       </section>}
 
       {(links.length > 0 || booking) && <section aria-labelledby="connect-heading" className="rounded-2xl border border-white/10 p-5 sm:p-10" style={{background: `linear-gradient(135deg, ${accent}22, transparent 60%)`}}>

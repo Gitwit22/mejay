@@ -130,6 +130,41 @@ describe('public artist page', () => {
     expect(screen.queryByRole('link', {name: /Back to MeJay/})).not.toBeInTheDocument()
   })
 
+  it('shows the first three gallery photos and reveals the rest on request', async () => {
+    vi.mocked(getPublicArtist).mockResolvedValue({
+      artist: {
+        id: 'artist-1', name: 'John Blaze', slug: 'john-blaze', tagline: null, bio: null, location: null, genres: [], links: {},
+        spotify_artist_id: null, apple_music_artist_id: null, profile_photo_asset_id: null, banner_asset_id: null, verified: false,
+        gallery: [1, 2, 3, 4, 5].map((n) => ({asset_id: `g${n}`, caption: `Photo ${n}`, position: n - 1})),
+      },
+      releases: [],
+    })
+    renderPage()
+    expect(await screen.findByAltText('Photo 1')).toBeInTheDocument()
+    expect(screen.getByAltText('Photo 3')).toBeInTheDocument()
+    expect(screen.queryByAltText('Photo 4')).not.toBeInTheDocument()
+    const toggle = screen.getByRole('button', {name: 'See more photos (2)'})
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(toggle)
+    expect(screen.getByAltText('Photo 5')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Show fewer photos'}))
+    expect(screen.queryByAltText('Photo 4')).not.toBeInTheDocument()
+  })
+
+  it('shows no See more button with three or fewer photos', async () => {
+    vi.mocked(getPublicArtist).mockResolvedValue({
+      artist: {
+        id: 'artist-1', name: 'John Blaze', slug: 'john-blaze', tagline: null, bio: null, location: null, genres: [], links: {},
+        spotify_artist_id: null, apple_music_artist_id: null, profile_photo_asset_id: null, banner_asset_id: null, verified: false,
+        gallery: [1, 2, 3].map((n) => ({asset_id: `g${n}`, caption: `Photo ${n}`, position: n - 1})),
+      },
+      releases: [],
+    })
+    renderPage()
+    expect(await screen.findByAltText('Photo 3')).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: /See more photos/})).not.toBeInTheDocument()
+  })
+
   it('shows a not-available message for unknown or non-public artists', async () => {
     vi.mocked(getPublicArtist).mockRejectedValue(new Error('Artist was not found'))
     renderPage()
