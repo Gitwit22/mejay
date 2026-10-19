@@ -30,6 +30,7 @@ import {toast} from '@/hooks/use-toast'
 import {getProviderStatusLabel, parseProviderStatus} from '@/lib/marketplace'
 import {ArtistProfileEditor} from '@/app/components/provider/ArtistProfileEditor'
 import {ProviderSettings} from '@/app/components/provider/ProviderSettings'
+import {ProviderIsrcs} from '@/app/components/provider/ProviderIsrcs'
 import {getConnectStatus, openConnectDashboard, startConnectOnboarding, type ConnectOnboardingStatus, type ConnectStatus} from '@/lib/marketplaceCommerceApi'
 import {ProviderEarningsReporting, ProviderOverviewReporting, ProviderSalesReporting} from '@/app/components/provider/ProviderReporting'
 import {
@@ -145,11 +146,7 @@ function PortalSection({section, dashboard, loading, onNavigate, range, onRangeC
   if (section === 'earnings') return <ProviderEarningsReporting range={range} onRangeChange={onRangeChange} />
   if (section === 'payout') return <PayoutAccount />
   if (section === 'settings') return loading || !dashboard ? <Skeleton className="h-96 bg-white/5" /> : <ProviderSettings provider={dashboard.provider} onOpenPayout={() => onNavigate('payout')} />
-  const labels: Record<Exclude<Section, 'overview' | 'artists' | 'releases' | 'sales' | 'earnings' | 'payout' | 'settings'>, {title: string; detail: string}> = {
-    isrcs: {title: 'ISRC registry is next', detail: 'Assigned and imported ISRC history will appear here as release creation comes online.'},
-  }
-  const state = labels[section]
-  return <EmptyState title={state.title} detail={state.detail} />
+  return <ProviderIsrcs />
 }
 
 const connectStatusCopy: Record<ConnectOnboardingStatus, {label: string; tone: 'ready' | 'pending' | 'blocked'; detail: string}> = {

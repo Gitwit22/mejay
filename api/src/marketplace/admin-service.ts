@@ -84,7 +84,7 @@ async function requireStaff(database: Database, userId: string): Promise<{role: 
   return staff
 }
 
-function escapeCsvCell(value: unknown): string {
+export function escapeCsvCell(value: unknown): string {
   const unsafe = value === null || value === undefined ? '' : String(value)
   const text = /^[=+\-@]/.test(unsafe) ? `'${unsafe}` : unsafe
   if (!/[",\n]/.test(text)) return text

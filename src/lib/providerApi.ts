@@ -1,4 +1,4 @@
-import {apiFetch} from './api'
+import {apiFetch, apiUrl} from './api'
 
 export type ProviderDashboard = {
   provider: {
@@ -264,6 +264,28 @@ export function submitProviderProfile(input: ProviderProfileInput): Promise<{id:
 
 export function getProviderDashboard(): Promise<ProviderDashboard> {
   return request('/api/marketplace/dashboard')
+}
+
+/** One ISRC recorded against the account's tracks; `isrc` is already formatted (QT-A3L-26-00001). */
+export type ProviderIsrc = {
+  id: string
+  isrc: string
+  track_title: string | null
+  artist_name: string | null
+  release_id: string | null
+  release_title: string | null
+  assignment_type: 'MEJAY_ASSIGNED' | 'EXTERNAL' | null
+  status: 'RESERVED' | 'ASSIGNED' | 'REGISTERED' | 'VOIDED' | null
+  assigned_at: string | null
+}
+
+export function listProviderIsrcs(): Promise<ProviderIsrc[]> {
+  return request('/api/marketplace/isrcs')
+}
+
+/** CSV of the account's ISRCs; opened as a normal download so the session cookie applies. */
+export function providerIsrcExportUrl(): string {
+  return apiUrl('/api/marketplace/isrcs/export')
 }
 
 /** Business details editable from portal Settings; the page address and review status are not. */

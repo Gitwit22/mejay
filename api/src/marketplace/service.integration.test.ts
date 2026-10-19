@@ -15,6 +15,7 @@ import {CERTIFICATION_VERSION} from './release-certification'
 import {claimStripeWebhookEvent} from './webhook-events'
 import {MarketplaceService} from './service'
 import {providerSettingsSchema} from './schemas'
+import {ProviderIsrcService} from './provider-isrc-service'
 import {sendOrderConfirmation} from './order-email'
 import {onRequest as stripeWebhook} from '../routes/stripe-webhook'
 import {createHmac} from 'node:crypto'
@@ -1034,6 +1035,31 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
     })
   })
   describe('artist profiles and release certification', () => {
+    it('lists and exports only the signed-in account\'s own ISRCs', async () => {
+      await resetIsrcState()
+      const mine = await prepareLiveRelease('IsrcMine')
+      const theirs = await prepareLiveRelease('IsrcTheirs')
+      const isrcs = new ProviderIsrcService(new Database(connectionString!, pool) as never)
+      const rows = await isrcs.list(mine.userId)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({track_title: 'IsrcMine Track', release_id: mine.release.id, release_title: 'IsrcMine Release', assignment_type: 'MEJAY_ASSIGNED'})
+      expect(rows[0].isrc).toMatch(/^QT-A3L-\d{2}-\d{5}$/)
+      const theirRows = await isrcs.list(theirs.userId)
+      expect(theirRows).toHaveLength(1)
+      expect(theirRows[0].isrc).not.toBe(rows[0].isrc)
+
+      const csv = await isrcs.exportCsv(mine.userId)
+      expect(csv.fileName).toMatch(/^mejay-isrcs-\d{4}-\d{2}-\d{2}\.csv$/)
+      const lines = csv.data.trim().split('\n')
+      expect(lines[0]).toBe('ISRC,Track,Artist,Release,Source,Status,Assigned')
+      expect(lines).toHaveLength(2)
+      expect(lines[1]).toContain(rows[0].isrc)
+      expect(lines[1]).toContain('Issued by MeJay')
+      expect(csv.data).not.toContain(theirRows[0].isrc)
+      // No artist account: refused rather than returning anything.
+      await expect(isrcs.list(crypto.randomUUID())).rejects.toMatchObject({status: 403})
+    })
+
     it('saves account settings for owners only, without touching review status or the page address', async () => {
       const fixture = await createProviderFixture('Settings')
       const before = await pool.query<{slug: string; status: string}>('SELECT slug, status FROM provider_profiles WHERE id = $1', [fixture.provider.id])

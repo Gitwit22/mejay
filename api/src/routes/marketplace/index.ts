@@ -28,6 +28,7 @@ import {ReleaseSubmissionService, trackCreditsSchema} from '../../marketplace/re
 import {certificationDraftSchema, rightsMaterialSchema} from '../../marketplace/release-certification'
 import {artistGallerySchema, artistProfileSchema} from '../../marketplace/artist-profile'
 import {ArtistProfileService} from '../../marketplace/artist-profile-service'
+import {ProviderIsrcService} from '../../marketplace/provider-isrc-service'
 
 type Context = {
   request: Request
@@ -232,6 +233,35 @@ export const getArtistProfile = async (context: Context): Promise<Response> => {
   if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
   try {
     return json({ok: true, data: await new ArtistProfileService(context.env.DB).getProfile(userId, requiredParam(context.params ?? {}, 'artistId'))})
+  } catch (error) {
+    return errorResponse(error)
+  }
+}
+
+export const listProviderIsrcs = async (context: Context): Promise<Response> => {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+  const userId = await getSessionUserId(context.request, context.env)
+  if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+  try {
+    return json({ok: true, data: await new ProviderIsrcService(context.env.DB).list(userId)})
+  } catch (error) {
+    return errorResponse(error)
+  }
+}
+
+export const exportProviderIsrcs = async (context: Context): Promise<Response> => {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+  const userId = await getSessionUserId(context.request, context.env)
+  if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+  try {
+    const result = await new ProviderIsrcService(context.env.DB).exportCsv(userId)
+    return new Response(result.data, {
+      headers: {
+        'content-type': 'text/csv; charset=utf-8',
+        'content-disposition': `attachment; filename="${result.fileName}"`,
+        'cache-control': 'no-store, max-age=0',
+      },
+    })
   } catch (error) {
     return errorResponse(error)
   }
