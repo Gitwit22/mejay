@@ -6,12 +6,15 @@ import {Link, useNavigate, useParams} from 'react-router-dom'
 import {CertificationStep, CreditsStep} from '@/app/components/provider/ReleaseSubmissionSteps'
 
 import {Button} from '@/components/ui/button'
+import {Checkbox} from '@/components/ui/checkbox'
+import {Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger} from '@/components/ui/dialog'
 import {Input} from '@/components/ui/input'
 import {Label} from '@/components/ui/label'
 import {Switch} from '@/components/ui/switch'
 import {toast} from '@/hooks/use-toast'
 import {
   assignProviderIsrc,
+  generateProviderIsrc,
   createProviderPricing,
   createProviderRights,
   createProviderTrack,
@@ -36,7 +39,7 @@ const steps: Array<{id: ReleaseDraftStep; label: string}> = [
   {id: 'tracks', label: 'Upload Tracks'},
   {id: 'track-metadata', label: 'Track Metadata'},
   {id: 'credits', label: 'Credits'},
-  {id: 'isrc', label: 'Existing ISRCs'},
+  {id: 'isrc', label: 'ISRCs'},
   {id: 'rights', label: 'Rights'},
   {id: 'pricing', label: 'Pricing'},
   {id: 'splits', label: 'Splits'},
@@ -118,17 +121,29 @@ function ReleaseInformation({detail}: {detail: ProviderReleaseDetail}) {
   const [form, setForm] = useState({title: release.title, versionTitle: release.version_title || '', releaseType: release.release_type, primaryArtistId: release.primary_artist_id, labelName: release.label_name || '', catalogNumber: release.catalog_number || '', genre: release.genre || '', subgenre: release.subgenre || '', upc: release.upc || '', originalReleaseDate: release.original_release_date || '', copyrightYear: release.copyright_year?.toString() || '', copyrightHolder: release.copyright_holder || '', phonographicCopyrightYear: release.phonographic_copyright_year?.toString() || '', phonographicCopyrightHolder: release.phonographic_copyright_holder || ''})
   const save = useMutation({mutationFn: () => updateProviderRelease(release.id, {expectedVersion: release.version, draftStep: 'release-information', ...form, versionTitle: form.versionTitle || null, labelName: form.labelName || null, catalogNumber: form.catalogNumber || null, genre: form.genre || null, subgenre: form.subgenre || null, upc: form.upc || null, originalReleaseDate: form.originalReleaseDate || null, copyrightYear: form.copyrightYear ? Number(form.copyrightYear) : null, copyrightHolder: form.copyrightHolder || null, phonographicCopyrightYear: form.phonographicCopyrightYear ? Number(form.phonographicCopyrightYear) : null, phonographicCopyrightHolder: form.phonographicCopyrightHolder || null}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', release.id]}); toast({title: 'Release information saved'})}})
   const field = (key: keyof typeof form) => ({value: form[key], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({...form, [key]: event.target.value})})
-  return <><StepHeading title="Release Information" detail="Core catalog details for this release." /><form onSubmit={(event) => {event.preventDefault(); save.mutate()}} className="grid gap-5 sm:grid-cols-2">
+  const upcProblem = upcError(form.upc)
+  return <><StepHeading title="Release Information" detail="Core catalog details for this release." /><form onSubmit={(event) => {event.preventDefault(); if (!upcProblem) save.mutate()}} className="grid gap-5 sm:grid-cols-2">
     <Field label="Release title"><Input required {...field('title')} /></Field><Field label="Version"><Input placeholder="Optional" {...field('versionTitle')} /></Field>
     <Field label="Release type"><select className="h-10 w-full rounded-md border border-white/10 bg-zinc-950 px-3 text-sm" {...field('releaseType')}><option value="single">Single</option><option value="ep">EP</option><option value="album">Album</option></select></Field>
     <Field label="Primary artist"><select required className="h-10 w-full rounded-md border border-white/10 bg-zinc-950 px-3 text-sm" {...field('primaryArtistId')}>{artists.data?.map((artist) => <option key={artist.id} value={artist.id}>{artist.name}</option>)}</select></Field>
     <Field label="Label"><Input {...field('labelName')} /></Field><Field label="Catalog number"><Input {...field('catalogNumber')} /></Field>
     <Field label="Genre"><Input {...field('genre')} /></Field><Field label="Subgenre"><Input {...field('subgenre')} /></Field>
-    <Field label="UPC"><Input inputMode="numeric" {...field('upc')} /></Field><Field label="Original release date"><Input type="date" {...field('originalReleaseDate')} /></Field>
+    <div className="space-y-2">
+      <Label htmlFor="release-upc">UPC (optional)</Label>
+      <Input id="release-upc" inputMode="numeric" placeholder="12-14 digits" aria-invalid={Boolean(upcProblem)} aria-describedby="release-upc-help" value={form.upc} onChange={(event) => setForm({...form, upc: event.target.value.replace(/[\s-]/g, '')})} />
+      <p id="release-upc-help" className={`text-xs ${upcProblem ? 'text-red-400' : 'text-zinc-500'}`}>{upcProblem ?? 'Already released? Enter the UPC/EAN your distributor assigned. Leave blank if it has none.'}</p>
+    </div>
+    <Field label="Original release date"><Input type="date" {...field('originalReleaseDate')} /></Field>
     <Field label="Copyright year"><Input type="number" min="1900" max="2200" {...field('copyrightYear')} /></Field><Field label="Copyright holder"><Input {...field('copyrightHolder')} /></Field>
     <Field label="Phonographic copyright year"><Input type="number" min="1900" max="2200" {...field('phonographicCopyrightYear')} /></Field><Field label="Phonographic copyright holder"><Input {...field('phonographicCopyrightHolder')} /></Field>
-    {save.isError && <p className="text-sm text-red-400 sm:col-span-2">{save.error.message}</p>}<Button disabled={save.isPending} className="sm:col-span-2">{save.isPending ? 'Saving...' : 'Save information'}</Button>
+    {save.isError && <p className="text-sm text-red-400 sm:col-span-2">{save.error.message}</p>}<Button disabled={save.isPending || Boolean(upcProblem)} className="sm:col-span-2">{save.isPending ? 'Saving...' : 'Save information'}</Button>
   </form></>
+}
+
+/** Same rule as the API (12-14 digits, UPC-A or EAN-13/14); empty means the release has no UPC. */
+function upcError(value: string): string | null {
+  if (!value) return null
+  return /^[0-9]{12,14}$/.test(value) ? null : 'A UPC is 12 to 14 digits (numbers only).'
 }
 
 function Field({label, children}: {label: string; children: React.ReactNode}) { return <div className="space-y-2"><Label>{label}</Label>{children}</div> }
@@ -167,7 +182,7 @@ function TrackMetadataForm({track, artistId, releaseId}: {track: ProviderTrack; 
 }
 
 function IsrcStep({detail}: {detail: ProviderReleaseDetail}) {
-  return <><StepHeading title="Existing ISRCs" detail="Already have an ISRC for a recording? Register it here. Tracks without one get a MeJay ISRC automatically after the release is approved." /><div className="divide-y divide-white/10 border-y border-white/10">{detail.tracks.map((track) => <IsrcRow key={track.id} track={track} releaseId={detail.release.id} />)}</div>{detail.tracks.length === 0 && <p className="text-sm text-zinc-500">Add tracks before assigning ISRCs.</p>}</>
+  return <><StepHeading title="ISRCs" detail="Every recording needs one ISRC. Register the code it already has, or have MeJay assign one of its QT-A3L codes now. Tracks left without one get a MeJay ISRC automatically when the release is approved." /><div className="divide-y divide-white/10 border-y border-white/10">{detail.tracks.map((track) => <IsrcRow key={track.id} track={track} releaseId={detail.release.id} />)}</div>{detail.tracks.length === 0 && <p className="text-sm text-zinc-500">Add tracks before assigning ISRCs.</p>}</>
 }
 
 function IsrcRow({track, releaseId}: {track: ProviderTrack; releaseId: string}) {
@@ -194,10 +209,61 @@ function IsrcRow({track, releaseId}: {track: ProviderTrack; releaseId: string}) 
     {!track.isrc && <div className="space-y-3 rounded-md border border-white/10 bg-[#141417] p-4">
       <p className="text-sm font-medium text-zinc-100">Enter Existing ISRC</p>
       <div className="flex flex-wrap gap-3"><Input className="max-w-xs font-mono" value={value} onChange={(event) => setValue(event.target.value)} placeholder="CC-XXX-YY-NNNNN" /><Button variant="outline" disabled={!value.trim() || assign.isPending} onClick={() => assign.mutate()}>Register existing ISRC</Button></div>
-      <p className="text-xs text-zinc-500">No ISRC? Leave this empty. MeJay assigns one when the release is approved.</p>
+      <p className="text-xs text-zinc-500">Songs that are already out almost always have one. Check with your distributor before asking for a new code.</p>
+    </div>}
+    {!track.isrc && <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-white/10 bg-[#141417] p-4">
+      <div>
+        <p className="text-sm font-medium text-zinc-100">No ISRC for this recording?</p>
+        <p className="text-xs text-zinc-500">Get a MeJay ISRC now, or skip this and one is assigned when the release is approved.</p>
+      </div>
+      <AssignMejayIsrcDialog track={track} releaseId={releaseId} />
     </div>}
     {assign.isError && <p className="text-sm text-red-400">{assign.error.message}</p>}
   </div>
+}
+
+const ISRC_ATTESTATIONS = [
+  ['controlsRecording', 'I own or control the rights to this recording.'],
+  ['neverAssignedIsrc', 'This recording has never been given an ISRC (by a distributor, label or anyone else).'],
+  ['authorizeAssignment', 'I authorize MeJay to assign a permanent ISRC to this recording.'],
+] as const
+
+/**
+ * Issues one of MeJay's QT-A3L codes right away. A recording must only ever have one ISRC, so the
+ * artist confirms all three statements first; the API refuses tracks that already have a code.
+ */
+function AssignMejayIsrcDialog({track, releaseId}: {track: ProviderTrack; releaseId: string}) {
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [checked, setChecked] = useState<Record<(typeof ISRC_ATTESTATIONS)[number][0], boolean>>({controlsRecording: false, neverAssignedIsrc: false, authorizeAssignment: false})
+  const allChecked = ISRC_ATTESTATIONS.every(([key]) => checked[key])
+  const generate = useMutation({
+    mutationFn: () => generateProviderIsrc(track.id, {controlsRecording: true, neverAssignedIsrc: true, authorizeAssignment: true}),
+    onSuccess: async (result) => {
+      setOpen(false)
+      await queryClient.invalidateQueries({queryKey: ['provider', 'release', releaseId]})
+      toast({title: 'ISRC assigned', description: result?.isrc ? formatIsrc(result.isrc) : undefined})
+    },
+  })
+  return <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (!next) generate.reset() }}>
+    <DialogTrigger asChild><Button>Assign MeJay ISRC</Button></DialogTrigger>
+    <DialogContent className="border-white/10 bg-[#111114] text-zinc-100">
+      <DialogHeader>
+        <DialogTitle>Assign a MeJay ISRC</DialogTitle>
+        <DialogDescription>For “{track.title}”. The code is permanent and stays with this recording wherever it is sold or streamed.</DialogDescription>
+      </DialogHeader>
+      <div className="space-y-3">
+        {ISRC_ATTESTATIONS.map(([key, label]) => <Label key={key} className="flex items-start gap-3 text-sm font-normal leading-5">
+          <Checkbox checked={checked[key]} onCheckedChange={(value) => setChecked((current) => ({...current, [key]: value === true}))} className="mt-0.5" />{label}
+        </Label>)}
+      </div>
+      {generate.isError && <p role="alert" className="text-sm text-red-400">{generate.error.message}</p>}
+      <DialogFooter>
+        <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+        <Button disabled={!allChecked || generate.isPending} onClick={() => generate.mutate()}>{generate.isPending ? 'Assigning...' : 'Assign ISRC'}</Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
 }
 
 function formatIsrc(value: string) {const canonical = value.replace(/[-\s]/g, '').toUpperCase(); return canonical.length === 12 ? `${canonical.slice(0, 2)}-${canonical.slice(2, 5)}-${canonical.slice(5, 7)}-${canonical.slice(7)}` : value}
