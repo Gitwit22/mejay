@@ -2,6 +2,7 @@ import {useState} from 'react'
 import {Link, useNavigate, useSearchParams} from 'react-router-dom'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {
+  ArrowLeft,
   BadgeDollarSign,
   Banknote,
   BarChart3,
@@ -107,7 +108,8 @@ export default function ProviderPortalPage() {
               <p className="truncate text-sm font-semibold">{navigation.find((item) => item.id === section)?.label}</p>
               <p className="text-xs text-zinc-500">Provider Portal</p>
             </div>
-            <div className="ml-auto rounded-full border border-white/10 px-3 py-1 text-xs text-zinc-300">
+            <Button asChild variant="ghost" size="sm" className="ml-auto gap-1.5 px-2 text-zinc-300 lg:hidden"><Link to="/app" aria-label="Back to MeJay"><ArrowLeft className="h-4 w-4" />MeJay</Link></Button>
+            <div className="rounded-full border border-white/10 px-3 py-1 text-xs text-zinc-300 lg:ml-auto">
               {dashboard.data ? getProviderStatusLabel(parseProviderStatus(dashboard.data.provider.status)) : 'Loading'}
             </div>
           </header>
@@ -135,6 +137,10 @@ function PortalNavigation({active, onSelect}: {active: Section; onSelect: (secti
         <Icon className="h-4 w-4" />{item.label}
       </button>
     })}
+    <div className="my-3 border-t border-white/10" />
+    <Link to="/app" className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm text-zinc-400 transition hover:bg-white/5 hover:text-white">
+      <ArrowLeft className="h-4 w-4" />Back to MeJay
+    </Link>
   </nav>
 }
 
