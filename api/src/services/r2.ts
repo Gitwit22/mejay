@@ -1,5 +1,7 @@
 import {DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client} from '@aws-sdk/client-s3'
 import {getSignedUrl} from '@aws-sdk/s3-request-presigner'
+import {createReadStream} from 'node:fs'
+import {stat} from 'node:fs/promises'
 
 export type PrivateBucket = {
   get: (defaultKey: string) => Promise<{body: ReadableStream} | null>
@@ -7,6 +9,10 @@ export type PrivateBucket = {
   createUploadUrl: (key: string, contentType: string, byteSize: number) => Promise<string>
   head: (key: string) => Promise<{contentType: string | undefined; byteSize: number | undefined} | null>
   delete: (key: string) => Promise<void>
+  /** Server-side upload of a local file (used by the audio converter, never by request handlers). */
+  putFile: (key: string, filePath: string, contentType: string) => Promise<void>
+  /** Short-lived presigned GET; `fileName` becomes the download's attachment name. */
+  createDownloadUrl: (key: string, fileName: string, expiresInSeconds?: number) => Promise<string>
 }
 
 export function createDownloadsBucket(env: NodeJS.ProcessEnv): PrivateBucket | undefined {
@@ -67,6 +73,18 @@ export function createDownloadsBucket(env: NodeJS.ProcessEnv): PrivateBucket | u
     },
     async delete(key: string) {
       await client.send(new DeleteObjectCommand({Bucket: bucket, Key: key}))
+    },
+    async putFile(key: string, filePath: string, contentType: string) {
+      const {size} = await stat(filePath)
+      await client.send(new PutObjectCommand({
+        Bucket: bucket, Key: key, ContentType: contentType, ContentLength: size, Body: createReadStream(filePath),
+      }))
+    },
+    async createDownloadUrl(key: string, fileName: string, expiresInSeconds = 300) {
+      const safeName = fileName.replace(/["\r\n]/g, '_')
+      return getSignedUrl(client, new GetObjectCommand({
+        Bucket: bucket, Key: key, ResponseContentDisposition: `attachment; filename="${safeName}"`,
+      }), {expiresIn: Math.min(Math.max(expiresInSeconds, 30), 3600)})
     },
   }
 }

@@ -56,3 +56,28 @@ services:
         value: QT
       - key: ISRC_REGISTRANT_CODE
         value: A3L
+  # Audio converter proof of concept: a separate free service so ffmpeg work never runs on the API.
+  - type: web
+    name: mejay-converter
+    runtime: node
+    plan: free
+    region: ohio
+    rootDir: api
+    buildCommand: npm install && npm run install:converter-tools && npm run build
+    startCommand: npm run start:converter
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        sync: false
+      - key: CONVERTER_TRIGGER_SECRET
+        sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false

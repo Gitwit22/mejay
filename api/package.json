@@ -12,7 +12,9 @@
     "start": "npm run db:migrate && node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:integration": "vitest run src/marketplace/service.integration.test.ts",
+    "test:integration": "vitest run src/marketplace/service.integration.test.ts src/audio/jobs.integration.test.ts",
+    "start:converter": "npm run db:migrate && node dist/converter-server.js",
+    "install:converter-tools": "npm install --no-save ffmpeg-static@5.2.0 @ffprobe-installer/ffprobe@2.1.2",
     "db:migrate": "node dist/db/migrate.js"
   },
   "dependencies": {

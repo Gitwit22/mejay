@@ -17,6 +17,7 @@ import {marketplacePaymentSnapshotsMigration} from './0014-marketplace-payment-s
 import {artistProfilesReleaseCertificationMigration} from './0015-artist-profiles-release-certification'
 import {marketplaceOrderNotificationsMigration} from './0016-marketplace-order-notifications'
 import {artistReleasePagesMigration} from './0017-artist-release-pages'
+import {audioProcessingMigration} from './0018-audio-processing'
 import type {Migration} from './types'
 
 export const migrations: readonly Migration[] = [
@@ -37,6 +38,7 @@ export const migrations: readonly Migration[] = [
   artistProfilesReleaseCertificationMigration,
   marketplaceOrderNotificationsMigration,
   artistReleasePagesMigration,
+  audioProcessingMigration,
 ]
 
 const MIGRATION_LOCK_ID = 764_329_101

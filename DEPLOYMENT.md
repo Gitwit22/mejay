@@ -50,6 +50,15 @@ For cookie authentication, `FRONTEND_URL` must exactly match the Pages origin. M
 - Marketplace pricing: MEJay keeps `MARKETPLACE_PLATFORM_FEE_BPS` of each store sale (default `1000` = 10%); the artist's share also covers Stripe's processing fee. Releases must be priced at least $3.00; set `MINIMUM_TRACK_PRICE_CENTS` to change that (minimum `100`). If Render has `MARKETPLACE_PLATFORM_FEE_BPS` set explicitly, that value overrides the default. Past orders keep the rate they were sold at (`marketplace_orders.platform_fee_bps`).
 - Pro checkout grants a 3-day trial (`subscription_data[trial_period_days]`) only to accounts that have never had a subscription.
 
+## Audio converter (proof of concept)
+
+`mejay-converter` is a separate free Render web service (same repo, `rootDir: api`, build `npm install && npm run install:converter-tools && npm run build`, start `npm run start:converter`). Its ffmpeg/ffprobe binaries are installed only there, so `mejay-api` builds are unchanged. It turns an uploaded WAV/FLAC master into a tagged 320 kbps MP3 with embedded cover art plus a 30 s preview, verifies both (full decode, duration, tags, cover, and a checksum round trip through R2), and records them as `audio_delivery` / `audio_preview` assets. Conversions never run on `mejay-api`.
+
+- Env: `DATABASE_URL`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `CONVERTER_TRIGGER_SECRET` (32+ random characters). It does not need the API's Stripe/session secrets.
+- Jobs live in `audio_processing_jobs`. One job at a time; leases (10 min, renewed every minute) let an interrupted run be picked up again; failures retry with 1/2/4-minute backoff and stop after 3 attempts. The uploaded master is never modified.
+- API (all but `/health` need `Authorization: Bearer $CONVERTER_TRIGGER_SECRET`): `POST /jobs {"sourceAssetId"}` queues a ready `audio` upload; `POST /jobs/run` drains the queue; `GET /jobs/:id` returns status, audio facts and 10-minute download links.
+- Free plan: the instance sleeps after ~15 minutes idle and wakes on the next request (about a minute); queued or interrupted jobs resume on boot.
+
 ## Local development
 
 Start the API and frontend in separate terminals:

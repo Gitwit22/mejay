@@ -468,8 +468,10 @@ export class MarketplaceService {
        ORDER BY t.disc_number, t.track_number, t.created_at`,
     ).bind(releaseId, context.providerId).all()
     const {results: assets} = await this.database.prepare(
+      // MeJay-generated delivery/preview files are not artist uploads; keep the draft view to uploads.
       `SELECT * FROM marketplace_assets
-       WHERE release_id = ?1 OR track_id IN (SELECT id FROM tracks WHERE release_id = ?1 AND provider_profile_id = ?2)
+       WHERE (release_id = ?1 OR track_id IN (SELECT id FROM tracks WHERE release_id = ?1 AND provider_profile_id = ?2))
+         AND kind NOT IN ('audio_delivery', 'audio_preview')
        ORDER BY created_at`,
     ).bind(releaseId, context.providerId).all()
     const {results: rights} = await this.database.prepare(
@@ -712,7 +714,8 @@ export class MarketplaceService {
       await db.prepare('SELECT id FROM provider_profiles WHERE id = ?1 FOR UPDATE').bind(context.providerId).first()
       const storage = await db.prepare(
         `SELECT COALESCE(SUM(byte_size), 0)::bigint AS used_bytes FROM marketplace_assets
-         WHERE provider_profile_id = ?1 AND processing_status <> 'failed'`,
+         WHERE provider_profile_id = ?1 AND processing_status <> 'failed'
+           AND kind NOT IN ('audio_delivery', 'audio_preview')`,
       ).bind(context.providerId).first<{used_bytes: number | string}>()
       if (exceedsProviderStorageLimit(Number(storage?.used_bytes ?? 0), input.byteSize)) {
         throw new MarketplaceError(422, 'provider_storage_limit_exceeded', 'Provider storage limit exceeded')
