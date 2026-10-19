@@ -116,7 +116,7 @@ describe('public artist page', () => {
     expect(accentForeground('#1e3a8a')).toBe('#ffffff')
   })
 
-  it('sends signed-out visitors back to the MeJay home page', async () => {
+  it('shows signed-out visitors (link in bio) the page with no Back to MeJay bar', async () => {
     usePlanStore.setState({authStatus: 'anonymous'})
     vi.mocked(getPublicArtist).mockResolvedValue({
       artist: {
@@ -126,7 +126,8 @@ describe('public artist page', () => {
       releases: [],
     })
     renderPage()
-    expect(await screen.findByRole('link', {name: /Back to MeJay/})).toHaveAttribute('href', '/')
+    expect(await screen.findByRole('heading', {level: 1, name: /John Blaze/})).toBeInTheDocument()
+    expect(screen.queryByRole('link', {name: /Back to MeJay/})).not.toBeInTheDocument()
   })
 
   it('shows a not-available message for unknown or non-public artists', async () => {

@@ -99,8 +99,10 @@ export default function ArtistPage() {
 
   if (page.isLoading) return <StoreLoading />
   if (page.isError || !page.data) return <StoreError message="This artist page is not available." />
+  // Signed-out visitors usually arrive from an artist's link in bio: the page stands alone for them,
+  // with no way off to MeJay. Signed-in MeJay users get a way back into the app.
   return <ArtistPageView artist={page.data.artist} releases={page.data.releases} imageUrl={storeAssetUrl}
-    topBar={<ArtistPageTopBar to={authStatus === 'authenticated' ? '/app' : '/'} />} />
+    topBar={authStatus === 'authenticated' ? <ArtistPageTopBar to="/app" /> : undefined} />
 }
 
 /** The artist page itself, shared by the public page and the owner's preview. */
