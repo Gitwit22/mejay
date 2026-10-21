@@ -201,6 +201,11 @@ export function addRightsMaterial(releaseId: string, input: {materialType: Right
   return request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}/rights-materials`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
 }
 
+/** Deletes a release that is still a draft. The API refuses submitted/live releases and drafts with an ISRC or checkout history. */
+export function deleteProviderRelease(releaseId: string): Promise<unknown> {
+  return request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}`, {method: 'DELETE'})
+}
+
 export function deleteRightsMaterial(materialId: string): Promise<unknown> {
   return request(`/api/marketplace/rights-materials/${encodeURIComponent(materialId)}`, {method: 'DELETE'})
 }

@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  Trash2,
   Users,
   WalletCards,
   X,
@@ -37,10 +38,12 @@ import {ProviderEarningsReporting, ProviderOverviewReporting, ProviderSalesRepor
 import {
   createProviderArtist,
   createProviderRelease,
+  deleteProviderRelease,
   getProviderDashboard,
   listProviderArtists,
   listProviderReleases,
   type ProviderArtist,
+  type ProviderRelease,
   type ReportingRange,
 } from '@/lib/providerApi'
 
@@ -257,6 +260,9 @@ function releaseStatusLabel(status: string): string {
   return labels[status] ?? status.replace(/_/g, ' ').toLowerCase().replace(/^./, (letter) => letter.toUpperCase())
 }
 
+/** Statuses the artist can still delete; mirrors the API's mutable statuses. Submitted or published releases stay on record. */
+const DELETABLE_RELEASE_STATUSES = new Set(['DRAFT', 'METADATA_COMPLETE', 'RIGHTS_COMPLETE', 'ISRC_COMPLETE', 'PRICING_COMPLETE', 'CHANGES_REQUESTED'])
+
 /** Rights states the artist should know about (others need no action). */
 const rightsStatusNotes: Partial<Record<string, string>> = {
   RIGHTS_REVIEW_REQUIRED: 'Rights review required before approval',
@@ -273,8 +279,33 @@ function Releases() {
   return <div className="space-y-6"><SectionHeader title="My Releases" detail="Draft, submit, and monitor your catalog." action={<CreateReleaseDialog artists={artists.data ?? []} />} />
     <SearchInput value={search} onChange={setSearch} placeholder="Search releases" />
     {releases.isLoading ? <Skeleton className="h-48 bg-white/5" /> : releases.isError ? <ErrorState message={releases.error.message} /> : filtered.length === 0 ? <EmptyState title="No releases found" detail="Create your first release draft when an artist profile is ready." /> :
-      <div className="divide-y divide-white/10 border-y border-white/10">{filtered.map((release) => <button type="button" onClick={() => navigate(`/app/artist/releases/${release.id}/edit/${release.draft_step || 'release-information'}`)} key={release.id} className="grid w-full grid-cols-[1fr_auto] items-center gap-4 py-4 text-left hover:bg-white/[0.02] sm:grid-cols-[1fr_9rem_6rem_auto_auto]"><div className="min-w-0"><p className="truncate font-medium">{release.title}</p><p className="truncate text-xs text-zinc-500">{release.primary_artist_name}</p></div><p className="hidden text-sm capitalize text-zinc-400 sm:block">{release.release_type}</p><p className="hidden text-sm text-zinc-400 sm:block">{release.track_count} tracks</p><span className="flex flex-col items-end gap-1"><span className="rounded-full border border-white/10 px-2.5 py-1 text-xs">{releaseStatusLabel(release.status)}</span>{release.rights_status && rightsStatusNotes[release.rights_status] && <span className="text-[11px] text-amber-300">{rightsStatusNotes[release.rights_status]}</span>}</span><ChevronRight className="h-4 w-4 text-zinc-500" /></button>)}</div>}
+      <div className="divide-y divide-white/10 border-y border-white/10">{filtered.map((release) => <div key={release.id} className="flex items-center gap-2 hover:bg-white/[0.02]"><button type="button" onClick={() => navigate(`/app/artist/releases/${release.id}/edit/${release.draft_step || 'release-information'}`)} className="grid min-w-0 flex-1 grid-cols-[1fr_auto] items-center gap-4 py-4 text-left sm:grid-cols-[1fr_9rem_6rem_auto_auto]"><div className="min-w-0"><p className="truncate font-medium">{release.title}</p><p className="truncate text-xs text-zinc-500">{release.primary_artist_name}</p></div><p className="hidden text-sm capitalize text-zinc-400 sm:block">{release.release_type}</p><p className="hidden text-sm text-zinc-400 sm:block">{release.track_count} tracks</p><span className="flex flex-col items-end gap-1"><span className="rounded-full border border-white/10 px-2.5 py-1 text-xs">{releaseStatusLabel(release.status)}</span>{release.rights_status && rightsStatusNotes[release.rights_status] && <span className="text-[11px] text-amber-300">{rightsStatusNotes[release.rights_status]}</span>}</span><ChevronRight className="h-4 w-4 text-zinc-500" /></button>{DELETABLE_RELEASE_STATUSES.has(release.status) ? <DeleteReleaseDialog release={release} /> : <span className="w-9 shrink-0" aria-hidden="true" />}</div>)}</div>}
   </div>
+}
+
+/** Confirms and deletes a draft release. The server re-checks every rule, so a stale list can't delete a submitted release. */
+function DeleteReleaseDialog({release}: {release: ProviderRelease}) {
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const mutation = useMutation({
+    mutationFn: () => deleteProviderRelease(release.id),
+    onSuccess: async () => {
+      setOpen(false)
+      await Promise.all([queryClient.invalidateQueries({queryKey: ['provider', 'releases']}), queryClient.invalidateQueries({queryKey: ['provider', 'dashboard']})])
+      toast({title: 'Release deleted', description: release.title})
+    },
+  })
+  return <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (!next) mutation.reset() }}>
+    <DialogTrigger asChild><Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0 text-zinc-500 hover:text-red-300" aria-label={`Delete ${release.title}`}><Trash2 className="h-4 w-4" /></Button></DialogTrigger>
+    <DialogContent className="border-white/10 bg-[#151518]">
+      <DialogHeader><DialogTitle>Delete “{release.title}”?</DialogTitle><DialogDescription>This removes the draft, its tracks and its uploaded files. This can’t be undone.</DialogDescription></DialogHeader>
+      {mutation.isError && <p role="alert" className="text-sm text-red-400">{mutation.error.message}</p>}
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" disabled={mutation.isPending} onClick={() => setOpen(false)}>Cancel</Button>
+        <Button type="button" variant="destructive" disabled={mutation.isPending} onClick={() => mutation.mutate()}>{mutation.isPending ? 'Deleting...' : 'Delete release'}</Button>
+      </div>
+    </DialogContent>
+  </Dialog>
 }
 
 function CreateArtistDialog() {

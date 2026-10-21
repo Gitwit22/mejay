@@ -29,6 +29,7 @@ import {certificationDraftSchema, rightsMaterialSchema} from '../../marketplace/
 import {artistGallerySchema, artistProfileSchema} from '../../marketplace/artist-profile'
 import {ArtistProfileService} from '../../marketplace/artist-profile-service'
 import {ProviderIsrcService} from '../../marketplace/provider-isrc-service'
+import {isMarketplaceStorageKey} from '../../marketplace/storage-keys'
 
 type Context = {
   request: Request
@@ -125,6 +126,27 @@ export const createRelease = handler(releaseSchema, (service, userId, input) => 
 export const getRelease = readHandler((service, userId, params) =>
   service.getRelease(userId, requiredParam(params, 'releaseId')),
 )
+/** Deletes a draft release; uploaded files are removed from storage after the database commit. */
+export const deleteReleaseDraft = async (context: Context): Promise<Response> => {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+  const userId = await getSessionUserId(context.request, context.env)
+  if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+  try {
+    const result = await new MarketplaceService(context.env.DB).deleteReleaseDraft(userId, requiredParam(context.params ?? {}, 'releaseId'))
+    const bucket = context.env.DOWNLOADS as {delete: (key: string) => Promise<void>} | undefined
+    const keys = result.storageKeys.filter(isMarketplaceStorageKey)
+    // Best effort: the rows are already gone, so leftover objects are unreachable and only cost storage.
+    if (bucket && keys.length > 0) {
+      const outcomes = await Promise.allSettled(keys.map((key) => bucket.delete(key)))
+      const failed = outcomes.filter((outcome) => outcome.status === 'rejected').length
+      if (failed > 0) console.warn('[release-delete] some uploads could not be removed from storage', {failed, total: keys.length})
+    }
+    return json({ok: true, data: {deleted: true}})
+  } catch (error) {
+    return errorResponse(error)
+  }
+}
+
 export const updateReleaseDraft = handler(releaseDraftSchema, (service, userId, input, params) =>
   service.updateReleaseDraft(userId, requiredParam(params, 'releaseId'), input),
 200)

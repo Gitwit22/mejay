@@ -37,6 +37,7 @@ import {
   submitRelease,
   transitionRelease,
   updateReleaseDraft,
+  deleteReleaseDraft,
   updateTrack,
   finalizeUpload,
 } from './marketplace'
@@ -105,6 +106,7 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'post', path: '/api/marketplace/releases', handler: createRelease},
   {method: 'get', path: '/api/marketplace/releases/:releaseId', handler: getRelease},
   {method: 'patch', path: '/api/marketplace/releases/:releaseId', handler: updateReleaseDraft},
+  {method: 'delete', path: '/api/marketplace/releases/:releaseId', handler: deleteReleaseDraft},
   {method: 'post', path: '/api/marketplace/releases/:releaseId/tracks', handler: createTrack},
   {method: 'patch', path: '/api/marketplace/tracks/:trackId', handler: updateTrack},
   {method: 'post', path: '/api/marketplace/uploads', handler: initiateUpload},

@@ -1362,4 +1362,57 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       await expect(store.getAsset(galleryA)).rejects.toMatchObject({code: 'not_found'})
     })
   })
+
+  describe('release draft deletion', () => {
+    it('deletes an owned draft with its tracks and uploads, and records the deletion', async () => {
+      const fixture = await createProviderFixture('Deleter')
+      const storageKey = `marketplace/${fixture.provider.id}/audio/${crypto.randomUUID()}.wav`
+      await service.createAsset(fixture.userId, {trackId: fixture.track.id, kind: 'audio', storageKey, mimeType: 'audio/wav', byteSize: 1000, processingStatus: 'ready', metadata: {}})
+
+      // Another account cannot see it, and a viewer on the owning account cannot delete it.
+      const intruder = await createProviderFixture('DeleteIntruder')
+      await expect(service.deleteReleaseDraft(intruder.userId, fixture.release.id)).rejects.toMatchObject({code: 'not_found'})
+      await pool.query(`UPDATE provider_members SET role = 'viewer' WHERE user_id = $1`, [fixture.userId])
+      await expect(service.deleteReleaseDraft(fixture.userId, fixture.release.id)).rejects.toMatchObject({code: 'provider_write_forbidden'})
+      await pool.query(`UPDATE provider_members SET role = 'owner' WHERE user_id = $1`, [fixture.userId])
+
+      await expect(service.deleteReleaseDraft(fixture.userId, fixture.release.id)).resolves.toEqual({deleted: true, storageKeys: [storageKey]})
+      const remaining = await pool.query<{releases: number; tracks: number; assets: number; audits: number}>(
+        `SELECT
+          (SELECT COUNT(*)::integer FROM releases WHERE id = $1) AS releases,
+          (SELECT COUNT(*)::integer FROM tracks WHERE id = $2) AS tracks,
+          (SELECT COUNT(*)::integer FROM marketplace_assets WHERE storage_key = $3) AS assets,
+          (SELECT COUNT(*)::integer FROM marketplace_audit_events WHERE entity_id = $1 AND action = 'release.deleted') AS audits`,
+        [fixture.release.id, fixture.track.id, storageKey],
+      )
+      expect(remaining.rows[0]).toEqual({releases: 0, tracks: 0, assets: 0, audits: 1})
+      // The intruder's own draft is untouched.
+      expect((await pool.query('SELECT 1 FROM releases WHERE id = $1', [intruder.release.id])).rowCount).toBe(1)
+      await expect(service.deleteReleaseDraft(fixture.userId, fixture.release.id)).rejects.toMatchObject({code: 'not_found'})
+    })
+
+    it('keeps live releases, drafts with an ISRC, and drafts with checkout history', async () => {
+      await resetIsrcState()
+      const live = await prepareLiveRelease('DeleteLive')
+      await expect(service.deleteReleaseDraft(live.userId, live.release.id)).rejects.toMatchObject({status: 409, code: 'release_not_deletable'})
+
+      const withIsrc = await createProviderFixture('DeleteIsrc')
+      await service.assignGeneratedIsrc(withIsrc.userId, withIsrc.track.id, {controlsRecording: true, neverAssignedIsrc: true, authorizeAssignment: true}, {prefix: 'QTA3L', countryCode: 'QT', registrantCode: 'A3L'})
+      await expect(service.deleteReleaseDraft(withIsrc.userId, withIsrc.release.id)).rejects.toMatchObject({status: 409, code: 'release_has_isrc'})
+
+      const withCheckout = await prepareLiveRelease('DeleteCheckout', {skipIsrc: true, stage: 'pricing'})
+      const product = await pool.query<{id: string}>('SELECT id FROM products WHERE release_id = $1', [withCheckout.release.id])
+      await pool.query(
+        `INSERT INTO marketplace_checkout_attempts
+          (id, buyer_user_id, provider_profile_id, product_id, release_id, amount_minor, currency, platform_fee_bps,
+           stripe_idempotency_key, transfer_group, snapshot, expires_at)
+         VALUES ($1, NULL, $2, $3, $4, 999, 'USD', 1000, $5, $6, '{}'::jsonb, CURRENT_TIMESTAMP)`,
+        [crypto.randomUUID(), withCheckout.provider.id, product.rows[0].id, withCheckout.release.id, `idem-${crypto.randomUUID()}`, `tg-${crypto.randomUUID()}`],
+      )
+      await expect(service.deleteReleaseDraft(withCheckout.userId, withCheckout.release.id)).rejects.toMatchObject({status: 409, code: 'release_has_orders'})
+
+      const kept = await pool.query('SELECT 1 FROM releases WHERE id = ANY($1::text[])', [[live.release.id, withIsrc.release.id, withCheckout.release.id]])
+      expect(kept.rowCount).toBe(3)
+    })
+  })
 })

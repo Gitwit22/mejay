@@ -510,6 +510,45 @@ export class MarketplaceService {
     return {release, tracks, assets, rights, product, trackProducts, splits, reviewEvents, prerequisites}
   }
 
+  /**
+   * Deletes a release the artist is still drafting, with its tracks, uploads and draft data.
+   * Refused once a release has been submitted or published, when any track carries an ISRC (a code
+   * stays with its recording, so it must not be orphaned by a delete), or when anyone has checked out.
+   * Returns the storage keys of the deleted uploads so the caller can remove the files after commit.
+   */
+  async deleteReleaseDraft(userId: string, releaseId: string): Promise<{deleted: true; storageKeys: string[]}> {
+    return this.database.transaction(async (db: Database) => {
+      const context = await providerContext(db, userId)
+      const release = await db.prepare(
+        'SELECT * FROM releases WHERE id = ?1 AND provider_profile_id = ?2 FOR UPDATE',
+      ).bind(releaseId, context.providerId).first<{id: string; title: string; status: ReleaseStatus; published_at: string | null}>()
+      if (!release) throw new MarketplaceError(404, 'not_found', 'Release was not found')
+      if (!isReleaseMutable(release.status) || release.published_at) {
+        throw new MarketplaceError(409, 'release_not_deletable', 'Only drafts can be deleted. Submitted or published releases stay on record; ask MeJay to take a live release down instead.')
+      }
+      const blockers = await db.prepare(
+        `SELECT
+           EXISTS (SELECT 1 FROM isrc_assignments isrc JOIN tracks t ON t.id = isrc.track_id
+             WHERE t.release_id = ?1 AND isrc.revoked_at IS NULL) AS has_isrc,
+           EXISTS (SELECT 1 FROM marketplace_checkout_attempts WHERE release_id = ?1)
+             OR EXISTS (SELECT 1 FROM marketplace_order_items WHERE release_id = ?1) AS has_checkout`,
+      ).bind(releaseId).first<{has_isrc: boolean; has_checkout: boolean}>()
+      if (blockers?.has_isrc) {
+        throw new MarketplaceError(409, 'release_has_isrc', 'A track on this draft has an ISRC, so it cannot be deleted here. Contact MeJay support to remove it.')
+      }
+      if (blockers?.has_checkout) {
+        throw new MarketplaceError(409, 'release_has_orders', 'This release has checkout history, so it cannot be deleted.')
+      }
+      const {results: assets} = await db.prepare(
+        `SELECT storage_key FROM marketplace_assets
+         WHERE release_id = ?1 OR track_id IN (SELECT id FROM tracks WHERE release_id = ?1)`,
+      ).bind(releaseId).all<{storage_key: string}>()
+      await db.prepare('DELETE FROM releases WHERE id = ?1 AND provider_profile_id = ?2').bind(releaseId, context.providerId).run()
+      await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'release', entityId: releaseId, action: 'release.deleted', before: release})
+      return {deleted: true as const, storageKeys: assets.map((asset) => asset.storage_key)}
+    })
+  }
+
   async updateReleaseDraft(userId: string, releaseId: string, input: ReleaseDraftInput): Promise<unknown> {
     return this.database.transaction(async (db: Database) => {
       const context = await providerContext(db, userId)
