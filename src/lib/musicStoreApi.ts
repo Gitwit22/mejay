@@ -11,6 +11,8 @@ export type StoreRelease = {
   artist_name: string
   /** Public artist page slug (absent from older API responses). */
   artist_slug?: string
+  /** Full credit, e.g. "John Blaze & Kay feat. Boldy James" (absent from older API responses). */
+  artist_credit?: string
   artwork_asset_id: string | null
   product_id: string
   amount_minor: number

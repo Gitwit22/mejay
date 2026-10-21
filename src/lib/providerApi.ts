@@ -134,6 +134,8 @@ export type ProviderRelease = {
   draft_step?: ReleaseDraftStep
 }
 
+export type ReleaseArtistCredit = {role: 'primary' | 'featured'; artist_id: string | null; name: string}
+
 export type ProviderTrack = {
   id: string
   title: string
@@ -230,6 +232,10 @@ export type ProviderReleaseDetail = {
     release_timezone?: string | null
     preorders_enabled?: boolean
     preview_timing?: 'before_release' | 'after_release'
+    /** Extra primary/featured artists beyond the lead (artist_id null = someone not on MeJay). */
+    additional_artists?: ReleaseArtistCredit[]
+    /** Full credit line, e.g. "John Blaze & Kay feat. Boldy James". */
+    artist_credit?: string
     copyright_year: number | null
     copyright_holder: string | null
     phonographic_copyright_year: number | null
@@ -373,6 +379,7 @@ export function updateProviderRelease(releaseId: string, input: {
   releaseTimezone?: string | null
   preordersEnabled?: boolean
   previewTiming?: 'before_release' | 'after_release'
+  additionalArtists?: Array<{role: 'primary' | 'featured'; artistId?: string | null; name: string}>
   copyrightYear?: number | null
   copyrightHolder?: string | null
   phonographicCopyrightYear?: number | null

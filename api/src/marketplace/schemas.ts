@@ -68,6 +68,12 @@ export const releaseDraftSchema = z.object({
   preordersEnabled: z.boolean().optional(),
   /** Whether store previews play during pre-orders or only once the release is live. */
   previewTiming: z.enum(['before_release', 'after_release']).optional(),
+  /** More primary and featured artists beyond the lead. Omitted keeps the stored list; [] clears it. */
+  additionalArtists: z.array(z.object({
+    role: z.enum(['primary', 'featured']),
+    artistId: id.nullable().optional(),
+    name: nonEmpty.max(300),
+  }).strict()).max(10).optional(),
   copyrightYear: z.number().int().min(1900).max(2200).nullable().optional(),
   copyrightHolder: nonEmpty.nullable().optional(),
   phonographicCopyrightYear: z.number().int().min(1900).max(2200).nullable().optional(),

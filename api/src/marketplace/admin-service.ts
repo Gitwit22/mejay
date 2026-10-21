@@ -5,6 +5,7 @@ import {insertGeneratedIsrc, MarketplaceError} from './service'
 import type {IsrcGenerationConfig} from './isrc'
 import {formatMinimumPrice, getReleaseSaleReadiness} from './sale-policy'
 import {isFutureRelease} from './release-schedule'
+import {formatArtistCredit, parseCredits, releaseCreditsJsonSql} from './artist-credit'
 import {enqueueReleaseDateChange, heldPreorderCount, releaseHeldPreorders, requestPreorderCancellations, sweepLiveHeldPreorders} from './preorder-delivery'
 
 type Statement = {
@@ -107,6 +108,7 @@ export class MarketplaceAdminService {
     const release = await this.database.prepare(
       `SELECT r.*, provider.display_name AS provider_name, provider.status AS provider_status,
          artist.id AS primary_artist_id, artist.name AS primary_artist_name, artist.slug AS primary_artist_slug,
+         ${releaseCreditsJsonSql('r')} AS artist_credits,
          (SELECT asset.id FROM marketplace_assets asset WHERE asset.release_id = r.id AND asset.kind = 'artwork'
             AND asset.processing_status = 'ready' ORDER BY asset.created_at DESC LIMIT 1) AS artwork_asset_id
        FROM releases r JOIN provider_profiles provider ON provider.id = r.provider_profile_id
@@ -115,6 +117,7 @@ export class MarketplaceAdminService {
        WHERE r.id = ?1`,
     ).bind(releaseId).first<Record<string, unknown> & {id: string; rights_status: string; status: string}>()
     if (!release) throw new MarketplaceError(404, 'not_found', 'Release was not found')
+    release.artist_credit = formatArtistCredit(release.primary_artist_name as string | null, parseCredits(release.artist_credits))
     const {certification_draft: _draft, ...releaseRow} = release
     const {results: tracks} = await this.database.prepare(
       `SELECT t.id, t.title, t.version_title, t.disc_number, t.track_number, t.duration_ms, t.explicit, t.language_code,

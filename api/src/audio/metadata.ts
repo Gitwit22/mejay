@@ -1,3 +1,4 @@
+import {joinArtistNames, parseCredits, releaseCreditsJsonSql} from '../marketplace/artist-credit'
 import type {Database} from '../marketplace/service'
 
 /** Everything a music player shows, for one track, in the release's current state. */
@@ -42,6 +43,8 @@ type Row = {
   track_artist: string | null
   release_artist: string | null
   featured_artists: string[] | null
+  /** Additional release credits (more primary or featured artists), [{role, name}]. */
+  release_credits?: unknown
   track_total: number
   artwork_key: string | null
   artwork_mime: string | null
@@ -60,10 +63,16 @@ function releaseYear(row: Row): string | null {
 
 /** Pure mapping, unit-tested: "Artist feat. A & B", versions in titles, year fallback. */
 export function toTagData(row: Row): TrackTagData {
-  const albumArtist = row.release_artist?.trim() || row.track_artist?.trim() || 'Unknown Artist'
-  const lead = row.track_artist?.trim() || albumArtist
-  const featured = (row.featured_artists ?? []).filter((name) => name && name !== lead)
-  const artist = featured.length ? `${lead} feat. ${featured.join(' & ')}` : lead
+  const credits = parseCredits(row.release_credits)
+  const releaseLead = row.release_artist?.trim() || row.track_artist?.trim() || 'Unknown Artist'
+  // Album artist: every primary artist on the release ("A & B"), never the features.
+  const albumArtist = joinArtistNames([releaseLead, ...credits.filter((credit) => credit.role === 'primary').map((credit) => credit.name)])
+  const trackLead = row.track_artist?.trim()
+  const lead = trackLead && trackLead !== releaseLead ? trackLead : albumArtist
+  const leadNames = new Set(lead.toLowerCase().split(/, | & /))
+  const featured = joinArtistNames([...credits.filter((credit) => credit.role === 'featured').map((credit) => credit.name), ...(row.featured_artists ?? [])]
+    .filter((name) => name && !leadNames.has(name.trim().toLowerCase())))
+  const artist = featured ? `${lead} feat. ${featured}` : lead
   const copyright = row.copyright_holder?.trim()
     ? `${row.copyright_year ? `${row.copyright_year} ` : ''}${row.copyright_holder.trim()}`
     : null
@@ -101,6 +110,7 @@ export async function loadTrackTagData(db: Database, trackId: string): Promise<T
          WHERE ra.release_id = r.id AND ra.is_primary = TRUE ORDER BY a.name LIMIT 1) AS release_artist,
        (SELECT array_agg(COALESCE(ta.credited_name, a.name) ORDER BY a.name) FROM track_artists ta JOIN artists a ON a.id = ta.artist_id
          WHERE ta.track_id = t.id AND ta.role = 'featured') AS featured_artists,
+       ${releaseCreditsJsonSql('r')} AS release_credits,
        (SELECT COUNT(*)::integer FROM tracks sibling WHERE sibling.release_id = r.id) AS track_total,
        artwork.storage_key AS artwork_key, artwork.mime_type AS artwork_mime
      FROM tracks t

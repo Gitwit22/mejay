@@ -5,6 +5,8 @@ import {Link, useNavigate, useParams} from 'react-router-dom'
 
 import {CertificationStep, CreditsStep} from '@/app/components/provider/ReleaseSubmissionSteps'
 import {ReleaseDateTimePicker} from '@/app/components/provider/ReleaseDateTimePicker'
+import {AdditionalArtistsField} from '@/app/components/provider/AdditionalArtistsField'
+import {creditName, creditsInput, formatArtistCredit, rowsFromCredits, titleHasFeature, type AdditionalArtistRow} from '@/lib/artistCredit'
 
 import {Button} from '@/components/ui/button'
 import {Checkbox} from '@/components/ui/checkbox'
@@ -121,15 +123,22 @@ function ReleaseInformation({detail}: {detail: ProviderReleaseDetail}) {
   const release = detail.release
   const artists = useQuery({queryKey: ['provider', 'artists'], queryFn: listProviderArtists})
   const [form, setForm] = useState({title: release.title, versionTitle: release.version_title || '', releaseType: release.release_type, primaryArtistId: release.primary_artist_id, labelName: release.label_name || '', catalogNumber: release.catalog_number || '', genre: release.genre || '', subgenre: release.subgenre || '', upc: release.upc || '', originalReleaseDate: release.original_release_date || '', copyrightYear: release.copyright_year?.toString() || '', copyrightHolder: release.copyright_holder || '', phonographicCopyrightYear: release.phonographic_copyright_year?.toString() || '', phonographicCopyrightHolder: release.phonographic_copyright_holder || ''})
-  const save = useMutation({mutationFn: () => updateProviderRelease(release.id, {expectedVersion: release.version, draftStep: 'release-information', ...form, ...scheduleInput(schedule), versionTitle: form.versionTitle || null, labelName: form.labelName || null, catalogNumber: form.catalogNumber || null, genre: form.genre || null, subgenre: form.subgenre || null, upc: form.upc || null, originalReleaseDate: form.originalReleaseDate || null, copyrightYear: form.copyrightYear ? Number(form.copyrightYear) : null, copyrightHolder: form.copyrightHolder || null, phonographicCopyrightYear: form.phonographicCopyrightYear ? Number(form.phonographicCopyrightYear) : null, phonographicCopyrightHolder: form.phonographicCopyrightHolder || null}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', release.id]}); toast({title: 'Release information saved'})}})
+  const save = useMutation({mutationFn: () => updateProviderRelease(release.id, {expectedVersion: release.version, draftStep: 'release-information', ...form, ...scheduleInput(schedule), additionalArtists: additionalArtists ?? [], versionTitle: form.versionTitle || null, labelName: form.labelName || null, catalogNumber: form.catalogNumber || null, genre: form.genre || null, subgenre: form.subgenre || null, upc: form.upc || null, originalReleaseDate: form.originalReleaseDate || null, copyrightYear: form.copyrightYear ? Number(form.copyrightYear) : null, copyrightHolder: form.copyrightHolder || null, phonographicCopyrightYear: form.phonographicCopyrightYear ? Number(form.phonographicCopyrightYear) : null, phonographicCopyrightHolder: form.phonographicCopyrightHolder || null}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', release.id]}); toast({title: 'Release information saved'})}})
   const field = (key: keyof typeof form) => ({value: form[key], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({...form, [key]: event.target.value})})
   const upcProblem = upcError(form.upc)
   const [schedule, setSchedule] = useState<ReleaseScheduleValue>(() => scheduleFromRelease(release))
   const scheduleProblem = releaseScheduleError(schedule)
-  return <><StepHeading title="Release Information" detail="Core catalog details for this release." /><form onSubmit={(event) => {event.preventDefault(); if (!upcProblem && !scheduleProblem) save.mutate()}} className="grid gap-5 sm:grid-cols-2">
-    <Field label="Release title"><Input required {...field('title')} /></Field><Field label="Version"><Input placeholder="Optional" {...field('versionTitle')} /></Field>
+  const [extraArtists, setExtraArtists] = useState<AdditionalArtistRow[]>(() => rowsFromCredits(release.additional_artists))
+  const artistList = artists.data ?? []
+  const additionalArtists = creditsInput(extraArtists, artistList)
+  const leadName = artistList.find((artist) => artist.id === form.primaryArtistId)?.name ?? release.primary_artist_name ?? ''
+  const creditLine = formatArtistCredit(leadName, extraArtists.map((row) => ({role: row.role, name: creditName(row, artistList)})))
+  return <><StepHeading title="Release Information" detail="Core catalog details for this release." /><form onSubmit={(event) => {event.preventDefault(); if (!upcProblem && !scheduleProblem && additionalArtists) save.mutate()}} className="grid gap-5 sm:grid-cols-2">
+    <div className="space-y-2"><Label htmlFor="release-title-input">Release title</Label><Input id="release-title-input" required {...field('title')} />{titleHasFeature(form.title) && <p className="text-xs text-amber-300">Add featured artists under Additional artists instead of in the title, so stores and players credit them properly.</p>}</div><Field label="Version"><Input placeholder="Optional" {...field('versionTitle')} /></Field>
     <Field label="Release type"><select className="h-10 w-full rounded-md border border-white/10 bg-zinc-950 px-3 text-sm" {...field('releaseType')}><option value="single">Single</option><option value="ep">EP</option><option value="album">Album</option></select></Field>
     <Field label="Primary artist"><select required className="h-10 w-full rounded-md border border-white/10 bg-zinc-950 px-3 text-sm" {...field('primaryArtistId')}>{artists.data?.map((artist) => <option key={artist.id} value={artist.id}>{artist.name}</option>)}</select></Field>
+    <AdditionalArtistsField rows={extraArtists} onChange={setExtraArtists} artists={artistList} leadArtistId={form.primaryArtistId} />
+    <p className="text-sm text-zinc-400 sm:col-span-2" aria-live="polite">Credited as: <span className="font-semibold text-zinc-100">{form.title || 'Untitled'}</span> · <span className="text-zinc-200">{creditLine || 'Choose a primary artist'}</span></p>
     <Field label="Label"><Input {...field('labelName')} /></Field><Field label="Catalog number"><Input {...field('catalogNumber')} /></Field>
     <Field label="Genre"><Input {...field('genre')} /></Field><Field label="Subgenre"><Input {...field('subgenre')} /></Field>
     <div className="space-y-2">
@@ -145,7 +154,7 @@ function ReleaseInformation({detail}: {detail: ProviderReleaseDetail}) {
     <ReleaseScheduleFields value={schedule} onChange={setSchedule} problem={scheduleProblem} />
     <Field label="Copyright year"><Input type="number" min="1900" max="2200" {...field('copyrightYear')} /></Field><Field label="Copyright holder"><Input {...field('copyrightHolder')} /></Field>
     <Field label="Phonographic copyright year"><Input type="number" min="1900" max="2200" {...field('phonographicCopyrightYear')} /></Field><Field label="Phonographic copyright holder"><Input {...field('phonographicCopyrightHolder')} /></Field>
-    {save.isError && <p className="text-sm text-red-400 sm:col-span-2">{save.error.message}</p>}<Button disabled={save.isPending || Boolean(upcProblem) || Boolean(scheduleProblem)} className="sm:col-span-2">{save.isPending ? 'Saving...' : 'Save information'}</Button>
+    {save.isError && <p className="text-sm text-red-400 sm:col-span-2">{save.error.message}</p>}{!additionalArtists && <p className="text-sm text-amber-300 sm:col-span-2">Enter a name for each additional artist, or remove the empty row.</p>}<Button disabled={save.isPending || Boolean(upcProblem) || Boolean(scheduleProblem) || !additionalArtists} className="sm:col-span-2">{save.isPending ? 'Saving...' : 'Save information'}</Button>
   </form></>
 }
 

@@ -1920,5 +1920,58 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       })) as {draft_step: string; original_release_date: string}
       expect(advanced).toMatchObject({draft_step: 'artwork', original_release_date: '2026-11-06'})
     })
+
+    it('credits extra primary and featured artists, including people not on MeJay, everywhere the artist shows', async () => {
+      await resetIsrcState()
+      const live = await prepareLiveRelease('Credits')
+      const partner = await service.createArtist(live.userId, {name: 'Kay Partner', countryCode: 'US', metadata: {}}) as {id: string}
+      const intruder = await createProviderFixture('CreditsIntruder')
+      const draft = await service.createRelease(live.userId, {title: 'Draft With Guests', releaseType: 'single', primaryArtistId: live.artist.id}) as {id: string; version: number}
+      const base = {draftStep: 'release-information' as const, title: 'Draft With Guests', releaseType: 'single' as const, primaryArtistId: live.artist.id}
+      const credits = [{role: 'featured' as const, name: '  Boldy   James '}, {role: 'primary' as const, artistId: partner.id, name: 'ignored for account artists'}]
+      const saved = await service.updateReleaseDraft(live.userId, draft.id, releaseDraftSchema.parse({...base, expectedVersion: draft.version, additionalArtists: credits})) as {version: number}
+      let detail = await service.getRelease(live.userId, draft.id) as {release: {additional_artists: Array<{role: string; artist_id: string | null; name: string}>; artist_credit: string; version: number}}
+      expect(detail.release.additional_artists).toEqual([
+        {role: 'primary', artist_id: partner.id, name: 'Kay Partner'},
+        {role: 'featured', artist_id: null, name: 'Boldy James'},
+      ])
+      expect(detail.release.artist_credit).toBe('Credits Artist & Kay Partner feat. Boldy James')
+
+      // A step save (no additionalArtists) keeps them; an empty list clears them.
+      await service.updateReleaseDraft(live.userId, draft.id, releaseDraftSchema.parse({...base, draftStep: 'artwork', expectedVersion: saved.version}))
+      detail = await service.getRelease(live.userId, draft.id) as typeof detail
+      expect(detail.release.additional_artists).toHaveLength(2)
+
+      // Refused: the lead again, a repeat, another account's artist.
+      const save = (additionalArtists: unknown[]) => service.updateReleaseDraft(live.userId, draft.id, releaseDraftSchema.parse({...base, expectedVersion: detail.release.version, additionalArtists}))
+      await expect(save([{role: 'featured', artistId: live.artist.id, name: 'x'}])).rejects.toMatchObject({code: 'duplicate_artist_credit'})
+      await expect(save([{role: 'featured', name: 'Boldy James'}, {role: 'primary', name: 'boldy james'}])).rejects.toMatchObject({code: 'duplicate_artist_credit'})
+      await expect(save([{role: 'featured', artistId: intruder.artist.id, name: 'x'}])).rejects.toMatchObject({code: 'not_found'})
+      const cleared = await save([]) as {version: number}
+      expect((await pool.query('SELECT COUNT(*)::integer AS count FROM release_artist_credits WHERE release_id = $1', [draft.id])).rows[0].count).toBe(0)
+
+      // Deleting the draft removes its credits with it.
+      await service.updateReleaseDraft(live.userId, draft.id, releaseDraftSchema.parse({...base, expectedVersion: cleared.version, additionalArtists: [{role: 'featured', name: 'Temp Guest'}]}))
+      await service.deleteReleaseDraft(live.userId, draft.id)
+      expect((await pool.query('SELECT COUNT(*)::integer AS count FROM release_artist_credits WHERE release_id = $1', [draft.id])).rows[0].count).toBe(0)
+
+      // A LIVE release with a guest: the store shows the full credit once, links stay on the lead,
+      // and checkout records the full credit on the order.
+      await pool.query(
+        `INSERT INTO release_artist_credits (id, provider_profile_id, release_id, role, artist_id, display_name, position) VALUES ($1, $2, $3, 'featured', NULL, 'Boldy James', 0)`,
+        [crypto.randomUUID(), live.provider.id, live.release.id],
+      )
+      const store = new StoreService(db() as never)
+      const listed = (await store.listCatalog() as Array<{id: string; artist_name: string; artist_credit: string}>).filter((row) => row.id === live.release.id)
+      expect(listed).toHaveLength(1)
+      expect(listed[0]).toMatchObject({artist_name: 'Credits Artist', artist_credit: 'Credits Artist feat. Boldy James'})
+      await expect(store.getRelease(live.release.id)).resolves.toMatchObject({release: {artist_credit: 'Credits Artist feat. Boldy James', artist_name: 'Credits Artist'}})
+      const {calls} = stubServices()
+      const product = await pool.query<{id: string}>('SELECT id FROM products WHERE release_id = $1', [live.release.id])
+      const checkout = await new CommerceService(db() as never, 'sk_test', 1000).createCheckout(null, product.rows[0].id, 'https://app.test')
+      expect(calls.find((call) => call.url.endsWith('/v1/checkout/sessions'))!.body!.get('line_items[0][price_data][product_data][description]')).toBe('Credits Artist feat. Boldy James - single')
+      const attempt = await pool.query(`SELECT snapshot->'product'->>'artist_name' AS artist FROM marketplace_checkout_attempts WHERE stripe_checkout_session_id = $1`, [checkout.sessionId])
+      expect(attempt.rows[0].artist).toBe('Credits Artist feat. Boldy James')
+    })
   })
 })

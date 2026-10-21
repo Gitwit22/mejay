@@ -1,6 +1,7 @@
 import {MarketplaceError} from './service'
 import {isMarketplaceStorageKey} from './storage-keys'
 import {artistPubliclyVisibleSql} from './artist-visibility'
+import {formatArtistCredit, parseCredits, releaseCreditsJsonSql} from './artist-credit'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -62,6 +63,12 @@ export const STORE_LISTED_RELEASE_SQL = `(r.status = 'LIVE' OR (r.status = 'SCHE
  */
 export const PREVIEW_PLAYABLE_SQL = `(r.status = 'LIVE' OR r.preview_timing = 'before_release')`
 
+/** Adds `artist_credit` ("A & B feat. C") while `artist_name`/`artist_slug` stay the lead artist for links. */
+function withArtistCredit<T extends Record<string, unknown>>(row: T): T & {artist_credit: string} {
+  const {artist_credits: credits, ...rest} = row as T & {artist_credits?: unknown}
+  return {...rest, artist_credit: formatArtistCredit(row.artist_name as string, parseCredits(credits))} as T & {artist_credit: string}
+}
+
 export class StoreService {
   constructor(private readonly database: Database) {}
 
@@ -72,7 +79,7 @@ export class StoreService {
         CASE WHEN r.status = 'LIVE' THEN 'available' ELSE 'preorder' END AS availability,
         CASE WHEN r.status = 'LIVE' THEN NULL ELSE r.scheduled_release_at END AS release_at,
         r.release_timezone,
-        artist.id AS artist_id, artist.name AS artist_name, artist.slug AS artist_slug,
+        artist.id AS artist_id, artist.name AS artist_name, artist.slug AS artist_slug, ${releaseCreditsJsonSql('r')} AS artist_credits,
         artwork.id AS artwork_asset_id,
         offer.product_id, offer.amount_minor, offer.currency,
         (provider.suspended_at IS NULL AND provider.stripe_details_submitted AND provider.stripe_payouts_enabled
@@ -104,8 +111,8 @@ export class StoreService {
       GROUP BY r.id, artist.id, artist.name, artwork.id, offer.product_id, offer.amount_minor, offer.currency,
         provider.suspended_at, provider.stripe_details_submitted, provider.stripe_payouts_enabled, provider.stripe_transfers_status
        ORDER BY (r.status = 'LIVE') DESC, r.published_at DESC NULLS LAST, r.scheduled_release_at, r.updated_at DESC`,
-    ).bind(artistId ?? '').all()
-    return results
+    ).bind(artistId ?? '').all<Record<string, unknown>>()
+    return results.map(withArtistCredit)
   }
 
   async getRelease(releaseId: string): Promise<unknown> {
@@ -115,7 +122,7 @@ export class StoreService {
         CASE WHEN r.status = 'LIVE' THEN 'available' ELSE 'preorder' END AS availability,
         CASE WHEN r.status = 'LIVE' THEN NULL ELSE r.scheduled_release_at END AS release_at,
         r.release_timezone,
-        artist.id AS artist_id, artist.name AS artist_name, artist.slug AS artist_slug,
+        artist.id AS artist_id, artist.name AS artist_name, artist.slug AS artist_slug, ${releaseCreditsJsonSql('r')} AS artist_credits,
         artwork.id AS artwork_asset_id,
         offer.product_id, offer.amount_minor, offer.currency,
         (provider.suspended_at IS NULL AND provider.stripe_details_submitted AND provider.stripe_payouts_enabled
@@ -139,7 +146,7 @@ export class StoreService {
        ) artwork ON TRUE
        WHERE r.id = ?1 AND ${STORE_LISTED_RELEASE_SQL}
        LIMIT 1`,
-    ).bind(releaseId).first()
+    ).bind(releaseId).first<Record<string, unknown>>().then((row) => row && withArtistCredit(row))
     if (!release) throw new MarketplaceError(404, 'not_found', 'Catalog release was not found')
 
     const {results: tracks} = await this.database.prepare(

@@ -30,6 +30,7 @@ import {slugifyArtistName} from './artist-profile'
 import {releaseCertificationProblems, snapshotReleaseCertification, type RequestMeta} from './release-submission-service'
 import {requestedReleaseProblem} from './release-schedule'
 import {maxPreviewStartMs} from '../audio/transcode'
+import {formatArtistCredit} from './artist-credit'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -455,6 +456,12 @@ export class MarketplaceService {
        WHERE r.id = ?1 AND r.provider_profile_id = ?2`,
     ).bind(releaseId, context.providerId).first<Record<string, unknown>>().then((row) => row && withCalendarDates(row))
     if (!release) throw new MarketplaceError(404, 'not_found', 'Release was not found')
+    const {results: additionalArtists} = await this.database.prepare(
+      `SELECT role, artist_id, display_name AS name FROM release_artist_credits
+       WHERE release_id = ?1 AND provider_profile_id = ?2 ORDER BY role DESC, position`,
+    ).bind(releaseId, context.providerId).all<{role: 'primary' | 'featured'; artist_id: string | null; name: string}>()
+    release.additional_artists = additionalArtists
+    release.artist_credit = formatArtistCredit(release.primary_artist_name as string | null, additionalArtists)
 
     const {results: tracks} = await this.database.prepare(
       `SELECT t.*, a.name AS primary_artist_name, i.isrc,
@@ -599,7 +606,8 @@ export class MarketplaceService {
          VALUES (?1, ?2, ?3, 'primary', TRUE)
          ON CONFLICT (release_id, artist_id, role) DO UPDATE SET is_primary = TRUE`,
       ).bind(context.providerId, releaseId, input.primaryArtistId).run()
-      await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'release', entityId: releaseId, action: 'release.draft_updated', before, after: row})
+      if (input.additionalArtists !== undefined) await replaceReleaseCredits(db, context.providerId, releaseId, input.primaryArtistId, input.additionalArtists)
+      await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'release', entityId: releaseId, action: 'release.draft_updated', before, after: {...row, additional_artists: input.additionalArtists}})
       return {...withCalendarDates(row), primary_artist_id: input.primaryArtistId}
     })
   }
@@ -1306,3 +1314,38 @@ export function withCalendarDates<T extends Record<string, unknown>>(row: T): T 
   if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) return {...row, original_release_date: value.slice(0, 10)}
   return row
 }
+
+type AdditionalArtistInput = NonNullable<ReleaseDraftInput['additionalArtists']>
+
+/**
+ * Replaces a draft's extra primary/featured credits. Account artists must belong to this account
+ * (their current name is stored as the credit); a name-only credit is someone not on MeJay. The lead
+ * primary artist and repeats are refused so the credit line never names someone twice.
+ */
+async function replaceReleaseCredits(db: Database, providerId: string, releaseId: string, leadArtistId: string, credits: AdditionalArtistInput): Promise<void> {
+  const seen = new Set<string>()
+  const rows: Array<{role: 'primary' | 'featured'; artistId: string | null; name: string}> = []
+  for (const credit of credits) {
+    let name = credit.name.replace(/\s+/g, ' ').trim()
+    const artistId = credit.artistId ?? null
+    if (artistId) {
+      if (artistId === leadArtistId) throw new MarketplaceError(422, 'duplicate_artist_credit', 'The primary artist is already credited. Choose a different artist.')
+      const artist = await db.prepare('SELECT name FROM artists WHERE id = ?1 AND provider_profile_id = ?2').bind(artistId, providerId).first<{name: string}>()
+      if (!artist) throw new MarketplaceError(404, 'not_found', 'Artist was not found')
+      name = artist.name
+    }
+    const key = artistId ? `id:${artistId}` : `name:${name.toLowerCase()}`
+    if (seen.has(key) || seen.has(`name:${name.toLowerCase()}`)) throw new MarketplaceError(422, 'duplicate_artist_credit', `${name} is listed more than once.`)
+    seen.add(key)
+    seen.add(`name:${name.toLowerCase()}`)
+    rows.push({role: credit.role, artistId, name})
+  }
+  await db.prepare('DELETE FROM release_artist_credits WHERE release_id = ?1 AND provider_profile_id = ?2').bind(releaseId, providerId).run()
+  for (const [position, row] of rows.entries()) {
+    await db.prepare(
+      `INSERT INTO release_artist_credits (id, provider_profile_id, release_id, role, artist_id, display_name, position)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+    ).bind(crypto.randomUUID(), providerId, releaseId, row.role, row.artistId, row.name, position).run()
+  }
+}
+

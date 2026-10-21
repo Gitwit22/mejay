@@ -62,7 +62,8 @@ describe('publishing discovery integration', () => {
       action: 'publish_now', expectedVersion: 1,
     })
 
-    expect(await store.listCatalog()).toEqual([release])
+    // The store adds the full artist credit line to each listing.
+    expect(await store.listCatalog()).toEqual([{...release, artist_credit: expect.any(String)}])
     const overview = await discovery.getOverview()
     expect(overview.newestReleases).toEqual([release])
     expect(overview.newestSingles).toEqual([release])

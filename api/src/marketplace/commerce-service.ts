@@ -3,6 +3,7 @@ import {allocateCumulativeRefunds, buildReportingEvents, buildReportingEventsFor
 import {MarketplaceError} from './service'
 import {stripeRequest, StripeRequestError} from '../services/stripe'
 import {formatReleaseTime} from './release-schedule'
+import {formatArtistCredit, parseCredits, releaseCreditsJsonSql} from './artist-credit'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -258,7 +259,7 @@ export class CommerceService {
       `SELECT product.id AS product_id, product.name AS product_name, price.id AS price_id,
         product.track_id, sold_track.title AS track_title,
         price.amount_minor, price.currency, release.id AS release_id, release.title AS release_title,
-        release.release_type, release.upc, artist.name AS artist_name, artwork.id AS artwork_asset_id,
+        release.release_type, release.upc, artist.name AS artist_name, ${releaseCreditsJsonSql('release')} AS artist_credits, artwork.id AS artwork_asset_id,
         release.provider_profile_id, provider.stripe_account_id,
         release.status AS release_status, release.scheduled_release_at, release.release_timezone,
         (provider.suspended_at IS NULL AND provider.stripe_details_submitted AND provider.stripe_payouts_enabled
@@ -285,7 +286,12 @@ export class CommerceService {
          ORDER BY asset.created_at DESC LIMIT 1
        ) artwork ON TRUE
        WHERE product.id = ?1 AND product.active = TRUE LIMIT 1`,
-    ).bind(productId).first<ProductRow>()
+    ).bind(productId).first<ProductRow & {artist_credits?: unknown}>().then((row) => {
+      if (!row) return null
+      // The order records the full credit ("A & B feat. C"), which Stripe, receipts and emails show.
+      const {artist_credits: credits, ...rest} = row
+      return {...rest, artist_name: formatArtistCredit(row.artist_name, parseCredits(credits))} as ProductRow
+    })
     if (!product) throw new MarketplaceError(404, 'product_not_found', 'This product is not available')
     if (!product.purchase_ready || !product.stripe_account_id) {
       throw new MarketplaceError(409, 'provider_payout_not_ready', 'This provider is still completing Stripe payout setup')

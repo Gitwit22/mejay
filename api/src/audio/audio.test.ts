@@ -24,6 +24,18 @@ describe('tag mapping', () => {
     expect(data).toMatchObject({title: 'Night Drive (Extended Mix)', artist: 'John Blaze feat. Guest One & Guest Two', year: '2025', genre: 'House', label: 'MeJay', copyright: '2025 John Blaze', trackTotal: 4})
   })
 
+  it('tags release-level extra primaries and features: album artist lists only primaries', () => {
+    const data = toTagData({
+      track_id: 't', release_id: 'r', provider_profile_id: 'p', title: 'MIA', version_title: null, track_number: 1, disc_number: 1,
+      explicit: false, track_genre: null, release_title: 'MIA', release_version_title: null, release_genre: 'Rap', label_name: null,
+      original_release_date: null, copyright_year: 2026, copyright_holder: null, isrc: null, track_artist: 'John Blaze',
+      release_artist: 'John Blaze', featured_artists: ['Track Guest', 'Boldy James'], track_total: 1, artwork_key: null, artwork_mime: null,
+      release_credits: [{role: 'primary', name: 'Kay'}, {role: 'featured', name: 'Boldy James'}],
+    })
+    expect(data.albumArtist).toBe('John Blaze & Kay')
+    expect(data.artist).toBe('John Blaze & Kay feat. Boldy James & Track Guest')
+  })
+
   it('writes only filled tags, including the ISRC frame, with no line breaks', () => {
     const written = Object.fromEntries(id3Tags({...tags, genre: 'House\nMusic'}))
     expect(written).toMatchObject({title: 'Night Drive', track: '2/5', TSRC: 'QTA3L2600001', genre: 'House Music'})

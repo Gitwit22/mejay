@@ -81,7 +81,7 @@ function ReviewBody({releaseId, onDone}: {releaseId: string; onDone: () => void}
     <div className="grid gap-5 sm:grid-cols-[10rem_1fr]">
       {release.artwork_asset_id ? <a href={reviewAssetUrl(release.artwork_asset_id)} target="_blank" rel="noreferrer"><img src={reviewAssetUrl(release.artwork_asset_id)} alt="Release artwork" className="aspect-square w-40 rounded object-cover" /></a> : <div className="grid aspect-square w-40 place-items-center rounded bg-zinc-800 text-xs text-zinc-500">No artwork</div>}
       <dl className="grid gap-3 sm:grid-cols-3">
-        <Datum label="Artist" value={release.primary_artist_name} /><Datum label="Account" value={release.provider_name} /><Datum label="Status" value={status.replace(/_/g, ' ')} />
+        <Datum label="Artist" value={(release.artist_credit as string | undefined) || release.primary_artist_name} /><Datum label="Account" value={release.provider_name} /><Datum label="Status" value={status.replace(/_/g, ' ')} />
         <Datum label="Type" value={release.release_type} /><Datum label="Genre" value={[release.genre, release.subgenre].filter(Boolean).join(' / ')} /><Datum label="Version" value={release.version_title} />
         <Datum label="Label" value={release.label_name} /><Datum label="UPC" value={release.upc} /><Datum label="Original release" value={release.original_release_date} />
         <Datum label="Requested release" value={release.requested_release_at ? formatReleaseTime(release.requested_release_at, release.release_timezone) : 'As soon as approved'} /><Datum label="Pre-orders" value={release.preorders_enabled ? 'Enabled' : 'Off'} />

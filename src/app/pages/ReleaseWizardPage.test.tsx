@@ -176,3 +176,52 @@ describe('release wizard: song previews', () => {
     await waitFor(() => expect(updateProviderTrack).toHaveBeenLastCalledWith('track-1', expect.objectContaining({previewStartMs: null})))
   })
 })
+
+describe('release wizard: additional artists', () => {
+  beforeEach(() => {
+    vi.mocked(listProviderArtists).mockResolvedValue([{id: 'artist-1', name: 'John Blaze'}, {id: 'artist-2', name: 'Kay'}] as never)
+    vi.mocked(updateProviderRelease).mockReset().mockResolvedValue({} as never)
+  })
+
+  it('adds a featured guest not on MeJay and another primary artist, previews the credit and saves both', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail({release: {...detail().release, title: 'MIA ft Boldy James'}}))
+    renderStep('release-information')
+    expect(await screen.findByText(/Add featured artists under Additional artists instead of in the title/)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Release title'), {target: {value: 'MIA'}})
+    expect(screen.queryByText(/instead of in the title/)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', {name: 'Add featured artist'}))
+    // An empty name blocks saving until it is filled or removed.
+    expect(screen.getByRole('button', {name: 'Save information'})).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('Artist 1 name'), {target: {value: 'Boldy James'}})
+
+    fireEvent.click(screen.getByRole('button', {name: 'Add primary artist'}))
+    await waitFor(() => expect(screen.getByLabelText('Artist 2')).toHaveTextContent('Kay'))
+    fireEvent.change(screen.getByLabelText('Artist 2'), {target: {value: 'artist-2'}})
+    expect(screen.getByText('John Blaze & Kay feat. Boldy James')).toBeInTheDocument()
+    // The lead artist is never offered again.
+    expect(screen.getByLabelText('Artist 2')).not.toHaveTextContent('John Blaze')
+
+    fireEvent.click(screen.getByRole('button', {name: 'Save information'}))
+    await waitFor(() => expect(updateProviderRelease).toHaveBeenCalledWith('release-1', expect.objectContaining({
+      title: 'MIA',
+      additionalArtists: [{role: 'featured', artistId: null, name: 'Boldy James'}, {role: 'primary', artistId: 'artist-2', name: 'Kay'}],
+    })))
+  })
+
+  it('loads saved credits, switches a role and removes one', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail({release: {...detail().release, additional_artists: [
+      {role: 'featured', artist_id: null, name: 'Boldy James'}, {role: 'featured', artist_id: 'artist-2', name: 'Kay'},
+    ]}}))
+    renderStep('release-information')
+    expect(await screen.findByText('John Blaze feat. Boldy James & Kay')).toBeInTheDocument()
+    fireEvent.click(screen.getAllByRole('radio', {name: 'Primary'})[1])
+    expect(screen.getByText('John Blaze & Kay feat. Boldy James')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Remove artist 1'}))
+    expect(screen.getByText('John Blaze & Kay')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Save information'}))
+    await waitFor(() => expect(updateProviderRelease).toHaveBeenCalledWith('release-1', expect.objectContaining({
+      additionalArtists: [{role: 'primary', artistId: 'artist-2', name: 'Kay'}],
+    })))
+  })
+})
