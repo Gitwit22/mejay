@@ -14,7 +14,7 @@ import {ArtistProfileService} from './artist-profile-service'
 import {CERTIFICATION_VERSION} from './release-certification'
 import {claimStripeWebhookEvent} from './webhook-events'
 import {MarketplaceService} from './service'
-import {providerSettingsSchema} from './schemas'
+import {providerSettingsSchema, releaseDraftSchema} from './schemas'
 import {ProviderIsrcService} from './provider-isrc-service'
 import {sendOrderConfirmation} from './order-email'
 import {onRequest as stripeWebhook} from '../routes/stripe-webhook'
@@ -1902,6 +1902,23 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       expect(saved.preview_timing).toBe('before_release')
       const kept = await service.updateReleaseDraft(fixture.userId, fixture.release.id, {...base, expectedVersion: saved.version}) as {preview_timing: string}
       expect(kept.preview_timing).toBe('before_release')
+    })
+
+    it('returns the original release date as a plain date so "Save and continue" can send it back', async () => {
+      await resetIsrcState()
+      const fixture = await createProviderFixture('SaveContinue')
+      const base = {title: 'SaveContinue Release', releaseType: 'single' as const, primaryArtistId: fixture.artist.id}
+      const saved = await service.updateReleaseDraft(fixture.userId, fixture.release.id, releaseDraftSchema.parse({...base, draftStep: 'release-information', expectedVersion: fixture.release.version, originalReleaseDate: '2026-11-06'})) as {version: number; original_release_date: string}
+      expect(saved.original_release_date).toBe('2026-11-06')
+      const detail = await service.getRelease(fixture.userId, fixture.release.id) as {release: {original_release_date: string; version: number}}
+      expect(detail.release.original_release_date).toBe('2026-11-06')
+      const listed = await service.listReleases(fixture.userId) as Array<{id: string; original_release_date: string}>
+      expect(listed.find((row) => row.id === fixture.release.id)?.original_release_date).toBe('2026-11-06')
+      // What the wizard's "Save and continue" sends: the stored values echoed back with the next step.
+      const advanced = await service.updateReleaseDraft(fixture.userId, fixture.release.id, releaseDraftSchema.parse({
+        ...base, draftStep: 'artwork', expectedVersion: detail.release.version, originalReleaseDate: detail.release.original_release_date,
+      })) as {draft_step: string; original_release_date: string}
+      expect(advanced).toMatchObject({draft_step: 'artwork', original_release_date: '2026-11-06'})
     })
   })
 })

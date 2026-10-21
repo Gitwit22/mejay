@@ -441,8 +441,8 @@ export class MarketplaceService {
        WHERE r.provider_profile_id = ?1
        GROUP BY r.id, a.id, a.name
        ORDER BY r.updated_at DESC, r.created_at DESC`,
-    ).bind(context.providerId).all()
-    return results
+    ).bind(context.providerId).all<Record<string, unknown>>()
+    return results.map(withCalendarDates)
   }
 
   async getRelease(userId: string, releaseId: string): Promise<unknown> {
@@ -453,7 +453,7 @@ export class MarketplaceService {
        LEFT JOIN release_artists ra ON ra.release_id = r.id AND ra.provider_profile_id = r.provider_profile_id AND ra.is_primary = TRUE
        LEFT JOIN artists a ON a.id = ra.artist_id AND a.provider_profile_id = r.provider_profile_id
        WHERE r.id = ?1 AND r.provider_profile_id = ?2`,
-    ).bind(releaseId, context.providerId).first()
+    ).bind(releaseId, context.providerId).first<Record<string, unknown>>().then((row) => row && withCalendarDates(row))
     if (!release) throw new MarketplaceError(404, 'not_found', 'Release was not found')
 
     const {results: tracks} = await this.database.prepare(
@@ -600,7 +600,7 @@ export class MarketplaceService {
          ON CONFLICT (release_id, artist_id, role) DO UPDATE SET is_primary = TRUE`,
       ).bind(context.providerId, releaseId, input.primaryArtistId).run()
       await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'release', entityId: releaseId, action: 'release.draft_updated', before, after: row})
-      return {...row, primary_artist_id: input.primaryArtistId}
+      return {...withCalendarDates(row), primary_artist_id: input.primaryArtistId}
     })
   }
 
@@ -1290,4 +1290,19 @@ export function resolvePreviewStart(before: Record<string, unknown> | null, inpu
     throw new MarketplaceError(422, 'preview_start_too_late', `The preview must start early enough to play 10 seconds. The latest start for this song is ${Math.floor(latest / 60)}:${String(latest % 60).padStart(2, '0')}.`)
   }
   return input.previewStartMs
+}
+
+/**
+ * Postgres DATE columns arrive as JS Dates (local midnight), which serialize as full timestamps
+ * ("2026-11-06T00:00:00.000Z"). The draft API accepts and the date inputs expect plain calendar
+ * dates, so release rows sent to the artist portal carry "YYYY-MM-DD".
+ */
+export function withCalendarDates<T extends Record<string, unknown>>(row: T): T {
+  const value = row.original_release_date
+  if (value instanceof Date) {
+    const pad = (part: number) => String(part).padStart(2, '0')
+    return {...row, original_release_date: `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`}
+  }
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) return {...row, original_release_date: value.slice(0, 10)}
+  return row
 }
