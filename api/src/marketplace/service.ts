@@ -28,6 +28,7 @@ import {formatMinimumPrice, getReleaseSaleReadiness, MINIMUM_RELEASE_PRICE_MINOR
 import {inspectUpload, validateInspectedUpload, isTruncatedJpegHeader} from './upload-validation'
 import {slugifyArtistName} from './artist-profile'
 import {releaseCertificationProblems, snapshotReleaseCertification, type RequestMeta} from './release-submission-service'
+import {requestedReleaseProblem} from './release-schedule'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -561,6 +562,7 @@ export class MarketplaceService {
         throw new MarketplaceError(409, 'stale_release_version', 'The release was modified by another request')
       }
       await assertOwned(db, 'artists', input.primaryArtistId, context.providerId)
+      const schedule = resolveDraftSchedule(before, input)
       const now = nowIso()
       const duplicateFingerprint = releaseFingerprint(input)
       const row = await inserted<Record<string, unknown>>(db.prepare(
@@ -569,6 +571,7 @@ export class MarketplaceService {
           original_release_date = ?6, scheduled_release_at = ?7, genre = ?8, subgenre = ?9, upc = ?10,
           copyright_year = ?11, copyright_holder = ?12, phonographic_copyright_year = ?13,
           phonographic_copyright_holder = ?14, draft_step = ?15, duplicate_fingerprint = ?16,
+          requested_release_at = ?21, release_timezone = ?22, preorders_enabled = ?23,
           version = version + 1, updated_at = ?17
          WHERE id = ?18 AND provider_profile_id = ?19 AND version = ?20 RETURNING *`,
       ).bind(
@@ -577,7 +580,7 @@ export class MarketplaceService {
         input.genre ?? null, input.subgenre ?? null, input.upc ?? null, input.copyrightYear ?? null,
         input.copyrightHolder ?? null, input.phonographicCopyrightYear ?? null,
         input.phonographicCopyrightHolder ?? null, input.draftStep, duplicateFingerprint, now, releaseId, context.providerId,
-        input.expectedVersion,
+        input.expectedVersion, schedule.requestedReleaseAt, schedule.releaseTimezone, schedule.preordersEnabled,
       ))
       await db.prepare(
         `UPDATE release_artists SET is_primary = FALSE
@@ -1218,8 +1221,40 @@ export class MarketplaceService {
       if (pricing?.missing_splits !== 0) unmet.push('active revenue splits totaling 10000 basis points for every track')
     }
 
-    if (targetStatus === 'SUBMITTED') unmet.push(...await releaseCertificationProblems(db, release))
+    if (targetStatus === 'SUBMITTED') {
+      unmet.push(...await releaseCertificationProblems(db, release))
+      // Measured from the moment of submission; releases without a requested date are unaffected.
+      const releaseDateProblem = requestedReleaseProblem(release.requested_release_at)
+      if (releaseDateProblem) unmet.push(releaseDateProblem)
+    }
 
     return unmet
   }
+}
+
+/**
+ * The release-date fields a draft save will store. Omitted fields keep their stored value so older
+ * clients and step saves never clear them; null clears. A newly chosen time must be in the future,
+ * and pre-orders need a release time to count down to.
+ */
+export function resolveDraftSchedule(
+  before: Record<string, unknown>,
+  input: Pick<ReleaseDraftInput, 'requestedReleaseAt' | 'releaseTimezone' | 'preordersEnabled'>,
+  now = Date.now(),
+): {requestedReleaseAt: string | null; releaseTimezone: string | null; preordersEnabled: boolean} {
+  const stored = before.requested_release_at ? new Date(before.requested_release_at as string).toISOString() : null
+  const requestedReleaseAt = input.requestedReleaseAt === undefined
+    ? stored
+    : input.requestedReleaseAt === null ? null : new Date(input.requestedReleaseAt).toISOString()
+  if (requestedReleaseAt && requestedReleaseAt !== stored && new Date(requestedReleaseAt).getTime() <= now) {
+    throw new MarketplaceError(422, 'release_date_in_past', 'Choose a release date and time in the future.')
+  }
+  const releaseTimezone = requestedReleaseAt
+    ? (input.releaseTimezone === undefined ? (before.release_timezone as string | null) : input.releaseTimezone) || 'UTC'
+    : null
+  const preordersEnabled = input.preordersEnabled === undefined ? Boolean(before.preorders_enabled) : input.preordersEnabled
+  if (preordersEnabled && !requestedReleaseAt) {
+    throw new MarketplaceError(422, 'preorders_need_release_date', 'Pre-orders need a release date. Choose one or turn pre-orders off.')
+  }
+  return {requestedReleaseAt, releaseTimezone, preordersEnabled}
 }

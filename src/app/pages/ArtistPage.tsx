@@ -3,7 +3,8 @@ import {useQuery} from '@tanstack/react-query'
 import {ArrowLeft, BadgeCheck, ExternalLink, Mail, MapPin, Pause, Play, ShoppingBag} from 'lucide-react'
 import {Link, useParams} from 'react-router-dom'
 
-import {Cover, ProductCard, PurchaseButton, StoreError, StoreLoading} from '@/app/pages/MusicStorePage'
+import {Cover, PreorderBadge, ProductCard, PurchaseButton, StoreError, StoreLoading} from '@/app/pages/MusicStorePage'
+import {isPreorder} from '@/lib/releaseTime'
 import {Button} from '@/components/ui/button'
 import {Dialog, DialogContent, DialogTitle} from '@/components/ui/dialog'
 import {usePreview} from '@/hooks/useStorePreview'
@@ -188,10 +189,11 @@ export function ArtistPageView({artist, releases, imageUrl, topBar}: {
               {releaseTypeLabel(featured.release_type)}{featured.genre ? ` · ${featured.genre}` : ''}{formatDate(featured.original_release_date || featured.published_at) ? ` · ${formatDate(featured.original_release_date || featured.published_at)}` : ''}
               {` · ${featured.track_count} ${featured.track_count === 1 ? 'track' : 'tracks'}`}
             </p>
+            <PreorderBadge release={featured} className="mt-3 text-sm" />
             <p className="mt-4 text-3xl font-bold sm:mt-6">{formatPrice(featured.amount_minor, featured.currency)}</p>
             <div className="mt-5 flex flex-wrap gap-3">
               <Button variant="outline" className="gap-2" disabled={!featured.preview_asset_id} onClick={() => preview.toggle(featured.id, featured.preview_asset_id)}>{playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}{playing ? 'Pause preview' : 'Preview'}</Button>
-              <PurchaseButton className="flex-1 sm:w-44 sm:flex-none" available={featured.purchase_available} productId={featured.product_id} />
+              <PurchaseButton className="flex-1 sm:w-44 sm:flex-none" label={isPreorder(featured) ? 'Pre-order' : undefined} available={featured.purchase_available} productId={featured.product_id} />
             </div>
           </div>
         </div>

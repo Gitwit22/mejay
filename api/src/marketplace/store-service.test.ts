@@ -1,9 +1,9 @@
 import {describe, expect, it, vi} from 'vitest'
 
-import {previewByteLimit, resolvePreviewRange, StoreService} from './store-service'
+import {previewByteLimit, resolvePreviewRange, STORE_LISTED_RELEASE_SQL, StoreService} from './store-service'
 
 describe('public music store policy', () => {
-  it('filters catalog listings to LIVE releases in the database query', async () => {
+  it('filters catalog listings to LIVE releases and approved pre-orders in the database query', async () => {
     const prepare = vi.fn((sql: string) => {
       const statement = {
         bind: vi.fn(() => statement),
@@ -16,7 +16,9 @@ describe('public music store policy', () => {
     })
 
     await expect(new StoreService({prepare} as never).listCatalog()).resolves.toEqual([])
-    expect(prepare.mock.calls[0][0]).toContain("WHERE r.status = 'LIVE'")
+    // Only LIVE releases, or SCHEDULED ones the artist opened for pre-order; never drafts or reviews.
+    expect(prepare.mock.calls[0][0]).toContain(`WHERE ${STORE_LISTED_RELEASE_SQL}`)
+    expect(STORE_LISTED_RELEASE_SQL).toBe("(r.status = 'LIVE' OR (r.status = 'SCHEDULED' AND r.preorders_enabled AND r.scheduled_release_at IS NOT NULL))")
     expect(prepare.mock.calls[0][0]).toContain("provider.stripe_transfers_status = 'active'")
   })
 

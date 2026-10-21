@@ -221,6 +221,10 @@ export type ProviderReleaseDetail = {
     upc: string | null
     original_release_date: string | null
     scheduled_release_at: string | null
+    /** The artist's chosen public release time (UTC) and the timezone it is shown in. */
+    requested_release_at?: string | null
+    release_timezone?: string | null
+    preorders_enabled?: boolean
     copyright_year: number | null
     copyright_holder: string | null
     phonographic_copyright_year: number | null
@@ -360,6 +364,9 @@ export function updateProviderRelease(releaseId: string, input: {
   upc?: string | null
   originalReleaseDate?: string | null
   scheduledReleaseAt?: string | null
+  requestedReleaseAt?: string | null
+  releaseTimezone?: string | null
+  preordersEnabled?: boolean
   copyrightYear?: number | null
   copyrightHolder?: string | null
   phonographicCopyrightYear?: number | null

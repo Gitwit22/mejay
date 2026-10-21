@@ -18,6 +18,10 @@ export type StoreRelease = {
   purchase_available: boolean
   track_count: number
   preview_asset_id: string | null
+  /** 'preorder' for an approved, scheduled release open for pre-order (absent = available). */
+  availability?: 'available' | 'preorder'
+  release_at?: string | null
+  release_timezone?: string | null
 }
 
 export type StoreTrack = {

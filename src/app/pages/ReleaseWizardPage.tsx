@@ -32,6 +32,7 @@ import {
   setProviderTrackPrice,
   clearProviderTrackPrice,
 } from '@/lib/providerApi'
+import {browserTimeZone, formatReleaseTime, listTimeZones, meetsReleaseLead, RELEASE_LEAD_MESSAGE, SCHEDULER_NOTE, utcToZonedLocal, zonedLocalToUtcIso} from '@/lib/releaseTime'
 
 const steps: Array<{id: ReleaseDraftStep; label: string}> = [
   {id: 'release-information', label: 'Release Information'},
@@ -119,10 +120,12 @@ function ReleaseInformation({detail}: {detail: ProviderReleaseDetail}) {
   const release = detail.release
   const artists = useQuery({queryKey: ['provider', 'artists'], queryFn: listProviderArtists})
   const [form, setForm] = useState({title: release.title, versionTitle: release.version_title || '', releaseType: release.release_type, primaryArtistId: release.primary_artist_id, labelName: release.label_name || '', catalogNumber: release.catalog_number || '', genre: release.genre || '', subgenre: release.subgenre || '', upc: release.upc || '', originalReleaseDate: release.original_release_date || '', copyrightYear: release.copyright_year?.toString() || '', copyrightHolder: release.copyright_holder || '', phonographicCopyrightYear: release.phonographic_copyright_year?.toString() || '', phonographicCopyrightHolder: release.phonographic_copyright_holder || ''})
-  const save = useMutation({mutationFn: () => updateProviderRelease(release.id, {expectedVersion: release.version, draftStep: 'release-information', ...form, versionTitle: form.versionTitle || null, labelName: form.labelName || null, catalogNumber: form.catalogNumber || null, genre: form.genre || null, subgenre: form.subgenre || null, upc: form.upc || null, originalReleaseDate: form.originalReleaseDate || null, copyrightYear: form.copyrightYear ? Number(form.copyrightYear) : null, copyrightHolder: form.copyrightHolder || null, phonographicCopyrightYear: form.phonographicCopyrightYear ? Number(form.phonographicCopyrightYear) : null, phonographicCopyrightHolder: form.phonographicCopyrightHolder || null}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', release.id]}); toast({title: 'Release information saved'})}})
+  const save = useMutation({mutationFn: () => updateProviderRelease(release.id, {expectedVersion: release.version, draftStep: 'release-information', ...form, ...scheduleInput(schedule), versionTitle: form.versionTitle || null, labelName: form.labelName || null, catalogNumber: form.catalogNumber || null, genre: form.genre || null, subgenre: form.subgenre || null, upc: form.upc || null, originalReleaseDate: form.originalReleaseDate || null, copyrightYear: form.copyrightYear ? Number(form.copyrightYear) : null, copyrightHolder: form.copyrightHolder || null, phonographicCopyrightYear: form.phonographicCopyrightYear ? Number(form.phonographicCopyrightYear) : null, phonographicCopyrightHolder: form.phonographicCopyrightHolder || null}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', release.id]}); toast({title: 'Release information saved'})}})
   const field = (key: keyof typeof form) => ({value: form[key], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({...form, [key]: event.target.value})})
   const upcProblem = upcError(form.upc)
-  return <><StepHeading title="Release Information" detail="Core catalog details for this release." /><form onSubmit={(event) => {event.preventDefault(); if (!upcProblem) save.mutate()}} className="grid gap-5 sm:grid-cols-2">
+  const [schedule, setSchedule] = useState<ReleaseScheduleValue>(() => scheduleFromRelease(release))
+  const scheduleProblem = releaseScheduleError(schedule)
+  return <><StepHeading title="Release Information" detail="Core catalog details for this release." /><form onSubmit={(event) => {event.preventDefault(); if (!upcProblem && !scheduleProblem) save.mutate()}} className="grid gap-5 sm:grid-cols-2">
     <Field label="Release title"><Input required {...field('title')} /></Field><Field label="Version"><Input placeholder="Optional" {...field('versionTitle')} /></Field>
     <Field label="Release type"><select className="h-10 w-full rounded-md border border-white/10 bg-zinc-950 px-3 text-sm" {...field('releaseType')}><option value="single">Single</option><option value="ep">EP</option><option value="album">Album</option></select></Field>
     <Field label="Primary artist"><select required className="h-10 w-full rounded-md border border-white/10 bg-zinc-950 px-3 text-sm" {...field('primaryArtistId')}>{artists.data?.map((artist) => <option key={artist.id} value={artist.id}>{artist.name}</option>)}</select></Field>
@@ -133,10 +136,15 @@ function ReleaseInformation({detail}: {detail: ProviderReleaseDetail}) {
       <Input id="release-upc" inputMode="numeric" placeholder="12-14 digits" aria-invalid={Boolean(upcProblem)} aria-describedby="release-upc-help" value={form.upc} onChange={(event) => setForm({...form, upc: event.target.value.replace(/[\s-]/g, '')})} />
       <p id="release-upc-help" className={`text-xs ${upcProblem ? 'text-red-400' : 'text-zinc-500'}`}>{upcProblem ?? 'Already released? Enter the UPC/EAN your distributor assigned. Leave blank if it has none.'}</p>
     </div>
-    <Field label="Original release date"><Input type="date" {...field('originalReleaseDate')} /></Field>
+    <div className="space-y-2">
+      <Label htmlFor="release-original-date">Original release date (optional)</Label>
+      <Input id="release-original-date" type="date" aria-describedby="release-original-date-help" {...field('originalReleaseDate')} />
+      <p id="release-original-date-help" className="text-xs text-zinc-500">When this music first came out anywhere. This is history only; it does not schedule anything.</p>
+    </div>
+    <ReleaseScheduleFields value={schedule} onChange={setSchedule} problem={scheduleProblem} />
     <Field label="Copyright year"><Input type="number" min="1900" max="2200" {...field('copyrightYear')} /></Field><Field label="Copyright holder"><Input {...field('copyrightHolder')} /></Field>
     <Field label="Phonographic copyright year"><Input type="number" min="1900" max="2200" {...field('phonographicCopyrightYear')} /></Field><Field label="Phonographic copyright holder"><Input {...field('phonographicCopyrightHolder')} /></Field>
-    {save.isError && <p className="text-sm text-red-400 sm:col-span-2">{save.error.message}</p>}<Button disabled={save.isPending || Boolean(upcProblem)} className="sm:col-span-2">{save.isPending ? 'Saving...' : 'Save information'}</Button>
+    {save.isError && <p className="text-sm text-red-400 sm:col-span-2">{save.error.message}</p>}<Button disabled={save.isPending || Boolean(upcProblem) || Boolean(scheduleProblem)} className="sm:col-span-2">{save.isPending ? 'Saving...' : 'Save information'}</Button>
   </form></>
 }
 
@@ -147,6 +155,72 @@ function upcError(value: string): string | null {
 }
 
 function Field({label, children}: {label: string; children: React.ReactNode}) { return <div className="space-y-2"><Label>{label}</Label>{children}</div> }
+
+type ReleaseScheduleValue = {mode: 'on_approval' | 'scheduled'; local: string; timeZone: string; preorders: boolean}
+
+function scheduleFromRelease(release: ProviderReleaseDetail['release']): ReleaseScheduleValue {
+  const timeZone = release.release_timezone || browserTimeZone()
+  return {
+    mode: release.requested_release_at ? 'scheduled' : 'on_approval',
+    local: utcToZonedLocal(release.requested_release_at, timeZone),
+    timeZone,
+    preorders: Boolean(release.preorders_enabled),
+  }
+}
+
+function scheduledInstant(value: ReleaseScheduleValue): string | null {
+  return value.mode === 'scheduled' ? zonedLocalToUtcIso(value.local, value.timeZone) : null
+}
+
+/** Mirrors the API: a chosen time must be valid and in the future; pre-orders need a date. */
+function releaseScheduleError(value: ReleaseScheduleValue): string | null {
+  if (value.mode === 'on_approval') return null
+  const instant = scheduledInstant(value)
+  if (!instant) return 'Choose a release date and time.'
+  if (new Date(instant).getTime() <= Date.now()) return 'Choose a release date and time in the future.'
+  return null
+}
+
+function scheduleInput(value: ReleaseScheduleValue): {requestedReleaseAt: string | null; releaseTimezone: string | null; preordersEnabled: boolean} {
+  const instant = scheduledInstant(value)
+  return {requestedReleaseAt: instant, releaseTimezone: instant ? value.timeZone : null, preordersEnabled: Boolean(instant) && value.preorders}
+}
+
+/** Public release date and pre-order opt-in. "Original release date" stays a separate, historical field. */
+export function ReleaseScheduleFields({value, onChange, problem}: {value: ReleaseScheduleValue; onChange: (value: ReleaseScheduleValue) => void; problem: string | null}) {
+  const zones = listTimeZones()
+  const instant = scheduledInstant(value)
+  const tooSoon = Boolean(instant) && !meetsReleaseLead(instant)
+  return <fieldset className="space-y-4 rounded-md border border-white/10 p-4 sm:col-span-2">
+    <legend className="px-1 text-sm font-medium">Release date on MeJay</legend>
+    <p className="text-xs text-zinc-400">{RELEASE_LEAD_MESSAGE} MeJay still reviews and approves every release.</p>
+    <div className="flex flex-wrap gap-4 text-sm">
+      <label className="flex items-center gap-2"><input type="radio" name="release-mode" checked={value.mode === 'on_approval'} onChange={() => onChange({...value, mode: 'on_approval', preorders: false})} />As soon as MeJay approves</label>
+      <label className="flex items-center gap-2"><input type="radio" name="release-mode" checked={value.mode === 'scheduled'} onChange={() => onChange({...value, mode: 'scheduled'})} />On a date I choose</label>
+    </div>
+    {value.mode === 'scheduled' && <div className="grid gap-4 sm:grid-cols-2">
+      <div className="space-y-2">
+        <Label htmlFor="release-date-time">Release date and time</Label>
+        <Input id="release-date-time" type="datetime-local" value={value.local} aria-invalid={Boolean(problem)} onChange={(event) => onChange({...value, local: event.target.value})} />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="release-timezone">Timezone</Label>
+        <select id="release-timezone" className="h-10 w-full rounded-md border border-white/10 bg-zinc-950 px-3 text-sm" value={value.timeZone} onChange={(event) => onChange({...value, timeZone: event.target.value})}>
+          {(zones.includes(value.timeZone) ? zones : [value.timeZone, ...zones]).map((zone) => <option key={zone} value={zone}>{zone.replace(/_/g, ' ')}</option>)}
+        </select>
+      </div>
+      <div className="sm:col-span-2 space-y-1 text-xs" aria-live="polite">
+        {problem ? <p className="text-red-400">{problem}</p> : instant && <p className="text-zinc-300">Releases {formatReleaseTime(instant, value.timeZone)} ({new Date(instant).toISOString().replace('.000Z', 'Z')} UTC).</p>}
+        {tooSoon && !problem && <p className="text-amber-300">This is less than 7 days away. Pick a later date before you submit for review.</p>}
+        <p className="text-zinc-500">{SCHEDULER_NOTE}</p>
+      </div>
+      <label className="flex items-start gap-3 sm:col-span-2">
+        <Checkbox checked={value.preorders} onCheckedChange={(checked) => onChange({...value, preorders: checked === true})} aria-describedby="release-preorders-help" />
+        <span><span className="block text-sm font-medium">Enable pre-orders</span><span id="release-preorders-help" className="block text-xs text-zinc-500">Once MeJay approves and schedules this release, fans can buy it before release day. They're charged at checkout and get their download on release day.</span></span>
+      </label>
+    </div>}
+  </fieldset>
+}
 
 function ArtworkStep({releaseId, detail}: {releaseId: string; detail: ProviderReleaseDetail}) {
   const queryClient = useQueryClient()
@@ -362,7 +436,14 @@ function ReviewStep({detail}: {detail: ProviderReleaseDetail}) {
   const submit = useMutation({mutationFn: () => submitProviderRelease(detail.release.id, detail.release.version), onSuccess: () => {toast({title: 'Submitted for MeJay Review', description: 'We will let you know when the review is complete.'}); navigate('/app/artist')}})
   const editable = ['DRAFT', 'METADATA_COMPLETE', 'RIGHTS_COMPLETE', 'ISRC_COMPLETE', 'PRICING_COMPLETE', 'CHANGES_REQUESTED'].includes(detail.release.status)
   const latestFeedback = detail.reviewEvents.find((event) => event.note)?.note
-  return <><StepHeading title="Review & Submit" detail="Confirm the release package before sending it to MEJay Publishing." />{latestFeedback && <div className="mb-5 border border-amber-400/30 bg-amber-400/5 p-4 text-sm text-amber-200"><p className="font-medium">Review feedback</p><p className="mt-1">{latestFeedback}</p></div>}<div className="divide-y divide-white/10 border-y border-white/10">{detail.prerequisites.length === 0 ? <div className="flex items-center gap-3 py-4 text-emerald-400"><Check className="h-4 w-4" />All submission requirements are complete</div> : detail.prerequisites.map((item) => <div key={item} className="py-3 text-sm text-zinc-400">Required: {item}</div>)}</div><Button className="mt-6 bg-emerald-400 text-zinc-950 hover:bg-emerald-300" disabled={!editable || detail.prerequisites.length > 0 || submit.isPending} onClick={() => submit.mutate()}>{submit.isPending ? 'Submitting...' : editable ? 'Submit to MEJay Review' : `Release is ${detail.release.status.replace(/_/g, ' ')}`}</Button>{submit.isError && <p className="mt-3 text-sm text-red-400">{submit.error.message}</p>}</>
+  const requested = detail.release.requested_release_at
+  const schedule = <div className="mb-5 border border-white/10 bg-white/[0.03] p-4 text-sm">
+    <p className="font-medium">Release date</p>
+    <p className="mt-1 text-zinc-300">{requested ? `${formatReleaseTime(requested, detail.release.release_timezone)}${detail.release.preorders_enabled ? ' · pre-orders on' : ''}` : 'As soon as MeJay approves'}</p>
+    <p className="mt-1 text-xs text-zinc-500">{RELEASE_LEAD_MESSAGE}</p>
+    {requested && !meetsReleaseLead(requested) && editable && <p className="mt-2 text-xs text-amber-300">Your release date is less than 7 days away. Choose a later date in Release Information before submitting.</p>}
+  </div>
+  return <><StepHeading title="Review & Submit" detail="Confirm the release package before sending it to MEJay Publishing." />{schedule}{latestFeedback && <div className="mb-5 border border-amber-400/30 bg-amber-400/5 p-4 text-sm text-amber-200"><p className="font-medium">Review feedback</p><p className="mt-1">{latestFeedback}</p></div>}<div className="divide-y divide-white/10 border-y border-white/10">{detail.prerequisites.length === 0 ? <div className="flex items-center gap-3 py-4 text-emerald-400"><Check className="h-4 w-4" />All submission requirements are complete</div> : detail.prerequisites.map((item) => <div key={item} className="py-3 text-sm text-zinc-400">Required: {item}</div>)}</div><Button className="mt-6 bg-emerald-400 text-zinc-950 hover:bg-emerald-300" disabled={!editable || detail.prerequisites.length > 0 || submit.isPending} onClick={() => submit.mutate()}>{submit.isPending ? 'Submitting...' : editable ? 'Submit to MEJay Review' : `Release is ${detail.release.status.replace(/_/g, ' ')}`}</Button>{submit.isError && <p className="mt-3 text-sm text-red-400">{submit.error.message}</p>}</>
 }
 /** Per-sale estimate computed by the API with the same calculator used when a sale is fulfilled. */
 function PayoutEstimate({amountMinor}: {amountMinor: number}) {

@@ -1,4 +1,5 @@
 import {z} from 'zod'
+import {isValidTimeZone} from './release-schedule'
 import {externalIsrcProblem} from './isrc'
 import {formatMinimumPrice, MINIMUM_RELEASE_PRICE_MINOR} from './sale-policy'
 import {ARTIST_IMAGE_RULES} from './upload-validation'
@@ -61,6 +62,10 @@ export const releaseDraftSchema = z.object({
   upc: z.string().trim().regex(/^[0-9]{12,14}$/).nullable().optional(),
   originalReleaseDate: z.string().date().nullable().optional(),
   scheduledReleaseAt: z.string().datetime({offset: true}).nullable().optional(),
+  /** The artist's chosen public release time. Omitted keeps the stored value; null clears it. */
+  requestedReleaseAt: z.string().datetime({offset: true}).nullable().optional(),
+  releaseTimezone: z.string().trim().refine(isValidTimeZone, 'Choose a valid timezone').nullable().optional(),
+  preordersEnabled: z.boolean().optional(),
   copyrightYear: z.number().int().min(1900).max(2200).nullable().optional(),
   copyrightHolder: nonEmpty.nullable().optional(),
   phonographicCopyrightYear: z.number().int().min(1900).max(2200).nullable().optional(),

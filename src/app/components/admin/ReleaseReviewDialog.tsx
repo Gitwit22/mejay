@@ -7,6 +7,7 @@ import {Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger} from '@
 import {Textarea} from '@/components/ui/textarea'
 import {toast} from '@/hooks/use-toast'
 import {commandMarketplaceRelease, getReleaseReview, reviewAssetUrl, type ReleaseAdminAction, type ReleaseReview} from '@/lib/marketplaceAdminApi'
+import {formatReleaseTime} from '@/lib/releaseTime'
 
 const APPROVABLE = ['CERTIFIED_ORIGINAL', 'RIGHTS_CLEARED']
 const CLEARABLE = ['NOT_CERTIFIED', 'RIGHTS_DOCUMENTATION_ATTACHED', 'RIGHTS_REVIEW_REQUIRED']
@@ -47,9 +48,13 @@ function ReviewBody({releaseId, onDone}: {releaseId: string; onDone: () => void}
   const [note, setNote] = useState('')
   const command = useMutation({
     mutationFn: (action: ReleaseAdminAction) => commandMarketplaceRelease(releaseId, {action, expectedVersion: Number(review.data!.release.version), ...(note.trim() ? {note: note.trim()} : {})}),
-    onSuccess: async (_data, action) => {
+    onSuccess: async (data, action) => {
       await queryClient.invalidateQueries({queryKey: ['marketplace-admin']})
-      toast({title: {start_review: 'Review started', approve: 'Release approved', request_changes: 'Changes requested', reject: 'Release rejected', flag_rights: 'Rights issue flagged', clear_rights: 'Rights cleared'}[action as string] ?? 'Updated'})
+      const result = data as {status?: string; release_date_needed?: boolean}
+      if (action === 'approve' && result.status === 'SCHEDULED') toast({title: "Release approved and scheduled for the artist's date"})
+      // The artist's date passed during review: nothing is published until an admin chooses.
+      else if (action === 'approve' && result.release_date_needed) toast({title: 'Approved. The requested release date has passed', description: 'Choose a new date (Schedule) or Publish now from Live Catalog.'})
+      else toast({title: {start_review: 'Review started', approve: 'Release approved', request_changes: 'Changes requested', reject: 'Release rejected', flag_rights: 'Rights issue flagged', clear_rights: 'Rights cleared'}[action as string] ?? 'Updated'})
       setNote('')
       if (action !== 'start_review' && action !== 'clear_rights') onDone()
     },
@@ -79,6 +84,7 @@ function ReviewBody({releaseId, onDone}: {releaseId: string; onDone: () => void}
         <Datum label="Artist" value={release.primary_artist_name} /><Datum label="Account" value={release.provider_name} /><Datum label="Status" value={status.replace(/_/g, ' ')} />
         <Datum label="Type" value={release.release_type} /><Datum label="Genre" value={[release.genre, release.subgenre].filter(Boolean).join(' / ')} /><Datum label="Version" value={release.version_title} />
         <Datum label="Label" value={release.label_name} /><Datum label="UPC" value={release.upc} /><Datum label="Original release" value={release.original_release_date} />
+        <Datum label="Requested release" value={release.requested_release_at ? formatReleaseTime(release.requested_release_at, release.release_timezone) : 'As soon as approved'} /><Datum label="Pre-orders" value={release.preorders_enabled ? 'Enabled' : 'Off'} />
         <Datum label="© " value={[release.copyright_year, release.copyright_holder].filter(Boolean).join(' ')} /><Datum label="℗ " value={[release.phonographic_copyright_year, release.phonographic_copyright_holder].filter(Boolean).join(' ')} /><Datum label="Distribution" value={release.distribution_status.replace(/_/g, ' ')} />
       </dl>
     </div>

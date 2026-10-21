@@ -139,7 +139,7 @@ export async function downloadIsrcRegistryExport(filters: {
   URL.revokeObjectURL(url)
 }
 
-export type ReleaseAdminAction = 'start_review' | 'approve' | 'request_changes' | 'reject' | 'publish_now' | 'schedule' | 'publish_due' | 'unpublish' | 'takedown' | 'restore' | 'clear_rights' | 'flag_rights'
+export type ReleaseAdminAction = 'start_review' | 'approve' | 'request_changes' | 'reject' | 'publish_now' | 'schedule' | 'reschedule' | 'cancel_preorders' | 'publish_due' | 'unpublish' | 'takedown' | 'restore' | 'clear_rights' | 'flag_rights'
 
 export type ProviderAdminAction = 'approve' | 'reject' | 'suspend' | 'reinstate'
 
@@ -307,6 +307,9 @@ export type ReleaseReview = {
     label_name: string | null; upc: string | null; original_release_date: string | null
     copyright_year: number | null; copyright_holder: string | null; phonographic_copyright_year: number | null; phonographic_copyright_holder: string | null
     distribution_status: string
+    requested_release_at?: string | null
+    release_timezone?: string | null
+    preorders_enabled?: boolean
   }
   tracks: Array<{
     id: string; title: string; version_title: string | null; track_number: number; explicit: boolean; language_code: string | null

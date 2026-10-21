@@ -35,6 +35,7 @@ import ArtistPortalGate from "./app/components/ArtistPortalGate";
 import MarketplaceAdminGate from "./app/components/MarketplaceAdminGate";
 import MarketplaceAdminPage from "./app/pages/MarketplaceAdminPage";
 import PurchasedMusicPage from "./app/pages/PurchasedMusicPage";
+import {GuestDownloadPage, PurchaseCompletePage} from "./app/pages/GuestPurchasePages";
 import RecipientEarningsPage from "./app/pages/RecipientEarningsPage";
 import PlaylistEditorPage from "./pages/PlaylistEditorPage";
 
@@ -520,6 +521,9 @@ const AnimatedRoutes = () => {
         <Route path="/contact" element={<ContactPage mode="public" />} />
         <Route path="/artist/:slug" element={<ArtistPage />} />
         <Route path="/artist-preview/:artistId" element={<ArtistPagePreview />} />
+        {/* Guest purchases: checkout return page and emailed download links (no account needed) */}
+        <Route path="/purchase/complete" element={<PurchaseCompletePage />} />
+        <Route path="/download" element={<GuestDownloadPage />} />
         {/* App routes - auth required */}
         <Route path="/app" element={<AppShellLayout />}>
           <Route index element={<Index />} />

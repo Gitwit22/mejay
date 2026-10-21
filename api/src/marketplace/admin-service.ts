@@ -4,6 +4,8 @@ import {APPROVABLE_RIGHTS_STATUSES, ISRC_STATEMENT, type RightsStatus} from './r
 import {insertGeneratedIsrc, MarketplaceError} from './service'
 import type {IsrcGenerationConfig} from './isrc'
 import {formatMinimumPrice, getReleaseSaleReadiness} from './sale-policy'
+import {isFutureRelease} from './release-schedule'
+import {enqueueReleaseDateChange, heldPreorderCount, releaseHeldPreorders, requestPreorderCancellations, sweepLiveHeldPreorders} from './preorder-delivery'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -18,7 +20,7 @@ type Database = {
 }
 
 type Staff = {role: 'reviewer' | 'admin'; protected_owner: boolean}
-type Release = {id: string; provider_profile_id: string; status: string; version: number; scheduled_release_at: string | null; rights_status: RightsStatus}
+type Release = {id: string; provider_profile_id: string; status: string; version: number; scheduled_release_at: string | null; rights_status: RightsStatus; requested_release_at?: string | null; release_timezone?: string | null}
 type IsrcRegistryFilters = {isrc?: string; track?: string; artist?: string; provider?: string; year?: number | null}
 
 const reviewActions = new Set<ReleaseAdminCommand['action']>(['start_review', 'approve', 'request_changes', 'reject', 'clear_rights', 'flag_rights'])
@@ -33,7 +35,7 @@ const reviewDecision = {
 } as const
 /** Rights states a reviewer can clear after examining the documentation or the artist's answers. */
 const CLEARABLE_RIGHTS_STATUSES: readonly RightsStatus[] = ['NOT_CERTIFIED', 'RIGHTS_DOCUMENTATION_ATTACHED', 'RIGHTS_REVIEW_REQUIRED']
-const adminActions = new Set<ReleaseAdminCommand['action']>(['publish_now', 'schedule', 'publish_due', 'unpublish', 'takedown', 'restore'])
+const adminActions = new Set<ReleaseAdminCommand['action']>(['publish_now', 'schedule', 'publish_due', 'unpublish', 'takedown', 'restore', 'reschedule', 'cancel_preorders'])
 
 export function releaseCommandTarget(action: ReleaseAdminCommand['action']): string {
   if (action === 'start_review') return 'UNDER_REVIEW'
@@ -41,8 +43,8 @@ export function releaseCommandTarget(action: ReleaseAdminCommand['action']): str
   if (action === 'approve' || action === 'unpublish' || action === 'restore') return 'APPROVED'
   if (action === 'request_changes' || action === 'flag_rights') return 'CHANGES_REQUESTED'
   if (action === 'reject') return 'REJECTED'
-  if (action === 'schedule') return 'SCHEDULED'
-  if (action === 'takedown') return 'TAKEN_DOWN'
+  if (action === 'schedule' || action === 'reschedule') return 'SCHEDULED'
+  if (action === 'takedown' || action === 'cancel_preorders') return 'TAKEN_DOWN'
   return 'LIVE'
 }
 
@@ -55,6 +57,8 @@ export function releaseCommandAllowed(action: ReleaseAdminCommand['action'], sta
     publish_now: ['APPROVED'],
     schedule: ['APPROVED'],
     publish_due: ['SCHEDULED'],
+    reschedule: ['SCHEDULED'],
+    cancel_preorders: ['SCHEDULED'],
     unpublish: ['LIVE'],
     takedown: ['LIVE', 'SCHEDULED'],
     restore: ['TAKEN_DOWN'],
@@ -236,7 +240,9 @@ export class MarketplaceAdminService {
         (SELECT COUNT(*)::integer FROM releases WHERE status = 'SCHEDULED') AS scheduled_releases,
         (SELECT COUNT(*)::integer FROM provider_profiles) AS providers,
         (SELECT COUNT(*)::integer FROM artists) AS artists,
-        (SELECT COUNT(*)::integer FROM release_takedowns WHERE restored_at IS NULL) AS active_takedowns`,
+        (SELECT COUNT(*)::integer FROM release_takedowns WHERE restored_at IS NULL) AS active_takedowns,
+        (SELECT COUNT(*)::integer FROM marketplace_preorder_cancellations WHERE status = 'failed') AS failed_preorder_refunds,
+        (SELECT COUNT(*)::integer FROM marketplace_email_jobs WHERE status = 'failed') AS failed_buyer_emails`,
     ).first()
     const featuredReleases = await this.database.prepare(
       `SELECT r.id, r.title, feature.position FROM marketplace_discovery_features feature
@@ -500,11 +506,15 @@ export class MarketplaceAdminService {
         ).bind(now, release.id).run()
         await db.prepare('UPDATE products SET active = TRUE, updated_at = ?1 WHERE (release_id = ?2 OR track_id IN (SELECT id FROM tracks WHERE release_id = ?2))').bind(now, release.id).run()
         await insertAudit(db, null, release, 'publish_due', 'LIVE')
+        // Release day: paid pre-orders become downloadable and their emails are queued, atomically
+        // with the release going live.
+        await releaseHeldPreorders(db, release.id)
         return 'published' as const
       })
       if (outcome === 'published') published.push(id)
       if (outcome === 'not_ready') notReady.push(id)
     }
+    await this.database.transaction((db) => sweepLiveHeldPreorders(db))
     return {published, notReady}
   }
 
@@ -538,13 +548,19 @@ export class MarketplaceAdminService {
       }
 
       const now = new Date().toISOString()
-      if (command.action === 'schedule' && new Date(command.scheduledReleaseAt).getTime() <= Date.now()) {
+      if ((command.action === 'schedule' || command.action === 'reschedule') && new Date(command.scheduledReleaseAt).getTime() <= Date.now()) {
         throw new MarketplaceError(422, 'schedule_must_be_future', 'Scheduled release time must be in the future')
+      }
+      // Approving before the artist's chosen release time schedules the release for that time. After
+      // it has passed, the release stays APPROVED and an admin must pick a new date or publish now.
+      const approvalSchedulesRelease = command.action === 'approve' && isFutureRelease(release.requested_release_at)
+      if (command.action === 'takedown' && release.status === 'SCHEDULED' && await heldPreorderCount(db, release.id) > 0) {
+        throw new MarketplaceError(409, 'release_has_preorders', 'This release has paid pre-orders. Use "Cancel & refund pre-orders" so every buyer is refunded.')
       }
       if (command.action === 'publish_due' && (!release.scheduled_release_at || new Date(release.scheduled_release_at).getTime() > Date.now())) {
         throw new MarketplaceError(409, 'release_not_due', 'The scheduled release is not due yet')
       }
-      if (['schedule', 'publish_now', 'publish_due'].includes(command.action)) {
+      if (['schedule', 'publish_now', 'publish_due'].includes(command.action) || approvalSchedulesRelease) {
         const sale = await getReleaseSaleReadiness(db, release.id)
         const unmet = [
           ...(!sale.hasMinimumPrice ? [`active release product priced at least ${formatMinimumPrice()} USD`] : []),
@@ -567,7 +583,8 @@ export class MarketplaceAdminService {
       if (command.action === 'approve') await assignApprovalIsrcs(db, release, userId, options.isrcConfig ?? null)
 
       // Clearing rights records a decision without moving the release through the lifecycle.
-      const target = command.action === 'clear_rights' ? release.status : releaseCommandTarget(command.action)
+      const target = command.action === 'clear_rights' ? release.status
+        : approvalSchedulesRelease ? 'SCHEDULED' : releaseCommandTarget(command.action)
       if (command.action === 'restore') {
         const duplicate = await db.prepare(
           `SELECT other.id FROM releases other JOIN releases target ON target.id = ?1
@@ -579,11 +596,13 @@ export class MarketplaceAdminService {
           throw new MarketplaceError(409, 'duplicate_release', 'The provider already has an active copy of this release')
         }
       }
-      const scheduledAt = command.action === 'schedule' ? command.scheduledReleaseAt : null
+      const scheduledAt = command.action === 'schedule' || command.action === 'reschedule'
+        ? new Date(command.scheduledReleaseAt).toISOString()
+        : approvalSchedulesRelease ? new Date(release.requested_release_at!).toISOString() : null
       const row = await db.prepare(
         `UPDATE releases SET status = ?1, version = version + 1, updated_at = ?2,
           scheduled_release_at = CASE WHEN ?1 = 'SCHEDULED' THEN ?3 WHEN ?1 IN ('APPROVED', 'TAKEN_DOWN') THEN NULL ELSE scheduled_release_at END,
-          approved_at = CASE WHEN ?1 = 'APPROVED' AND approved_at IS NULL THEN ?2 ELSE approved_at END,
+          approved_at = CASE WHEN ?1 IN ('APPROVED', 'SCHEDULED') AND approved_at IS NULL THEN ?2 ELSE approved_at END,
           published_at = CASE WHEN ?1 = 'LIVE' THEN ?2 WHEN ?1 IN ('APPROVED', 'TAKEN_DOWN') THEN NULL ELSE published_at END
          WHERE id = ?4 AND version = ?5 RETURNING *`,
       ).bind(target, now, scheduledAt, release.id, command.expectedVersion).first()
@@ -611,7 +630,7 @@ export class MarketplaceAdminService {
            WHERE release_id = ?3 AND restored_at IS NULL`,
         ).bind(now, userId, release.id).run()
       }
-      if (command.action === 'takedown') {
+      if (command.action === 'takedown' || command.action === 'cancel_preorders') {
         await db.prepare(
           `INSERT INTO release_takedowns
             (id, release_id, provider_profile_id, actor_user_id, reason, prior_status)
@@ -621,10 +640,27 @@ export class MarketplaceAdminService {
 
       if (['publish_now', 'publish_due'].includes(command.action)) {
         await db.prepare('UPDATE products SET active = TRUE, updated_at = ?1 WHERE (release_id = ?2 OR track_id IN (SELECT id FROM tracks WHERE release_id = ?2))').bind(now, release.id).run()
-      } else if (['unpublish', 'takedown'].includes(command.action)) {
+        if (command.action === 'publish_due') await releaseHeldPreorders(db, release.id)
+      } else if (['unpublish', 'takedown', 'cancel_preorders'].includes(command.action)) {
         await db.prepare('UPDATE products SET active = FALSE, updated_at = ?1 WHERE (release_id = ?2 OR track_id IN (SELECT id FROM tracks WHERE release_id = ?2))').bind(now, release.id).run()
       }
-      await insertAudit(db, userId, release, command.action, target)
+      if (command.action === 'reschedule') {
+        const updated = row as {version: number; scheduled_release_at: string | Date; release_timezone: string | null}
+        await enqueueReleaseDateChange(db, release.id, updated.version, {
+          releaseAt: new Date(updated.scheduled_release_at).toISOString(),
+          releaseTimezone: updated.release_timezone,
+          previousReleaseAt: release.scheduled_release_at ? new Date(release.scheduled_release_at).toISOString() : null,
+        })
+      }
+      if (command.action === 'cancel_preorders') {
+        const canceled = await requestPreorderCancellations(db, release.id, userId)
+        ;(row as Record<string, unknown>).preorders_canceled = canceled
+      }
+      // The artist's date passed before approval: tell the admin a new date (or publish now) is needed.
+      if (command.action === 'approve' && release.requested_release_at && !approvalSchedulesRelease) {
+        ;(row as Record<string, unknown>).release_date_needed = true
+      }
+      await insertAudit(db, userId, release, approvalSchedulesRelease ? 'approve_scheduled' : command.action, target)
       return row
     })
   }

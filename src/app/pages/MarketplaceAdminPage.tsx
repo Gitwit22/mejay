@@ -46,7 +46,15 @@ function SectionView({section, data}: {section: Section; data: Awaited<ReturnTyp
   if (section === 'takedowns') return <RecordTable title="Takedowns" rows={data.takedowns} actionable role={data.role} renderActions={(row) => <TakedownActions row={row} role={data.role} />} />
   if (section === 'splits') return <RecordTable title="Splits" rows={data.splits} actionable={data.role === 'admin'} role={data.role} renderActions={(row) => <SplitDisputeAction row={row} />} />
   const rows = data[section]
-  return <RecordTable title={navigation.find(([id]) => id === section)?.[1] || section} rows={rows} actionable={section === 'pending' || section === 'catalog'} role={data.role} />
+  const failedRefunds = Number(data.counts?.failed_preorder_refunds ?? 0)
+  const failedEmails = Number(data.counts?.failed_buyer_emails ?? 0)
+  return <>
+    {section === 'catalog' && (failedRefunds > 0 || failedEmails > 0) && <div role="alert" className="mb-5 border border-amber-400/30 bg-amber-400/5 p-4 text-sm text-amber-200">
+      {failedRefunds > 0 && <p>{failedRefunds} pre-order refund{failedRefunds === 1 ? '' : 's'} could not be created yet. They retry automatically (up to 8 times); check Stripe if this persists.</p>}
+      {failedEmails > 0 && <p>{failedEmails} buyer email{failedEmails === 1 ? '' : 's'} (release day, date change or cancellation) failed after every retry.</p>}
+    </div>}
+    <RecordTable title={navigation.find(([id]) => id === section)?.[1] || section} rows={rows} actionable={section === 'pending' || section === 'catalog'} role={data.role} />
+  </>
 }
 
 const reviewableProviderStatuses = new Set(['pending_review', 'needs_changes', 'rejected'])
@@ -133,17 +141,18 @@ function ReleaseActions({row, role}: {row: AdminRecord; role: 'reviewer' | 'admi
     // Approve/reject live in the review dialog, next to the rights certification and documents.
     : status === 'UNDER_REVIEW' ? []
       : status === 'APPROVED' ? [{action: 'publish_now', label: 'Publish now', admin: true}, {action: 'schedule', label: 'Schedule', admin: true}]
-        : status === 'SCHEDULED' ? [{action: 'publish_due', label: 'Publish due', admin: true}, {action: 'takedown', label: 'Takedown', admin: true, note: true}]
+        : status === 'SCHEDULED' ? [{action: 'publish_due', label: 'Publish due', admin: true}, {action: 'reschedule', label: 'Reschedule', admin: true}, {action: 'takedown', label: 'Takedown', admin: true, note: true}, {action: 'cancel_preorders', label: 'Cancel & refund pre-orders', admin: true, note: true}]
           : status === 'LIVE' ? [{action: 'unpublish', label: 'Unpublish', admin: true}, {action: 'takedown', label: 'Takedown', admin: true, note: true}] : []
   return <div className="flex gap-2">{['SUBMITTED', 'UNDER_REVIEW'].includes(status) && <ReleaseReviewDialog releaseId={String(row.id)} title={String(row.title ?? 'Release')} />}{actions.filter((item) => !item.admin || role === 'admin').map((item) => <Button key={item.action} size="sm" variant="outline" disabled={mutation.isPending} onClick={() => {
-      if (item.action === 'schedule') {
-        const raw = window.prompt('Release date and time (local), e.g. 2026-12-01 09:00')?.trim()
+      if (item.action === 'schedule' || item.action === 'reschedule') {
+        const raw = window.prompt(`${item.label}: release date and time in your timezone (${Intl.DateTimeFormat().resolvedOptions().timeZone}), e.g. 2026-12-01 09:00${item.action === 'reschedule' ? '. Pre-order buyers are emailed the new date.' : ''}`)?.trim()
         if (!raw) return
         const when = new Date(raw.replace(' ', 'T'))
         if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now()) {toast({title: 'Enter a future date and time', variant: 'destructive'}); return}
-        mutation.mutate({action: 'schedule', scheduledReleaseAt: when.toISOString()})
+        mutation.mutate({action: item.action, scheduledReleaseAt: when.toISOString()})
         return
       }
+      if (item.action === 'cancel_preorders' && !window.confirm('Take this release down and refund every paid pre-order? Buyers are emailed that their pre-order was cancelled.')) return
       const note = item.note ? window.prompt(`${item.label} reason`)?.trim() : undefined; if (item.note && !note) return; mutation.mutate({action: item.action, note})
     }}>{item.label}</Button>)}</div>
 }
