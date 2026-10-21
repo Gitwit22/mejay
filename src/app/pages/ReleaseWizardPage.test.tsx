@@ -101,32 +101,34 @@ describe('release wizard: release date and pre-orders', () => {
   })
 
   it('explains the 7-day rule, stores the chosen time in UTC with its timezone, and keeps the original date separate', async () => {
+    const year = new Date().getUTCFullYear() + 1
+    // Saved as 9:00 AM in Detroit (EST, UTC-5) on Jan 15 next year.
+    vi.mocked(getProviderRelease).mockResolvedValue(detail({release: {...detail().release, requested_release_at: `${year}-01-15T14:00:00.000Z`, release_timezone: 'America/Detroit'}}))
     renderStep('release-information')
     expect(await screen.findByText(/Choose a release date at least 7 days from today to allow time for review and release preparation\./)).toBeInTheDocument()
     expect(screen.getByLabelText('Original release date (optional)')).toBeInTheDocument()
-    fireEvent.click(screen.getByLabelText('On a date I choose'))
-    const year = new Date().getUTCFullYear() + 1
-    fireEvent.change(screen.getByLabelText('Release date and time'), {target: {value: `${year}-01-15T09:00`}})
-    fireEvent.change(screen.getByLabelText('Timezone'), {target: {value: 'America/Detroit'}})
+    expect(screen.getByRole('button', {name: new RegExp(`Release date \\w+, January 15, ${year}`)})).toBeInTheDocument()
     expect(screen.getByText(new RegExp(`Releases Jan 15, ${year}, 9:00 AM EST`))).toBeInTheDocument()
     expect(screen.getByText('Releases go live within a few minutes after the scheduled time.')).toBeInTheDocument()
+    // Same wall time, new zone: Tokyo 9:00 AM is midnight UTC.
+    fireEvent.change(screen.getByLabelText('Timezone'), {target: {value: 'Asia/Tokyo'}})
     fireEvent.click(screen.getByRole('checkbox', {name: /Enable pre-orders/}))
     fireEvent.click(screen.getByRole('button', {name: 'Save information'}))
     await waitFor(() => expect(updateProviderRelease).toHaveBeenCalledWith('release-1', expect.objectContaining({
-      requestedReleaseAt: `${year}-01-15T14:00:00.000Z`, releaseTimezone: 'America/Detroit', preordersEnabled: true, originalReleaseDate: null,
+      requestedReleaseAt: `${year}-01-15T00:00:00.000Z`, releaseTimezone: 'Asia/Tokyo', preordersEnabled: true, originalReleaseDate: null,
     })))
   })
 
-  it('warns before submission when the date is less than 7 days away, and blocks past dates', async () => {
+  it('warns when the saved date is less than 7 days away, and blocks past dates', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail({release: {...detail().release, requested_release_at: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(), release_timezone: 'UTC'}}))
     renderStep('release-information')
-    fireEvent.click(await screen.findByLabelText('On a date I choose'))
-    const soon = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
-    const local = `${soon.getUTCFullYear()}-${String(soon.getUTCMonth() + 1).padStart(2, '0')}-${String(soon.getUTCDate()).padStart(2, '0')}T12:00`
-    fireEvent.change(screen.getByLabelText('Timezone'), {target: {value: 'UTC'}})
-    fireEvent.change(screen.getByLabelText('Release date and time'), {target: {value: local}})
-    expect(screen.getByText('This is less than 7 days away. Pick a later date before you submit for review.')).toBeInTheDocument()
-    fireEvent.change(screen.getByLabelText('Release date and time'), {target: {value: '2020-01-01T12:00'}})
-    expect(screen.getByText('Choose a release date and time in the future.')).toBeInTheDocument()
+    expect(await screen.findByText('This is less than 7 days away. Pick a later date before you submit for review.')).toBeInTheDocument()
+  })
+
+  it('blocks saving a date that has already passed', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail({release: {...detail().release, requested_release_at: '2020-01-01T12:00:00.000Z', release_timezone: 'UTC'}}))
+    renderStep('release-information')
+    expect(await screen.findByText('Choose a release date and time in the future.')).toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'Save information'})).toBeDisabled()
   })
 

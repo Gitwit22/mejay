@@ -4,6 +4,7 @@ import {ArrowLeft, Check, ChevronRight, Disc3, Upload} from 'lucide-react'
 import {Link, useNavigate, useParams} from 'react-router-dom'
 
 import {CertificationStep, CreditsStep} from '@/app/components/provider/ReleaseSubmissionSteps'
+import {ReleaseDateTimePicker} from '@/app/components/provider/ReleaseDateTimePicker'
 
 import {Button} from '@/components/ui/button'
 import {Checkbox} from '@/components/ui/checkbox'
@@ -200,11 +201,10 @@ export function ReleaseScheduleFields({value, onChange, problem}: {value: Releas
       <label className="flex items-center gap-2"><input type="radio" name="release-mode" checked={value.mode === 'scheduled'} onChange={() => onChange({...value, mode: 'scheduled'})} />On a date I choose</label>
     </div>
     {value.mode === 'scheduled' && <div className="grid gap-4 sm:grid-cols-2">
-      <div className="space-y-2">
-        <Label htmlFor="release-date-time">Release date and time</Label>
-        <Input id="release-date-time" type="datetime-local" value={value.local} aria-invalid={Boolean(problem)} onChange={(event) => onChange({...value, local: event.target.value})} />
+      <div className="sm:col-span-2">
+        <ReleaseDateTimePicker value={value.local} invalid={Boolean(problem)} onChange={(local) => onChange({...value, local})} />
       </div>
-      <div className="space-y-2">
+      <div className="space-y-2 sm:col-span-2">
         <Label htmlFor="release-timezone">Timezone</Label>
         <select id="release-timezone" className="h-10 w-full rounded-md border border-white/10 bg-zinc-950 px-3 text-sm" value={value.timeZone} onChange={(event) => onChange({...value, timeZone: event.target.value})}>
           {(zones.includes(value.timeZone) ? zones : [value.timeZone, ...zones]).map((zone) => <option key={zone} value={zone}>{zone.replace(/_/g, ' ')}</option>)}
