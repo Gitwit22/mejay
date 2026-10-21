@@ -27,6 +27,8 @@ export type AudioJob = {
   attempts: number
   max_attempts: number
   last_error: string | null
+  /** The artist's preview start when queued; null = automatic. */
+  preview_start_ms?: number | null
   outputs: Record<string, unknown>
   created_at: string
   updated_at: string
@@ -74,9 +76,10 @@ export async function enqueueAudioJob(db: Database, sourceAssetId: string): Prom
      WHERE id = ?1 AND kind = 'audio' AND processing_status = 'ready' AND track_id IS NOT NULL`,
   ).bind(sourceAssetId).first<{id: string; provider_profile_id: string; track_id: string}>()
   if (!source) throw new AudioJobError(404, 'source_not_found', 'No ready audio upload with that id')
+  // The job keeps the preview start chosen at queue time; a later change queues a fresh job.
   await db.prepare(
-    `INSERT INTO audio_processing_jobs (id, provider_profile_id, track_id, source_asset_id)
-     VALUES (?1, ?2, ?3, ?4)
+    `INSERT INTO audio_processing_jobs (id, provider_profile_id, track_id, source_asset_id, preview_start_ms)
+     SELECT ?1, ?2, ?3, ?4, track.preview_start_ms FROM tracks track WHERE track.id = ?3
      ON CONFLICT (source_asset_id) WHERE status IN ('queued', 'processing') DO NOTHING`,
   ).bind(randomUUID(), source.provider_profile_id, source.track_id, source.id).run()
   const job = await db.prepare(
@@ -173,7 +176,7 @@ async function storeVerified(bucket: AudioJobBucket, localPath: string, key: str
   return local
 }
 
-async function upsertDerivedAsset(db: Database, job: AudioJob, kind: 'audio_delivery' | 'audio_preview', output: StoredOutput): Promise<string> {
+async function upsertDerivedAsset(db: Database, job: AudioJob, kind: 'audio_delivery' | 'audio_preview', output: StoredOutput, extra: Record<string, unknown> = {}): Promise<string> {
   const row = await db.prepare(
     `INSERT INTO marketplace_assets (id, provider_profile_id, track_id, kind, storage_key, mime_type, byte_size, sha256, processing_status, metadata)
      VALUES (?1, ?2, ?3, ?4, ?5, 'audio/mpeg', ?6, ?7, 'ready', ?8::jsonb)
@@ -182,7 +185,8 @@ async function upsertDerivedAsset(db: Database, job: AudioJob, kind: 'audio_deli
      RETURNING id`,
   ).bind(
     randomUUID(), job.provider_profile_id, job.track_id, kind, output.key, output.byteSize, output.sha256,
-    JSON.stringify({fileName: output.fileName, sourceAssetId: job.source_asset_id, jobId: job.id, durationMs: output.durationMs, bitRate: output.bitRate}),
+    // previewSetting is the artist's start choice (null = automatic); the store's freshness check compares against it.
+    JSON.stringify({fileName: output.fileName, sourceAssetId: job.source_asset_id, jobId: job.id, durationMs: output.durationMs, bitRate: output.bitRate, ...extra}),
   ).first<{id: string}>()
   return row!.id
 }
@@ -236,9 +240,10 @@ export async function processAudioJob(deps: AudioJobDeps, job: AudioJob): Promis
     ensureOwned()
 
     const previewPath = join(workDir, 'preview.mp3')
-    const window = previewWindow(probe.durationMs)
+    const requestedStartMs = job.preview_start_ms ?? null
+    const window = previewWindow(probe.durationMs, requestedStartMs)
     const previewTitle = `${tags.title} (Preview)`
-    await runFfmpeg(previewArgs({sourcePath, coverPath, outputPath: previewPath, tags, probe}))
+    await runFfmpeg(previewArgs({sourcePath, coverPath, outputPath: previewPath, tags, probe, requestedStartMs}))
     const previewProbe = await verifyMp3(previewPath, {durationMs: window.lengthSeconds * 1000, title: previewTitle, artist: tags.artist, album: tags.album, coverArt: Boolean(coverPath)})
     ensureOwned()
 
@@ -258,7 +263,7 @@ export async function processAudioJob(deps: AudioJobDeps, job: AudioJob): Promis
       ).bind(job.id, job.attempts).first()
       if (!owned) return false
       const deliveryAssetId = await upsertDerivedAsset(db, job, 'audio_delivery', delivery)
-      const previewAssetId = await upsertDerivedAsset(db, job, 'audio_preview', preview)
+      const previewAssetId = await upsertDerivedAsset(db, job, 'audio_preview', preview, {previewSetting: requestedStartMs, startMs: Math.round(window.startSeconds * 1000)})
       const outputs = {
         source: {container: probe.container, codec: probe.codec, durationMs: probe.durationMs, sampleRate: probe.sampleRate, bitDepth: probe.bitDepth, channels: probe.channels, bitRate: probe.bitRate},
         delivery: {assetId: deliveryAssetId, fileName: delivery.fileName, byteSize: delivery.byteSize, sha256: delivery.sha256, durationMs: delivery.durationMs, bitRate: delivery.bitRate},

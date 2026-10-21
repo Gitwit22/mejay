@@ -32,7 +32,7 @@ import {
   setProviderTrackPrice,
   clearProviderTrackPrice,
 } from '@/lib/providerApi'
-import {browserTimeZone, formatReleaseTime, listTimeZones, meetsReleaseLead, RELEASE_LEAD_MESSAGE, SCHEDULER_NOTE, utcToZonedLocal, zonedLocalToUtcIso} from '@/lib/releaseTime'
+import {browserTimeZone, formatPreviewStart, formatReleaseTime, listTimeZones, meetsReleaseLead, parsePreviewStart, PREVIEW_SECONDS, RELEASE_LEAD_MESSAGE, SCHEDULER_NOTE, utcToZonedLocal, zonedLocalToUtcIso} from '@/lib/releaseTime'
 
 const steps: Array<{id: ReleaseDraftStep; label: string}> = [
   {id: 'release-information', label: 'Release Information'},
@@ -156,7 +156,7 @@ function upcError(value: string): string | null {
 
 function Field({label, children}: {label: string; children: React.ReactNode}) { return <div className="space-y-2"><Label>{label}</Label>{children}</div> }
 
-type ReleaseScheduleValue = {mode: 'on_approval' | 'scheduled'; local: string; timeZone: string; preorders: boolean}
+type ReleaseScheduleValue = {mode: 'on_approval' | 'scheduled'; local: string; timeZone: string; preorders: boolean; previewTiming: 'before_release' | 'after_release'}
 
 function scheduleFromRelease(release: ProviderReleaseDetail['release']): ReleaseScheduleValue {
   const timeZone = release.release_timezone || browserTimeZone()
@@ -165,6 +165,7 @@ function scheduleFromRelease(release: ProviderReleaseDetail['release']): Release
     local: utcToZonedLocal(release.requested_release_at, timeZone),
     timeZone,
     preorders: Boolean(release.preorders_enabled),
+    previewTiming: release.preview_timing ?? 'after_release',
   }
 }
 
@@ -181,9 +182,9 @@ function releaseScheduleError(value: ReleaseScheduleValue): string | null {
   return null
 }
 
-function scheduleInput(value: ReleaseScheduleValue): {requestedReleaseAt: string | null; releaseTimezone: string | null; preordersEnabled: boolean} {
+function scheduleInput(value: ReleaseScheduleValue): {requestedReleaseAt: string | null; releaseTimezone: string | null; preordersEnabled: boolean; previewTiming: 'before_release' | 'after_release'} {
   const instant = scheduledInstant(value)
-  return {requestedReleaseAt: instant, releaseTimezone: instant ? value.timeZone : null, preordersEnabled: Boolean(instant) && value.preorders}
+  return {requestedReleaseAt: instant, releaseTimezone: instant ? value.timeZone : null, preordersEnabled: Boolean(instant) && value.preorders, previewTiming: value.previewTiming}
 }
 
 /** Public release date and pre-order opt-in. "Original release date" stays a separate, historical field. */
@@ -219,6 +220,15 @@ export function ReleaseScheduleFields({value, onChange, problem}: {value: Releas
         <span><span className="block text-sm font-medium">Enable pre-orders</span><span id="release-preorders-help" className="block text-xs text-zinc-500">Once MeJay approves and schedules this release, fans can buy it before release day. They're charged at checkout and get their download on release day.</span></span>
       </label>
     </div>}
+    <div className="space-y-2 border-t border-white/10 pt-4">
+      <p className="text-sm font-medium">Song previews</p>
+      <p className="text-xs text-zinc-500">Fans hear a {PREVIEW_SECONDS}-second clip that fades in and out. Choose where each song's clip starts in Track Metadata.</p>
+      <div className="flex flex-col gap-2 text-sm sm:flex-row sm:gap-5">
+        <label className="flex items-center gap-2"><input type="radio" name="preview-timing" checked={value.previewTiming === 'after_release'} onChange={() => onChange({...value, previewTiming: 'after_release'})} />After release only</label>
+        <label className="flex items-center gap-2"><input type="radio" name="preview-timing" checked={value.previewTiming === 'before_release'} onChange={() => onChange({...value, previewTiming: 'before_release'})} />Before release too (during pre-orders)</label>
+      </div>
+      {value.previewTiming === 'before_release' && !(value.mode === 'scheduled' && value.preorders) && <p className="text-xs text-amber-300">Previews before release only play while the release is open for pre-order. Turn on pre-orders above to use this.</p>}
+    </div>
   </fieldset>
 }
 
@@ -251,8 +261,28 @@ function MetadataStep({detail}: {detail: ProviderReleaseDetail}) {
 function TrackMetadataForm({track, artistId, releaseId}: {track: ProviderTrack; artistId: string; releaseId: string}) {
   const queryClient = useQueryClient()
   const [title, setTitle] = useState(track.title), [genre, setGenre] = useState(track.genre || ''), [language, setLanguage] = useState(track.language_code || ''), [explicit, setExplicit] = useState(track.explicit), [instrumental, setInstrumental] = useState(track.instrumental || false)
-  const save = useMutation({mutationFn: () => updateProviderTrack(track.id, {title, primaryArtistId: artistId, discNumber: track.disc_number, trackNumber: track.track_number, durationMs: track.duration_ms, explicit, languageCode: language || null, genre: genre || null, instrumental}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', releaseId]}); toast({title: `${title} saved`})}})
-  return <form onSubmit={(event) => {event.preventDefault(); save.mutate()}} className="grid gap-4 rounded-md border border-white/10 bg-[#141417] p-5 sm:grid-cols-2"><Field label="Title"><Input value={title} onChange={(event) => setTitle(event.target.value)} required /></Field><Field label="Genre"><Input value={genre} onChange={(event) => setGenre(event.target.value)} /></Field><Field label="Language code"><Input value={language} onChange={(event) => setLanguage(event.target.value)} placeholder="en" maxLength={3} /></Field><div className="flex items-end gap-6 pb-2"><Label className="flex items-center gap-2"><Switch checked={explicit} onCheckedChange={setExplicit} />Explicit</Label><Label className="flex items-center gap-2"><Switch checked={instrumental} onCheckedChange={setInstrumental} />Instrumental</Label></div><Button className="sm:col-span-2" disabled={save.isPending}>Save track metadata</Button></form>
+  const [previewStart, setPreviewStart] = useState(formatPreviewStart(track.preview_start_ms))
+  const previewStartMs = parsePreviewStart(previewStart)
+  const previewProblem = previewStartMs === undefined ? 'Use minutes:seconds, like 1:05, or leave blank for automatic.'
+    : previewStartMs !== null && track.duration_ms && previewStartMs > track.duration_ms - PREVIEW_SECONDS * 1000 ? `Start at least ${PREVIEW_SECONDS} seconds before the end of the song.` : null
+  const save = useMutation({mutationFn: () => updateProviderTrack(track.id, {title, primaryArtistId: artistId, discNumber: track.disc_number, trackNumber: track.track_number, durationMs: track.duration_ms, explicit, languageCode: language || null, genre: genre || null, instrumental, previewStartMs: previewStartMs ?? null}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', releaseId]}); toast({title: `${title} saved`})}})
+  return <form onSubmit={(event) => {event.preventDefault(); if (!previewProblem) save.mutate()}} className="grid gap-4 rounded-md border border-white/10 bg-[#141417] p-5 sm:grid-cols-2"><Field label="Title"><Input value={title} onChange={(event) => setTitle(event.target.value)} required /></Field><Field label="Genre"><Input value={genre} onChange={(event) => setGenre(event.target.value)} /></Field><Field label="Language code"><Input value={language} onChange={(event) => setLanguage(event.target.value)} placeholder="en" maxLength={3} /></Field><div className="flex items-end gap-6 pb-2"><Label className="flex items-center gap-2"><Switch checked={explicit} onCheckedChange={setExplicit} />Explicit</Label><Label className="flex items-center gap-2"><Switch checked={instrumental} onCheckedChange={setInstrumental} />Instrumental</Label></div>
+    <div className="space-y-2 sm:col-span-2">
+      <Label htmlFor={`preview-start-${track.id}`}>Preview starts at</Label>
+      <div className="flex flex-wrap items-center gap-3">
+        <Input id={`preview-start-${track.id}`} className="w-28" inputMode="numeric" placeholder="Automatic" value={previewStart} aria-invalid={Boolean(previewProblem)} aria-describedby={`preview-start-help-${track.id}`} onChange={(event) => setPreviewStart(event.target.value)} />
+        <PreviewStatus status={track.preview_status} />
+      </div>
+      <p id={`preview-start-help-${track.id}`} className={`text-xs ${previewProblem ? 'text-red-400' : 'text-zinc-500'}`}>{previewProblem ?? `Fans hear ${PREVIEW_SECONDS} seconds from this point (minutes:seconds), fading in and out. Leave blank to start 30 seconds in automatically.`}</p>
+    </div>
+    {save.isError && <p className="text-sm text-red-400 sm:col-span-2">{save.error.message}</p>}
+    <Button className="sm:col-span-2" disabled={save.isPending || Boolean(previewProblem)}>Save track metadata</Button></form>
+}
+
+function PreviewStatus({status}: {status: ProviderTrack['preview_status']}) {
+  if (!status) return null
+  const label = status === 'ready' ? 'Preview ready' : status === 'processing' ? 'Preview being prepared' : 'Preview not made yet'
+  return <span className={`rounded-full border px-2.5 py-1 text-xs ${status === 'ready' ? 'border-emerald-400/30 text-emerald-300' : 'border-white/10 text-zinc-400'}`} role="status">{label}</span>
 }
 
 function IsrcStep({detail}: {detail: ProviderReleaseDetail}) {

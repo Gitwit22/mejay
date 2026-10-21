@@ -3,7 +3,7 @@ import {fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {MemoryRouter, Route, Routes} from 'react-router-dom'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {generateProviderIsrc, getProviderRelease, listProviderArtists, updateProviderRelease, type ProviderReleaseDetail} from '@/lib/providerApi'
+import {generateProviderIsrc, getProviderRelease, listProviderArtists, updateProviderRelease, updateProviderTrack, type ProviderReleaseDetail} from '@/lib/providerApi'
 import ReleaseWizardPage from './ReleaseWizardPage'
 
 // Radix checkboxes measure themselves; jsdom has no ResizeObserver.
@@ -20,6 +20,7 @@ vi.mock('@/lib/providerApi', async (importOriginal) => ({
   listProviderArtists: vi.fn(),
   updateProviderRelease: vi.fn(),
   generateProviderIsrc: vi.fn(),
+  updateProviderTrack: vi.fn(),
 }))
 
 const track = {id: 'track-1', title: 'Night Drive', version_title: null, disc_number: 1, track_number: 1, duration_ms: 180000, explicit: false, language_code: 'en', primary_artist_name: 'John Blaze', isrc: null}
@@ -134,5 +135,42 @@ describe('release wizard: release date and pre-orders', () => {
     renderStep('review')
     expect(await screen.findByText(/pre-orders on/)).toBeInTheDocument()
     expect(screen.getByText(/Your release date is less than 7 days away/)).toBeInTheDocument()
+  })
+})
+
+describe('release wizard: song previews', () => {
+  beforeEach(() => {
+    vi.mocked(listProviderArtists).mockResolvedValue([{id: 'artist-1', name: 'John Blaze'} as never])
+    vi.mocked(updateProviderRelease).mockReset().mockResolvedValue({} as never)
+    vi.mocked(updateProviderTrack).mockReset().mockResolvedValue({} as never)
+  })
+
+  it('lets the artist allow previews before release and saves the choice', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail())
+    renderStep('release-information')
+    expect(await screen.findByText(/Fans hear a 10-second clip that fades in and out/)).toBeInTheDocument()
+    expect(screen.getByLabelText('After release only')).toBeChecked()
+    fireEvent.click(screen.getByLabelText('Before release too (during pre-orders)'))
+    expect(screen.getByText(/Turn on pre-orders above to use this/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Save information'}))
+    await waitFor(() => expect(updateProviderRelease).toHaveBeenCalledWith('release-1', expect.objectContaining({previewTiming: 'before_release'})))
+  })
+
+  it('takes a preview start in minutes:seconds, shows the clip status, and blocks a start too close to the end', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail({tracks: [{...track, preview_start_ms: null, preview_status: 'processing'}]}))
+    renderStep('track-metadata')
+    const input = await screen.findByLabelText('Preview starts at')
+    expect(screen.getByText('Preview being prepared')).toBeInTheDocument()
+    fireEvent.change(input, {target: {value: '2:55'}})
+    expect(screen.getByText('Start at least 10 seconds before the end of the song.')).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Save track metadata'})).toBeDisabled()
+    fireEvent.change(input, {target: {value: 'abc'}})
+    expect(screen.getByText(/Use minutes:seconds/)).toBeInTheDocument()
+    fireEvent.change(input, {target: {value: '1:05'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Save track metadata'}))
+    await waitFor(() => expect(updateProviderTrack).toHaveBeenCalledWith('track-1', expect.objectContaining({previewStartMs: 65_000})))
+    fireEvent.change(input, {target: {value: ''}})
+    fireEvent.click(screen.getByRole('button', {name: 'Save track metadata'}))
+    await waitFor(() => expect(updateProviderTrack).toHaveBeenLastCalledWith('track-1', expect.objectContaining({previewStartMs: null})))
   })
 })

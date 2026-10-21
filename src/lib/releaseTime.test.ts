@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {formatReleaseTime, meetsReleaseLead, preorderLabel, utcToZonedLocal, zonedLocalToUtcIso} from './releaseTime'
+import {formatPreviewStart, formatReleaseTime, meetsReleaseLead, parsePreviewStart, preorderLabel, utcToZonedLocal, zonedLocalToUtcIso} from './releaseTime'
 
 describe('release time conversion', () => {
   it('converts a wall time in the chosen timezone to UTC across DST', () => {
@@ -23,5 +23,18 @@ describe('release time conversion', () => {
     expect(meetsReleaseLead('2026-10-28T12:00:00.000Z', now)).toBe(true)
     expect(meetsReleaseLead('2026-10-28T11:59:59.000Z', now)).toBe(false)
     expect(meetsReleaseLead(null, now)).toBe(true)
+  })
+})
+
+describe('preview start input', () => {
+  it('parses minutes:seconds or plain seconds, blank as automatic, and rejects anything else', () => {
+    expect(parsePreviewStart('1:05')).toBe(65_000)
+    expect(parsePreviewStart('0:00')).toBe(0)
+    expect(parsePreviewStart('90')).toBe(90_000)
+    expect(parsePreviewStart('  ')).toBeNull()
+    expect(parsePreviewStart('1:75')).toBeUndefined()
+    expect(parsePreviewStart('soon')).toBeUndefined()
+    expect(formatPreviewStart(65_000)).toBe('1:05')
+    expect(formatPreviewStart(null)).toBe('')
   })
 })

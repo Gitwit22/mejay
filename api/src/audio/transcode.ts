@@ -4,7 +4,12 @@ import type {AudioProbe} from './probe'
 /** Delivery MP3: constant 320 kbps, the highest MP3 bitrate players universally support. */
 export const DELIVERY_BITRATE = '320k'
 export const PREVIEW_BITRATE = '128k'
-export const PREVIEW_SECONDS = 30
+/** Store previews are 10-second clips that fade in and out. */
+export const PREVIEW_SECONDS = 10
+export const PREVIEW_FADE_IN_SECONDS = 1
+export const PREVIEW_FADE_OUT_SECONDS = 1.5
+/** Automatic start for songs long enough to skip the intro. */
+const AUTO_START_SECONDS = 30
 export const COVER_SIZE_PX = 1400
 /** MP3 tops out at 48 kHz; higher-rate masters are resampled, others keep their rate. */
 const MP3_MAX_SAMPLE_RATE = 48_000
@@ -63,25 +68,37 @@ export function deliveryArgs(args: {sourcePath: string; coverPath: string | null
   ]
 }
 
-/** Where the preview starts: 30 s in for full-length songs, from the top for short ones. */
-export function previewWindow(durationMs: number): {startSeconds: number; lengthSeconds: number} {
+/** Latest start (ms) that still leaves a full 10-second clip; 0 for songs shorter than that. */
+export function maxPreviewStartMs(durationMs: number): number {
+  return Math.max(0, Math.floor(durationMs - PREVIEW_SECONDS * 1000))
+}
+
+/**
+ * Where the preview starts. `requestedStartMs` is the artist's choice (null = automatic: 30 s in for
+ * songs of 90 s or more, otherwise the top), clamped so the clip never runs past the end.
+ */
+export function previewWindow(durationMs: number, requestedStartMs: number | null = null): {startSeconds: number; lengthSeconds: number} {
   const durationSeconds = durationMs / 1000
-  const startSeconds = durationSeconds >= PREVIEW_SECONDS * 3 ? PREVIEW_SECONDS : 0
+  const wanted = requestedStartMs === null || requestedStartMs === undefined
+    ? (durationSeconds >= AUTO_START_SECONDS * 3 ? AUTO_START_SECONDS : 0)
+    : requestedStartMs / 1000
+  const startSeconds = Math.round(Math.max(0, Math.min(wanted, maxPreviewStartMs(durationMs) / 1000)) * 1000) / 1000
   const lengthSeconds = Math.max(1, Math.min(PREVIEW_SECONDS, durationSeconds - startSeconds))
   return {startSeconds, lengthSeconds: Math.round(lengthSeconds * 1000) / 1000}
 }
 
-/** Short tagged clip with a gentle fade in/out, for store previews. */
-export function previewArgs(args: {sourcePath: string; coverPath: string | null; outputPath: string; tags: TrackTagData; probe: AudioProbe}): string[] {
-  const {startSeconds, lengthSeconds} = previewWindow(args.probe.durationMs)
-  const fadeOut = Math.min(3, lengthSeconds / 4)
+/** 10-second tagged clip that fades in and out, for store previews. */
+export function previewArgs(args: {sourcePath: string; coverPath: string | null; outputPath: string; tags: TrackTagData; probe: AudioProbe; requestedStartMs?: number | null}): string[] {
+  const {startSeconds, lengthSeconds} = previewWindow(args.probe.durationMs, args.requestedStartMs ?? null)
+  const fadeIn = Math.min(PREVIEW_FADE_IN_SECONDS, lengthSeconds / 4)
+  const fadeOut = Math.min(PREVIEW_FADE_OUT_SECONDS, lengthSeconds / 4)
   return [
     '-ss', String(startSeconds), '-t', String(lengthSeconds), '-i', args.sourcePath,
     ...coverInputArgs(args.coverPath),
     '-map', '0:a:0',
     ...coverMapArgs(args.coverPath),
     '-map_metadata', '-1',
-    '-af', `afade=t=in:d=0.5,afade=t=out:st=${Math.max(0, lengthSeconds - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}`,
+    '-af', `afade=t=in:d=${fadeIn.toFixed(3)},afade=t=out:st=${Math.max(0, lengthSeconds - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}`,
     '-c:a', 'libmp3lame', '-b:a', PREVIEW_BITRATE,
     ...sampleRateArgs(args.probe),
     '-id3v2_version', '3',

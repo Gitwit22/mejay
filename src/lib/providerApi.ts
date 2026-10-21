@@ -152,6 +152,10 @@ export type ProviderTrack = {
   recording_location?: string | null
   contributors?: TrackContributor[]
   featured_artist_ids?: string[]
+  /** Where the 10-second store preview starts (ms); null = automatic. */
+  preview_start_ms?: number | null
+  /** Whether MeJay has made the preview clip for the current setting. */
+  preview_status?: 'ready' | 'processing' | 'waiting'
 }
 
 export type ContributorRole = 'writer' | 'composer' | 'producer' | 'featured_artist' | 'remixer' | 'other'
@@ -225,6 +229,7 @@ export type ProviderReleaseDetail = {
     requested_release_at?: string | null
     release_timezone?: string | null
     preorders_enabled?: boolean
+    preview_timing?: 'before_release' | 'after_release'
     copyright_year: number | null
     copyright_holder: string | null
     phonographic_copyright_year: number | null
@@ -367,6 +372,7 @@ export function updateProviderRelease(releaseId: string, input: {
   requestedReleaseAt?: string | null
   releaseTimezone?: string | null
   preordersEnabled?: boolean
+  previewTiming?: 'before_release' | 'after_release'
   copyrightYear?: number | null
   copyrightHolder?: string | null
   phonographicCopyrightYear?: number | null
@@ -439,6 +445,7 @@ export function updateProviderTrack(trackId: string, input: {
   instrumental: boolean
   recordingYear?: number | null
   recordingLocation?: string | null
+  previewStartMs?: number | null
 }): Promise<ProviderTrack> {
   return request(`/api/marketplace/tracks/${encodeURIComponent(trackId)}`, {
     method: 'PATCH', headers: {'content-type': 'application/json'}, body: JSON.stringify(input),

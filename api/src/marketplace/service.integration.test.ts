@@ -24,6 +24,8 @@ import {exchangeEmailLink, issueEmailLink, resolveSessionDownload} from './guest
 import {claimGuestPurchases} from './commerce-service'
 import {claimStorePurchases, downloadGuestFile, recoverGuestAccess} from '../routes/store/commerce'
 import {signVerifiedToken} from '../routes/_auth'
+import {ensurePreviewJobs, wakeConverterIfQueued} from './preview-jobs'
+import {getCatalogAsset} from '../routes/store'
 
 const connectionString = process.env.TEST_DATABASE_URL
 const describeWithDatabase = connectionString ? describe : describe.skip
@@ -1798,6 +1800,108 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       expect(String(emails[0].text)).toMatch(/Download your music: https:\/\/app\.test\/download#token=/)
       expect(String(emails[0].text)).toContain('Create a free account')
       await expect(retryFailedConfirmations(db() as never, emailEnv)).resolves.toBe(0)
+    })
+
+    /** A finished clip for a track, as the converter would store it. */
+    async function addClip(owner: {provider: {id: string}; track: {id: string}}, setting: number | null) {
+      const source = await pool.query<{id: string}>(`SELECT id FROM marketplace_assets WHERE track_id = $1 AND kind = 'audio' ORDER BY created_at DESC LIMIT 1`, [owner.track.id])
+      const clipId = crypto.randomUUID()
+      await pool.query(
+        `INSERT INTO marketplace_assets (id, provider_profile_id, track_id, kind, storage_key, mime_type, byte_size, processing_status, metadata)
+         VALUES ($1, $2, $3, 'audio_preview', $4, 'audio/mpeg', 160000, 'ready', $5)`,
+        [clipId, owner.provider.id, owner.track.id, `mejay-artist/${owner.provider.id}/audio_preview/${owner.track.id}/${clipId}.mp3`, JSON.stringify({sourceAssetId: source.rows[0].id, previewSetting: setting})],
+      )
+      await pool.query(`UPDATE audio_processing_jobs SET status = 'succeeded' WHERE track_id = $1 AND status IN ('queued', 'processing')`, [owner.track.id])
+      return clipId
+    }
+
+    it('keeps exactly one preview clip job per track setting, never retrying a failed file for the same setting', async () => {
+      await pool.query(`UPDATE audio_processing_jobs SET status = 'succeeded' WHERE status IN ('queued', 'processing')`)
+      const owner = await scheduledPreorder('ClipJobs')
+      const jobsFor = async () => (await pool.query(`SELECT status, preview_start_ms FROM audio_processing_jobs WHERE track_id = $1 ORDER BY created_at`, [owner.track.id])).rows
+      await ensurePreviewJobs(db() as never, 500)
+      await ensurePreviewJobs(db() as never, 500)
+      expect(await jobsFor()).toEqual([{status: 'queued', preview_start_ms: null}])
+      await addClip(owner, null)
+      await ensurePreviewJobs(db() as never, 500)
+      expect(await jobsFor()).toHaveLength(1)
+
+      // A new start time queues one fresh job carrying that setting.
+      await pool.query('UPDATE tracks SET preview_start_ms = 45000 WHERE id = $1', [owner.track.id])
+      await ensurePreviewJobs(db() as never, 500)
+      await ensurePreviewJobs(db() as never, 500)
+      expect((await jobsFor()).map((job) => job.preview_start_ms)).toEqual([null, 45000])
+      const detail = await service.getRelease(owner.userId, owner.release.id) as {tracks: Array<{preview_status: string}>}
+      expect(detail.tracks[0].preview_status).toBe('processing')
+
+      // A failed conversion is not retried for the same setting.
+      await pool.query(`UPDATE audio_processing_jobs SET status = 'failed' WHERE track_id = $1 AND preview_start_ms = 45000`, [owner.track.id])
+      await ensurePreviewJobs(db() as never, 500)
+      expect(await jobsFor()).toHaveLength(2)
+      expect((await service.getRelease(owner.userId, owner.release.id) as {tracks: Array<{preview_status: string}>}).tracks[0].preview_status).toBe('waiting')
+
+      // Wake-up: only when configured and something is queued.
+      const fetchSpy = vi.fn(async () => new Response('{}', {status: 202}))
+      expect(await wakeConverterIfQueued(db() as never, {}, fetchSpy as never)).toBe(false)
+      await pool.query('UPDATE tracks SET preview_start_ms = 50000 WHERE id = $1', [owner.track.id])
+      await ensurePreviewJobs(db() as never, 500)
+      expect(await wakeConverterIfQueued(db() as never, {CONVERTER_URL: 'https://converter.test/', CONVERTER_TRIGGER_SECRET: 'secret'}, fetchSpy as never)).toBe(true)
+      expect(fetchSpy).toHaveBeenCalledWith('https://converter.test/jobs/run', expect.objectContaining({method: 'POST', headers: {authorization: 'Bearer secret'}}))
+      await addClip(owner, 50000)
+      expect((await service.getRelease(owner.userId, owner.release.id) as {tracks: Array<{preview_status: string}>}).tracks[0].preview_status).toBe('ready')
+    })
+
+    it('serves only preview clips, never masters, and plays pre-order previews only when the artist allows', async () => {
+      const owner = await scheduledPreorder('ClipStore')
+      const clipId = await addClip(owner, null)
+      const master = (await pool.query<{id: string}>(`SELECT id FROM marketplace_assets WHERE track_id = $1 AND kind = 'audio'`, [owner.track.id])).rows[0].id
+      const store = new StoreService(db() as never)
+      const listedPreview = async () => {
+        const row = (await store.listCatalog() as Array<{id: string; preview_asset_id: string | null}>).find((release) => release.id === owner.release.id)!
+        const detail = await store.getRelease(owner.release.id) as {tracks: Array<{preview_asset_id: string | null}>}
+        return {card: row.preview_asset_id, track: detail.tracks[0].preview_asset_id}
+      }
+      // Default "after release": no preview while it is a pre-order.
+      expect(await listedPreview()).toEqual({card: null, track: null})
+      await expect(store.getAsset(clipId)).rejects.toMatchObject({code: 'not_found'})
+
+      await pool.query(`UPDATE releases SET preview_timing = 'before_release' WHERE id = $1`, [owner.release.id])
+      expect(await listedPreview()).toEqual({card: clipId, track: clipId})
+      await expect(store.getAsset(clipId)).resolves.toMatchObject({kind: 'audio_preview', mimeType: 'audio/mpeg'})
+      await expect(store.recordPreview(clipId, null)).resolves.toBeUndefined()
+      await expect(store.getAsset(master)).rejects.toMatchObject({code: 'not_found'})
+
+      // The public route streams the whole clip (with ranges) and refuses the master.
+      const bucket = {getExact: vi.fn(async (_key: string, range?: string) => ({body: new Response('mp3').body!, contentLength: 3, contentRange: range ? 'bytes 0-2/160000' : undefined}))}
+      const asset = (id: string, range?: string) => getCatalogAsset({request: new Request(`https://api.test/api/store/assets/${id}`, {headers: range ? {range} : {}}), env: {DB: db() as never, DOWNLOADS: bucket as never}, params: {assetId: id}})
+      expect((await asset(clipId)).status).toBe(200)
+      expect((await asset(clipId, 'bytes=0-2')).status).toBe(206)
+      expect((await asset(master)).status).toBe(404)
+
+      // After release, previews play whatever the setting.
+      await pool.query(`UPDATE releases SET preview_timing = 'after_release' WHERE id = $1`, [owner.release.id])
+      await makeReleaseDue(owner.release.id)
+      await adminService().publishDueReleases()
+      expect(await listedPreview()).toEqual({card: clipId, track: clipId})
+    })
+
+    it('saves preview settings on drafts, keeps them on step saves, and rejects a start too close to the end', async () => {
+      await resetIsrcState()
+      const fixture = await createProviderFixture('ClipSettings')
+      const trackInput = {title: 'ClipSettings Track', primaryArtistId: fixture.artist.id, discNumber: 1, trackNumber: 1, durationMs: 180_000, explicit: false, instrumental: false}
+      await service.updateTrack(fixture.userId, fixture.track.id, {...trackInput, previewStartMs: 95_000})
+      await service.updateTrack(fixture.userId, fixture.track.id, trackInput)
+      expect((await pool.query('SELECT preview_start_ms FROM tracks WHERE id = $1', [fixture.track.id])).rows[0].preview_start_ms).toBe(95_000)
+      await expect(service.updateTrack(fixture.userId, fixture.track.id, {...trackInput, previewStartMs: 175_000}))
+        .rejects.toMatchObject({code: 'preview_start_too_late', message: expect.stringContaining('2:50')})
+      await service.updateTrack(fixture.userId, fixture.track.id, {...trackInput, previewStartMs: null})
+      expect((await pool.query('SELECT preview_start_ms FROM tracks WHERE id = $1', [fixture.track.id])).rows[0].preview_start_ms).toBeNull()
+
+      const base = {draftStep: 'release-information' as const, title: 'ClipSettings Release', releaseType: 'single' as const, primaryArtistId: fixture.artist.id}
+      const saved = await service.updateReleaseDraft(fixture.userId, fixture.release.id, {...base, expectedVersion: fixture.release.version, previewTiming: 'before_release'}) as {version: number; preview_timing: string}
+      expect(saved.preview_timing).toBe('before_release')
+      const kept = await service.updateReleaseDraft(fixture.userId, fixture.release.id, {...base, expectedVersion: saved.version}) as {preview_timing: string}
+      expect(kept.preview_timing).toBe('before_release')
     })
   })
 })

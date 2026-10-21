@@ -3,7 +3,7 @@ import {describe, expect, it} from 'vitest'
 import {deliveryFileName, outputKey} from './jobs'
 import {toTagData, type TrackTagData} from './metadata'
 import {parseProbe} from './probe'
-import {deliveryArgs, id3Tags, previewArgs, previewWindow} from './transcode'
+import {deliveryArgs, id3Tags, maxPreviewStartMs, previewArgs, previewWindow} from './transcode'
 import {checkProbe} from './verify'
 
 const tags: TrackTagData = {
@@ -38,11 +38,19 @@ describe('ffmpeg arguments', () => {
     expect(deliveryArgs({sourcePath: '/s', coverPath: null, outputPath: '/o.mp3', tags, probe: {...probe, sampleRate: 44_100}})).not.toContain('-ar')
   })
 
-  it('takes a 30 s preview from 0:30 on full songs and from the top on short ones', () => {
-    expect(previewWindow(200_000)).toEqual({startSeconds: 30, lengthSeconds: 30})
-    expect(previewWindow(40_000)).toEqual({startSeconds: 0, lengthSeconds: 30})
-    expect(previewWindow(12_000)).toEqual({startSeconds: 0, lengthSeconds: 12})
-    expect(previewArgs({sourcePath: '/s', coverPath: null, outputPath: '/p.mp3', tags, probe})).toEqual(expect.arrayContaining(['-ss', '30', '-t', '30', '-b:a', '128k']))
+  it('takes a 10 s preview: 0:30 in automatically, or from the chosen start, never past the end', () => {
+    expect(previewWindow(200_000)).toEqual({startSeconds: 30, lengthSeconds: 10})
+    expect(previewWindow(40_000)).toEqual({startSeconds: 0, lengthSeconds: 10})
+    expect(previewWindow(6_000)).toEqual({startSeconds: 0, lengthSeconds: 6})
+    expect(previewWindow(200_000, 75_500)).toEqual({startSeconds: 75.5, lengthSeconds: 10})
+    expect(previewWindow(200_000, 0)).toEqual({startSeconds: 0, lengthSeconds: 10})
+    // A start too close to the end is pulled back so the full 10 seconds still play.
+    expect(previewWindow(200_000, 199_000)).toEqual({startSeconds: 190, lengthSeconds: 10})
+    expect(maxPreviewStartMs(200_000)).toBe(190_000)
+    const args = previewArgs({sourcePath: '/s', coverPath: null, outputPath: '/p.mp3', tags, probe, requestedStartMs: 75_500})
+    expect(args).toEqual(expect.arrayContaining(['-ss', '75.5', '-t', '10', '-b:a', '128k']))
+    // Fades in over 1 s and out over the last 1.5 s.
+    expect(args[args.indexOf('-af') + 1]).toBe('afade=t=in:d=1.000,afade=t=out:st=8.500:d=1.500')
   })
 })
 

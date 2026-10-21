@@ -66,6 +66,8 @@ export const releaseDraftSchema = z.object({
   requestedReleaseAt: z.string().datetime({offset: true}).nullable().optional(),
   releaseTimezone: z.string().trim().refine(isValidTimeZone, 'Choose a valid timezone').nullable().optional(),
   preordersEnabled: z.boolean().optional(),
+  /** Whether store previews play during pre-orders or only once the release is live. */
+  previewTiming: z.enum(['before_release', 'after_release']).optional(),
   copyrightYear: z.number().int().min(1900).max(2200).nullable().optional(),
   copyrightHolder: nonEmpty.nullable().optional(),
   phonographicCopyrightYear: z.number().int().min(1900).max(2200).nullable().optional(),
@@ -97,6 +99,8 @@ export const trackDraftSchema = z.object({
   instrumental: z.boolean(),
   recordingYear: z.number().int().min(1900).max(2200).nullable().optional(),
   recordingLocation: nonEmpty.nullable().optional(),
+  /** Where the 10-second store preview starts, in ms; null = automatic. Omitted keeps the stored value. */
+  previewStartMs: z.number().int().min(0).max(24 * 60 * 60 * 1000).nullable().optional(),
 })
 
 export const assetSchema = z.object({

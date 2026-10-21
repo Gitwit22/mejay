@@ -78,8 +78,27 @@ export async function getCatalogAsset(context: Context): Promise<Response> {
       })
     }
 
-    // Audio: only a short leading window of the master is ever served, and the browser sees it
-    // as a complete file of that length so seeking/range requests stay inside the window.
+    // Audio is only ever a MeJay-made 10-second preview clip (getAsset refuses masters), so the
+    // whole small file is served, with byte ranges for players that seek.
+    if (asset.kind === 'audio_preview') {
+      const requestedRange = context.request.headers.get('range')
+      const range = requestedRange && /^bytes=\d*-\d*$/.test(requestedRange) ? requestedRange : undefined
+      const clip = await context.env.DOWNLOADS.getExact(asset.storageKey, range)
+      if (!clip) return json({ok: false, error: 'not_found'}, 404)
+      return new Response(clip.body, {
+        status: clip.contentRange ? 206 : 200,
+        headers: {
+          'content-type': asset.mimeType,
+          'cache-control': 'public, max-age=300',
+          'content-disposition': 'inline',
+          'accept-ranges': 'bytes',
+          ...(clip.contentLength !== undefined ? {'content-length': String(clip.contentLength)} : {}),
+          ...(clip.contentRange ? {'content-range': clip.contentRange} : {}),
+        },
+      })
+    }
+
+    // Legacy master-window serving; unreachable now that getAsset only returns preview clips for audio.
     const limit = previewByteLimit(asset.byteSize, asset.durationMs)
     const range = resolvePreviewRange(context.request.headers.get('range'), limit)
     if (!range) {

@@ -93,3 +93,20 @@ export const ACCOUNT_INVITE = 'Want your music saved in one place? Create a free
 export function isPreorder(release: {availability?: string | null}): boolean {
   return release.availability === 'preorder'
 }
+
+export const PREVIEW_SECONDS = 10
+
+/** "1:05" → 65000 ms; blank → null (automatic); anything else → undefined (invalid). */
+export function parsePreviewStart(value: string): number | null | undefined {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const match = /^(\d{1,3}):([0-5]\d)$/.exec(trimmed) ?? /^()(\d{1,4})$/.exec(trimmed)
+  if (!match) return undefined
+  return (Number(match[1] || 0) * 60 + Number(match[2])) * 1000
+}
+
+export function formatPreviewStart(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return ''
+  const seconds = Math.floor(ms / 1000)
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}

@@ -55,7 +55,16 @@ describeWithDatabase('audio processing jobs (PostgreSQL + real ffmpeg)', () => {
     // A 100 s 96 kHz/24-bit master and 3000 px artwork, generated so the test needs no fixtures.
     await runFfmpeg(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=100', '-ar', '96000', '-c:a', 'pcm_s24le', join(workDir, 'master.wav')])
     await runFfmpeg(['-f', 'lavfi', '-i', 'color=c=red:s=3000x3000', '-frames:v', '1', join(workDir, 'art.png')])
+    // 60 s of silence then 40 s of tone: a clip from the chosen start (1:02) is loud; the automatic one (0:30) is silent.
+    await runFfmpeg(['-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo:d=60', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=40:sample_rate=44100',
+      '-filter_complex', '[1:a]aformat=channel_layouts=stereo[tone];[0:a][tone]concat=n=2:v=0:a=1', '-c:a', 'pcm_s16le', join(workDir, 'quiet-then-loud.wav')])
   }, 120_000)
+
+  /** Mean loudness in dB of a section of a file (ffmpeg volumedetect). */
+  async function meanVolume(file: string, startSeconds = 0, seconds = 10): Promise<number> {
+    const {stderr} = await runFfmpeg(['-ss', String(startSeconds), '-t', String(seconds), '-i', file, '-af', 'volumedetect', '-f', 'null', '-'])
+    return Number(/mean_volume: (-?[\d.]+|-inf) dB/.exec(stderr)?.[1].replace('-inf', '-200') ?? -200)
+  }
 
   afterAll(async () => {
     if (pool) {
@@ -118,7 +127,7 @@ describeWithDatabase('audio processing jobs (PostgreSQL + real ffmpeg)', () => {
     expect(mp3.tags).toMatchObject({title: 'Night Drive', artist: 'John Blaze', album: 'Woodward EP', track: '1/1'})
     expect(Math.abs(mp3.durationMs - 100_000)).toBeLessThan(500)
     const preview = await probeAudio(bucket.path(outputKey(done!, 'audio_preview')))
-    expect(Math.abs(preview.durationMs - 30_000)).toBeLessThan(500)
+    expect(Math.abs(preview.durationMs - 10_000)).toBeLessThan(500)
     expect(preview.tags.title).toBe('Night Drive (Preview)')
 
     const {rows} = await pool.query(`SELECT kind, mime_type, sha256 FROM marketplace_assets WHERE track_id = $1 ORDER BY kind`, [owner.track.id])
@@ -177,4 +186,30 @@ describeWithDatabase('audio processing jobs (PostgreSQL + real ffmpeg)', () => {
   it('refuses to queue anything but a ready audio upload', async () => {
     await expect(enqueueAudioJob(db as never, crypto.randomUUID())).rejects.toMatchObject({code: 'source_not_found'})
   })
+
+  it("cuts the preview at the artist's chosen start, 10 s long, fading in and out", async () => {
+    const owner = await fixture('PreviewStart', {source: 'quiet-then-loud.wav', artwork: false})
+    await pool.query('UPDATE tracks SET preview_start_ms = 62000 WHERE id = $1', [owner.track.id])
+    const job = await enqueueAudioJob(db as never, owner.audioId)
+    expect(job.preview_start_ms).toBe(62000)
+    await createAudioJobRunner(deps()).kick()
+    const done = await getAudioJob(db as never, job.id)
+    expect(done).toMatchObject({status: 'succeeded'})
+    const clip = bucket.path(outputKey(done!, 'audio_preview'))
+    expect(Math.abs((await probeAudio(clip)).durationMs - 10_000)).toBeLessThan(500)
+    // Tone throughout (it started at 1:02, inside the loud part), quieter at the faded edges.
+    const middle = await meanVolume(clip, 3, 4)
+    expect(middle).toBeGreaterThan(-30)
+    expect(await meanVolume(clip, 0, 0.3)).toBeLessThan(middle - 3)
+    expect(await meanVolume(clip, 9.7, 0.3)).toBeLessThan(middle - 3)
+    const asset = await pool.query(`SELECT metadata FROM marketplace_assets WHERE track_id = $1 AND kind = 'audio_preview'`, [owner.track.id])
+    expect(asset.rows[0].metadata).toMatchObject({previewSetting: 62000, startMs: 62000})
+
+    // Automatic start (0:30) lands in the silent part: proves the chosen offset was really used.
+    await pool.query('UPDATE tracks SET preview_start_ms = NULL WHERE id = $1', [owner.track.id])
+    const autoJob = await enqueueAudioJob(db as never, owner.audioId)
+    await createAudioJobRunner(deps()).kick()
+    const autoDone = await getAudioJob(db as never, autoJob.id)
+    expect(await meanVolume(bucket.path(outputKey(autoDone!, 'audio_preview')))).toBeLessThan(-60)
+  }, 180_000)
 })

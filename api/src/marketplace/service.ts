@@ -29,6 +29,7 @@ import {inspectUpload, validateInspectedUpload, isTruncatedJpegHeader} from './u
 import {slugifyArtistName} from './artist-profile'
 import {releaseCertificationProblems, snapshotReleaseCertification, type RequestMeta} from './release-submission-service'
 import {requestedReleaseProblem} from './release-schedule'
+import {maxPreviewStartMs} from '../audio/transcode'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -457,6 +458,12 @@ export class MarketplaceService {
 
     const {results: tracks} = await this.database.prepare(
       `SELECT t.*, a.name AS primary_artist_name, i.isrc,
+        -- Store preview clip for the track's current setting: ready, being made, or not yet made.
+        CASE
+          WHEN EXISTS (SELECT 1 FROM marketplace_assets clip WHERE clip.track_id = t.id AND clip.kind = 'audio_preview'
+            AND clip.processing_status = 'ready' AND ${PREVIEW_MATCHES_SETTING_SQL('clip', 't')}) THEN 'ready'
+          WHEN EXISTS (SELECT 1 FROM audio_processing_jobs job WHERE job.track_id = t.id AND job.status IN ('queued', 'processing')) THEN 'processing'
+          ELSE 'waiting' END AS preview_status,
         COALESCE((SELECT json_agg(json_build_object('name', c.name, 'role', c.role, 'publisherName', c.publisher_name) ORDER BY c.created_at, c.id)
           FROM track_contributors c WHERE c.track_id = t.id), '[]'::json) AS contributors,
         COALESCE((SELECT json_agg(fa.artist_id ORDER BY fa.artist_id) FROM track_artists fa
@@ -571,7 +578,7 @@ export class MarketplaceService {
           original_release_date = ?6, scheduled_release_at = ?7, genre = ?8, subgenre = ?9, upc = ?10,
           copyright_year = ?11, copyright_holder = ?12, phonographic_copyright_year = ?13,
           phonographic_copyright_holder = ?14, draft_step = ?15, duplicate_fingerprint = ?16,
-          requested_release_at = ?21, release_timezone = ?22, preorders_enabled = ?23,
+          requested_release_at = ?21, release_timezone = ?22, preorders_enabled = ?23, preview_timing = ?24,
           version = version + 1, updated_at = ?17
          WHERE id = ?18 AND provider_profile_id = ?19 AND version = ?20 RETURNING *`,
       ).bind(
@@ -581,6 +588,7 @@ export class MarketplaceService {
         input.copyrightHolder ?? null, input.phonographicCopyrightYear ?? null,
         input.phonographicCopyrightHolder ?? null, input.draftStep, duplicateFingerprint, now, releaseId, context.providerId,
         input.expectedVersion, schedule.requestedReleaseAt, schedule.releaseTimezone, schedule.preordersEnabled,
+        input.previewTiming ?? (before.preview_timing as string | undefined) ?? 'after_release',
       ))
       await db.prepare(
         `UPDATE release_artists SET is_primary = FALSE
@@ -704,17 +712,18 @@ export class MarketplaceService {
       await assertOwned(db, 'artists', input.primaryArtistId, context.providerId)
       const before = await db.prepare(
         'SELECT * FROM tracks WHERE id = ?1 AND provider_profile_id = ?2',
-      ).bind(trackId, context.providerId).first()
+      ).bind(trackId, context.providerId).first<Record<string, unknown>>()
+      const previewStartMs = resolvePreviewStart(before, input)
       const row = await inserted<any>(db.prepare(
         `UPDATE tracks SET title = ?1, version_title = ?2, disc_number = ?3, track_number = ?4,
           duration_ms = ?5, explicit = ?6, language_code = ?7, genre = ?8, instrumental = ?9,
-          recording_year = ?10, recording_location = ?11, updated_at = CURRENT_TIMESTAMP
+          recording_year = ?10, recording_location = ?11, preview_start_ms = ?14, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?12 AND provider_profile_id = ?13 RETURNING *`,
       ).bind(
         input.title, input.versionTitle ?? null, input.discNumber, input.trackNumber,
         input.durationMs ?? null, input.explicit, input.languageCode ?? null, input.genre ?? null,
         input.instrumental, input.recordingYear ?? null, input.recordingLocation ?? null,
-        trackId, context.providerId,
+        trackId, context.providerId, previewStartMs,
       ))
       await db.prepare(
         'UPDATE track_artists SET is_primary = FALSE WHERE track_id = ?1 AND provider_profile_id = ?2 AND is_primary = TRUE',
@@ -1257,4 +1266,28 @@ export function resolveDraftSchedule(
     throw new MarketplaceError(422, 'preorders_need_release_date', 'Pre-orders need a release date. Choose one or turn pre-orders off.')
   }
   return {requestedReleaseAt, releaseTimezone, preordersEnabled}
+}
+
+/**
+ * SQL: the preview clip `clip` was made for track `track`'s current preview setting (start choice,
+ * null = automatic) from its latest audio upload. Clips made before artists could choose a start do
+ * not match, so they are regenerated.
+ */
+export function PREVIEW_MATCHES_SETTING_SQL(clip: string, track: string): string {
+  return `(${clip}.metadata ? 'previewSetting'
+    AND ${clip}.metadata->>'previewSetting' IS NOT DISTINCT FROM ${track}.preview_start_ms::text
+    AND ${clip}.metadata->>'sourceAssetId' = (SELECT latest.id FROM marketplace_assets latest WHERE latest.track_id = ${track}.id
+      AND latest.kind = 'audio' AND latest.processing_status = 'ready' ORDER BY latest.created_at DESC LIMIT 1))`
+}
+
+/** Preview start to store for a track save: omitted keeps it; it must leave a full 10-second clip. */
+export function resolvePreviewStart(before: Record<string, unknown> | null, input: Pick<TrackDraftInput, 'previewStartMs' | 'durationMs'>): number | null {
+  if (input.previewStartMs === undefined) return (before?.preview_start_ms as number | null | undefined) ?? null
+  if (input.previewStartMs === null) return null
+  const duration = input.durationMs ?? (before?.duration_ms as number | null | undefined) ?? null
+  if (duration && input.previewStartMs > maxPreviewStartMs(duration)) {
+    const latest = Math.floor(maxPreviewStartMs(duration) / 1000)
+    throw new MarketplaceError(422, 'preview_start_too_late', `The preview must start early enough to play 10 seconds. The latest start for this song is ${Math.floor(latest / 60)}:${String(latest % 60).padStart(2, '0')}.`)
+  }
+  return input.previewStartMs
 }

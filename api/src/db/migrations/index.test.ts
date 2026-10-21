@@ -33,6 +33,7 @@ describe('runMigrations', () => {
       {version: 17, name: 'artist_release_pages'},
       {version: 18, name: 'audio_processing'},
       {version: 19, name: 'preorders'},
+      {version: 20, name: 'preview_settings'},
     ])
   })
 

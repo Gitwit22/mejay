@@ -9,6 +9,7 @@ import {apiOriginGuard} from './middleware/origin-guard'
 import {CommerceService} from './marketplace/commerce-service'
 import {MarketplaceAdminService} from './marketplace/admin-service'
 import {processEmailJobs, retryFailedConfirmations} from './marketplace/email-jobs'
+import {ensurePreviewJobs, wakeConverterIfQueued} from './marketplace/preview-jobs'
 
 const config = loadConfig()
 const port = Number(config.PORT)
@@ -88,6 +89,9 @@ if (Number.isFinite(publishDueMinutes) && publishDueMinutes > 0) {
       await step('email jobs', () => processEmailJobs(database as never, env), (result) => result.sent + result.retried + result.skipped > 0)
       await step('confirmation retries', () => retryFailedConfirmations(database as never, env), (sent) => sent > 0)
       if (refunds) await step('pre-order refunds', () => refunds.processPreorderRefunds(), (result) => result.requested + result.failed > 0)
+      // Store previews: queue clips for new uploads or changed start times, then wake the converter.
+      await step('preview clips', () => ensurePreviewJobs(database as never), (result) => result.queued > 0)
+      await step('converter wake-up', () => wakeConverterIfQueued(database as never, {CONVERTER_URL: config.CONVERTER_URL, CONVERTER_TRIGGER_SECRET: config.CONVERTER_TRIGGER_SECRET}), (woke) => woke)
     })().finally(() => {
       publishing = false
     })

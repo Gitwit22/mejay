@@ -36,7 +36,7 @@ describe('public music store policy', () => {
     expect(query).toContain("r.status = 'LIVE'")
   })
 
-  it('records only ready audio previews belonging to LIVE releases', async () => {
+  it('records only ready preview clips of LIVE releases, or of pre-orders that allow early previews', async () => {
     const queries: string[] = []
     const statement = {
       bind: vi.fn(() => statement),
@@ -47,8 +47,11 @@ describe('public music store policy', () => {
     const service = new StoreService({prepare: (sql: string) => {queries.push(sql); return statement}} as never)
 
     await expect(service.recordPreview('asset-1', null)).resolves.toBeUndefined()
-    expect(queries[0]).toContain("asset.kind = 'audio'")
+    // Never the uploaded master: only the MeJay-made 10-second clip.
+    expect(queries[0]).toContain("asset.kind = 'audio_preview'")
+    expect(queries[0]).not.toContain("asset.kind = 'audio'")
     expect(queries[0]).toContain("release.status = 'LIVE'")
+    expect(queries[0]).toContain("release.preview_timing = 'before_release'")
     expect(queries[1]).toContain('INSERT INTO marketplace_preview_events')
   })
 
