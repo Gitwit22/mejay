@@ -71,6 +71,13 @@ describe('MarketplaceAdminPage industry reporting', () => {
     })
   })
 
+  it('links back to the main MEJay app', async () => {
+    const queryClient = new QueryClient({defaultOptions: {queries: {retry: false}}})
+    render(<QueryClientProvider client={queryClient}><MemoryRouter><MarketplaceAdminPage /></MemoryRouter></QueryClientProvider>)
+
+    expect(await screen.findByRole('link', {name: 'Back to MEJay'})).toHaveAttribute('href', '/app')
+  })
+
   it('shows daily readiness and transaction-to-ledger traceability', async () => {
     const queryClient = new QueryClient({defaultOptions: {queries: {retry: false}}})
     render(<QueryClientProvider client={queryClient}><MemoryRouter><MarketplaceAdminPage /></MemoryRouter></QueryClientProvider>)

@@ -13,7 +13,7 @@ import {ACCOUNT_INVITE, PREORDER_CHARGE_NOTICE, preorderLabel, SCHEDULER_NOTE} f
 function Shell({children}: {children: React.ReactNode}) {
   return <div className="min-h-screen bg-[#0a0a0b] px-4 py-10 text-zinc-100 sm:px-8">
     <main className="mx-auto max-w-xl space-y-6">
-      <Link to="/app/store" className="text-sm font-black tracking-[0.12em] text-zinc-300 hover:text-white">MEJAY MUSIC</Link>
+      <Link to="/app?tab=music" className="text-sm font-black tracking-[0.12em] text-zinc-300 hover:text-white">MEJAY MUSIC</Link>
       {children}
     </main>
   </div>

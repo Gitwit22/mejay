@@ -1,16 +1,17 @@
-import {useEffect, useRef, useState} from 'react'
 import {useQuery} from '@tanstack/react-query'
-import {ArrowRight, Disc3, Pause, Play, ShoppingBag, Sparkles} from 'lucide-react'
+import {ArrowRight, Disc3, Library, Pause, Play, Sparkles} from 'lucide-react'
 import {Link} from 'react-router-dom'
 
 import {Button} from '@/components/ui/button'
 import {Skeleton} from '@/components/ui/skeleton'
-import {getMusicDiscovery} from '@/lib/musicDiscoveryApi'
-import {recordStorePreview, storeAssetUrl, type StoreRelease} from '@/lib/musicStoreApi'
+import {usePreview, type PreviewController} from '@/hooks/useStorePreview'
+import {getMusicDiscovery, type DiscoveryArtist} from '@/lib/musicDiscoveryApi'
+import {storeAssetUrl, type StoreRelease} from '@/lib/musicStoreApi'
+import {BrowseAllMusic} from './BrowseAllMusic'
 
 export function MusicOverviewView() {
   const discovery = useQuery({queryKey: ['music', 'discovery'], queryFn: getMusicDiscovery})
-  const preview = usePreviewPlayer()
+  const preview = usePreview()
 
   if (discovery.isLoading) return <MusicLoading />
   if (discovery.isError) return <MusicError message={discovery.error.message} retry={() => void discovery.refetch()} />
@@ -22,7 +23,7 @@ export function MusicOverviewView() {
   return <div className="mx-auto h-full w-full max-w-7xl overflow-y-auto pb-32 text-zinc-100">
     <header className="flex items-end justify-between gap-4 border-b border-white/10 pb-6">
       <div><p className="text-xs font-semibold uppercase text-emerald-400">Discover</p><h1 className="mt-1 text-3xl font-black tracking-normal sm:text-4xl">MEJAY MUSIC</h1><p className="mt-2 text-sm text-zinc-500">What is new and moving across MEJay.</p></div>
-      <Button asChild variant="outline" className="shrink-0 gap-2 border-white/10 bg-black/20"><Link to="/app/store"><ShoppingBag className="h-4 w-4" /><span className="hidden sm:inline">Marketplace</span></Link></Button>
+      <Button asChild variant="outline" className="shrink-0 gap-2 border-white/10 bg-black/20"><Link to="/app/purchased" aria-label="Purchased Music"><Library className="h-4 w-4" /><span className="hidden sm:inline">Purchased Music</span></Link></Button>
     </header>
 
     {empty ? <EmptyMusic /> : <div className="space-y-12 py-8">
@@ -39,52 +40,27 @@ export function MusicOverviewView() {
       </section>}
       {data.featuredArtists.length > 0 && <section><SectionHeading title="Featured Artists" /><div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">{data.featuredArtists.map((artist) => {
         const artwork = storeAssetUrl(artist.artwork_asset_id)
-        return <Link key={artist.id} to={`/app/store?artist=${encodeURIComponent(artist.id)}`} className="group min-w-0"><div className="aspect-square overflow-hidden rounded-full bg-[#18181b]">{artwork ? <img src={artwork} alt="" className="h-full w-full object-cover transition duration-300 group-hover:scale-105" loading="lazy" /> : <div className="grid h-full place-items-center"><Disc3 className="h-10 w-10 text-zinc-700" /></div>}</div><p className="mt-3 truncate text-center font-bold group-hover:text-emerald-400">{artist.name}</p><p className="mt-1 text-center text-xs text-zinc-600">{artist.release_count} {artist.release_count === 1 ? 'release' : 'releases'}</p></Link>
+        return <Link key={artist.id} to={artistHref(artist)} className="group min-w-0"><div className="aspect-square overflow-hidden rounded-full bg-[#18181b]">{artwork ? <img src={artwork} alt="" className="h-full w-full object-cover transition duration-300 group-hover:scale-105" loading="lazy" /> : <div className="grid h-full place-items-center"><Disc3 className="h-10 w-10 text-zinc-700" /></div>}</div><p className="mt-3 truncate text-center font-bold group-hover:text-emerald-400">{artist.name}</p><p className="mt-1 text-center text-xs text-zinc-600">{artist.release_count} {artist.release_count === 1 ? 'release' : 'releases'}</p></Link>
       })}</div></section>}
     </div>}
+    <div className="pb-8"><BrowseAllMusic preview={preview} /></div>
   </div>
 }
 
-type PreviewPlayer = {playingId: string | null; toggle: (release: StoreRelease) => void}
-
-function usePreviewPlayer(): PreviewPlayer {
-  const audioRef = useRef<HTMLAudioElement | null>(null)
-  const [playingId, setPlayingId] = useState<string | null>(null)
-
-  useEffect(() => () => audioRef.current?.pause(), [])
-
-  const toggle = (release: StoreRelease) => {
-    const url = storeAssetUrl(release.preview_asset_id)
-    if (!url) return
-    if (playingId === release.id) {
-      audioRef.current?.pause()
-      setPlayingId(null)
-      return
-    }
-    audioRef.current?.pause()
-    const audio = new Audio(url)
-    audio.preload = 'metadata'
-    audio.addEventListener('ended', () => setPlayingId(null), {once: true})
-    audio.addEventListener('error', () => setPlayingId(null), {once: true})
-    audioRef.current = audio
-    void audio.play().then(() => {
-      setPlayingId(release.id)
-      if (release.preview_asset_id) void recordStorePreview(release.preview_asset_id).catch(() => undefined)
-    }).catch(() => setPlayingId(null))
-  }
-
-  return {playingId, toggle}
+// Older API responses omit the slug; fall back to the catalog's artist filter.
+function artistHref(artist: DiscoveryArtist): string {
+  return artist.slug ? `/artist/${encodeURIComponent(artist.slug)}` : `/app?tab=music&artist=${encodeURIComponent(artist.id)}`
 }
 
-function ReleaseRail({title, releases, preview, nested = false, icon}: {title: string; releases: StoreRelease[]; preview: PreviewPlayer; nested?: boolean; icon?: React.ReactNode}) {
+function ReleaseRail({title, releases, preview, nested = false, icon}: {title: string; releases: StoreRelease[]; preview: PreviewController; nested?: boolean; icon?: React.ReactNode}) {
   if (releases.length === 0) return null
   return <section><SectionHeading title={title} small={nested} icon={icon} /><div className="grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{releases.map((release) => <ReleaseCard key={release.id} release={release} preview={preview} />)}</div></section>
 }
 
-function ReleaseCard({release, preview}: {release: StoreRelease; preview: PreviewPlayer}) {
+function ReleaseCard({release, preview}: {release: StoreRelease; preview: PreviewController}) {
   const artwork = storeAssetUrl(release.artwork_asset_id)
   const playing = preview.playingId === release.id
-  return <article className="group min-w-0"><Link to={`/app/store/${release.id}`} className="block"><div className="relative aspect-square overflow-hidden rounded-md bg-[#18181b]">{artwork ? <img src={artwork} alt={`${release.title} cover`} className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]" loading="lazy" /> : <div className="grid h-full place-items-center"><Disc3 className="h-12 w-12 text-zinc-700" /></div>}<span className="absolute bottom-2 right-2 grid h-9 w-9 place-items-center rounded-full bg-black/80 text-white opacity-0 transition group-hover:opacity-100"><ArrowRight className="h-4 w-4" /></span></div><h3 className="mt-3 truncate font-bold group-hover:text-emerald-400">{release.title}</h3><p className="mt-1 truncate text-sm text-zinc-400">{release.artist_name}</p></Link><div className="mt-2 flex items-center justify-between gap-2"><span className="truncate text-xs text-zinc-600">{releaseTypeLabel(release.release_type)}</span><Button type="button" size="icon" variant="ghost" className="h-8 w-8 shrink-0" disabled={!release.preview_asset_id} aria-label={`${playing ? 'Pause' : 'Preview'} ${release.title}`} onClick={() => preview.toggle(release)}>{playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}</Button></div></article>
+  return <article className="group min-w-0"><Link to={`/app/store/${release.id}`} className="block"><div className="relative aspect-square overflow-hidden rounded-md bg-[#18181b]">{artwork ? <img src={artwork} alt={`${release.title} cover`} className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]" loading="lazy" /> : <div className="grid h-full place-items-center"><Disc3 className="h-12 w-12 text-zinc-700" /></div>}<span className="absolute bottom-2 right-2 grid h-9 w-9 place-items-center rounded-full bg-black/80 text-white opacity-0 transition group-hover:opacity-100"><ArrowRight className="h-4 w-4" /></span></div><h3 className="mt-3 truncate font-bold group-hover:text-emerald-400">{release.title}</h3><p className="mt-1 truncate text-sm text-zinc-400">{release.artist_name}</p></Link><div className="mt-2 flex items-center justify-between gap-2"><span className="truncate text-xs text-zinc-600">{releaseTypeLabel(release.release_type)}</span><Button type="button" size="icon" variant="ghost" className="h-8 w-8 shrink-0" disabled={!release.preview_asset_id} aria-label={`${playing ? 'Pause' : 'Preview'} ${release.title}`} onClick={() => preview.toggle(release.id, release.preview_asset_id)}>{playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}</Button></div></article>
 }
 
 function SectionHeading({title, small = false, icon}: {title: string; small?: boolean; icon?: React.ReactNode}) { return <div className="mb-5 flex items-center gap-3">{icon}<h2 className={small ? 'text-sm font-bold uppercase text-zinc-400' : 'text-xl font-black'}>{title}</h2><div className="h-px flex-1 bg-white/10" /></div> }
