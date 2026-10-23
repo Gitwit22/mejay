@@ -29,7 +29,7 @@ export default function MarketplaceAdminPage() {
     <aside className="hidden w-64 shrink-0 border-r border-white/10 bg-[#111114] p-5 lg:block"><Brand /><Navigation active={section} onSelect={setSection} /></aside>
     {mobileOpen && <div className="fixed inset-0 z-50 bg-black/70 lg:hidden" onClick={() => setMobileOpen(false)}><aside className="h-full w-[min(84vw,19rem)] bg-[#111114] p-5" onClick={(event) => event.stopPropagation()}><div className="flex justify-between"><Brand /><Button variant="ghost" size="icon" onClick={() => setMobileOpen(false)} aria-label="Close navigation"><X /></Button></div><Navigation active={section} onSelect={(value) => {setSection(value); setMobileOpen(false)}} /></aside></div>}
     <main className="min-w-0 flex-1"><header className="flex h-16 items-center gap-3 border-b border-white/10 px-4 sm:px-7"><Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu /></Button><div><p className="text-sm font-semibold">{activeLabel}</p><p className="text-xs text-zinc-500">Marketplace Admin</p></div><span className="ml-auto border border-white/10 px-2.5 py-1 text-xs uppercase text-zinc-400">{overview.data?.role || 'staff'}</span></header>
-      <div className="mx-auto max-w-[1500px] p-4 sm:p-7">{overview.isLoading ? <Skeleton className="h-72 bg-white/5" /> : overview.isError ? <ErrorState message={overview.error.message} /> : overview.data ? <SectionView section={section} data={overview.data} /> : null}</div>
+      <div className="mx-auto max-w-[1500px] p-4 sm:p-7">{overview.isLoading ? <Skeleton className="h-72 bg-white/5" /> : overview.isError ? <ErrorState message={overview.error.message} /> : overview.data ? <SectionView section={section} data={overview.data} onNavigate={setSection} /> : null}</div>
     </main>
   </div></div>
 }
@@ -37,7 +37,7 @@ export default function MarketplaceAdminPage() {
 function Brand() { return <div className="mb-8"><p className="text-xl font-bold">MEJay</p><p className="text-xs font-medium uppercase text-emerald-400">Publishing Desk</p></div> }
 function Navigation({active, onSelect}: {active: Section; onSelect: (section: Section) => void}) { return <nav className="space-y-1">{navigation.map(([id, label, Icon]) => <button key={id} type="button" onClick={() => onSelect(id)} className={`flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm ${active === id ? 'bg-emerald-400 text-zinc-950' : 'text-zinc-400 hover:bg-white/5 hover:text-white'}`}><Icon className="h-4 w-4" />{label}</button>)}</nav> }
 
-function SectionView({section, data}: {section: Section; data: Awaited<ReturnType<typeof getMarketplaceAdminOverview>>}) {
+function SectionView({section, data, onNavigate}: {section: Section; data: Awaited<ReturnType<typeof getMarketplaceAdminOverview>>; onNavigate: (section: Section) => void}) {
   if (section === 'reporting') return <Reporting />
   if (section === 'finance') return <FinanceSection data={data} />
   if (section === 'discovery') return <DiscoveryCuration data={data} />
@@ -48,7 +48,14 @@ function SectionView({section, data}: {section: Section; data: Awaited<ReturnTyp
   const rows = data[section]
   const failedRefunds = Number(data.counts?.failed_preorder_refunds ?? 0)
   const failedEmails = Number(data.counts?.failed_buyer_emails ?? 0)
+  // Releases from accounts still in review stay drafts (the API refuses to submit them), so they
+  // never reach this queue; point staff at the application that is holding them back.
+  const blockedProviders = data.providers.filter((row) => row.status === 'pending_review' && Number(row.release_count) > 0).length
   return <>
+    {section === 'pending' && blockedProviders > 0 && <div role="status" className="mb-5 flex flex-wrap items-center gap-3 border border-amber-400/30 bg-amber-400/5 p-4 text-sm text-amber-200">
+      <p className="min-w-0 flex-1">{blockedProviders} artist account{blockedProviders === 1 ? ' is' : 's are'} awaiting approval with draft releases. Their releases cannot be submitted for review until the account is approved.</p>
+      <Button size="sm" variant="outline" onClick={() => onNavigate('providers')}>Review providers</Button>
+    </div>}
     {section === 'catalog' && (failedRefunds > 0 || failedEmails > 0) && <div role="alert" className="mb-5 border border-amber-400/30 bg-amber-400/5 p-4 text-sm text-amber-200">
       {failedRefunds > 0 && <p>{failedRefunds} pre-order refund{failedRefunds === 1 ? '' : 's'} could not be created yet. They retry automatically (up to 8 times); check Stripe if this persists.</p>}
       {failedEmails > 0 && <p>{failedEmails} buyer email{failedEmails === 1 ? '' : 's'} (release day, date change or cancellation) failed after every retry.</p>}

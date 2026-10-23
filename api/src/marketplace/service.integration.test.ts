@@ -435,11 +435,16 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
     await pool.query(`UPDATE releases SET status = 'PRICING_COMPLETE' WHERE id = $1`, [release.id])
     await expect(service.transitionRelease(userId, release.id, {targetStatus: 'SUBMITTED', expectedVersion: release.version}))
       .rejects.toMatchObject({code: 'provider_not_approved'})
+    // The wizard must not report the release as ready while the account gate would refuse it.
+    const pendingDetail = await service.getRelease(userId, release.id) as {prerequisites: string[]}
+    expect(pendingDetail.prerequisites).toContain('artist account approved by MEJay (your application is still in review)')
 
     await expect(adminService().commandProvider(reviewerUserId, provider.id, {action: 'approve'}))
       .rejects.toMatchObject({code: 'marketplace_admin_required'})
     const approved = await adminService().commandProvider(adminUserId, provider.id, {action: 'approve'}) as {status: string}
     expect(approved.status).toBe('approved')
+    const approvedDetail = await service.getRelease(userId, release.id) as {prerequisites: string[]}
+    expect(approvedDetail.prerequisites.some((item) => item.startsWith('artist account'))).toBe(false)
   })
 
   it('does not let staff publish through the provider transition endpoint', async () => {
