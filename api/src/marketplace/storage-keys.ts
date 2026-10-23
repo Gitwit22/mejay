@@ -7,3 +7,10 @@ const LEGACY_MARKETPLACE_STORAGE_PREFIX = 'marketplace/'
 export function isMarketplaceStorageKey(key: string): boolean {
   return key.startsWith(MARKETPLACE_STORAGE_PREFIX) || key.startsWith(LEGACY_MARKETPLACE_STORAGE_PREFIX)
 }
+
+/** R2 prefix for staff-uploaded editorial story images. */
+export const EDITORIAL_STORAGE_PREFIX = 'mejay-editorial/'
+
+export function isEditorialStorageKey(key: string): boolean {
+  return key.startsWith(EDITORIAL_STORAGE_PREFIX)
+}

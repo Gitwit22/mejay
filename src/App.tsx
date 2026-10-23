@@ -32,6 +32,9 @@ import ProviderOnboardingPage from "./app/pages/ProviderOnboardingPage";
 import ProviderPortalPage from "./app/pages/ProviderPortalPage";
 import ReleaseWizardPage from "./app/pages/ReleaseWizardPage";
 import ReleaseChangeRequestPage from "./app/pages/ReleaseChangeRequestPage";
+import StoryPage from "./app/pages/StoryPage";
+import StoriesIndexPage from "./app/pages/StoriesIndexPage";
+import StoryEditorPage from "./app/pages/StoryEditorPage";
 import ArtistPortalGate from "./app/components/ArtistPortalGate";
 import MarketplaceAdminGate from "./app/components/MarketplaceAdminGate";
 import MarketplaceAdminPage from "./app/pages/MarketplaceAdminPage";
@@ -521,6 +524,8 @@ const AnimatedRoutes = () => {
         <Route path="/privacy" element={<PrivacyPage mode="public" />} />
         <Route path="/contact" element={<ContactPage mode="public" />} />
         <Route path="/artist/:slug" element={<ArtistPage />} />
+        <Route path="/stories" element={<StoriesIndexPage />} />
+        <Route path="/stories/:slug" element={<StoryPage />} />
         <Route path="/artist-preview/:artistId" element={<ArtistPagePreview />} />
         {/* Guest purchases: checkout return page and emailed download links (no account needed) */}
         <Route path="/purchase/complete" element={<PurchaseCompletePage />} />
@@ -552,6 +557,7 @@ const AnimatedRoutes = () => {
           <Route path="provider/onboarding" element={<Navigate to="/app/artist/onboarding" replace />} />
           <Route path="marketplace-admin" element={<MarketplaceAdminGate />}>
             <Route index element={<MarketplaceAdminPage />} />
+            <Route path="stories/:storyId" element={<StoryEditorPage />} />
           </Route>
           <Route path="playlist/:playlistId/edit" element={<PlaylistEditorPage />} />
           {/* Dev-only admin page */}

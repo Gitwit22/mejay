@@ -27,6 +27,9 @@ import {signVerifiedToken} from '../routes/_auth'
 import {ensurePreviewJobs, wakeConverterIfQueued} from './preview-jobs'
 import {getCatalogAsset} from '../routes/store'
 import {ReleaseChangeRequestService} from './change-request-service'
+import {EditorialStoryService} from '../editorial/story-service'
+import {mediaUploadSchema} from '../editorial/schemas'
+import {DiscoveryService} from './discovery-service'
 
 const connectionString = process.env.TEST_DATABASE_URL
 const describeWithDatabase = connectionString ? describe : describe.skip
@@ -2172,6 +2175,172 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
         await expect(changes().saveDraft(other.userId, other.release.id, {release: {title: 'Nope'}, tracks: [], audioReplacements: []}))
           .rejects.toMatchObject({code: 'release_not_changeable'})
       })
+    })
+  })
+
+  describe('editorial stories', () => {
+    const stories = () => new EditorialStoryService(new Database(connectionString!, pool) as never)
+    /** A minimal PNG header: signature + IHDR with the given size, enough for byte inspection. */
+    const png = (width: number, height: number) => {
+      const bytes = new Uint8Array(33)
+      bytes.set([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82])
+      new DataView(bytes.buffer).setUint32(16, width)
+      new DataView(bytes.buffer).setUint32(20, height)
+      bytes[24] = 8
+      bytes[25] = 2
+      return bytes
+    }
+    const imageBucket = (width: number, height: number, byteSize = 500_000) => ({
+      createUploadUrl: async () => 'https://upload.test',
+      head: async () => ({byteSize, contentType: 'image/png'}),
+      getExact: async () => ({body: new Response(png(width, height)).body!}),
+    })
+
+    async function uploadImage(storyId: string, role: 'cover' | 'background' | 'gallery' | 'inline', size = {width: 1600, height: 900}) {
+      const started = await stories().initiateUpload(adminUserId, storyId, {role, fileName: 'photo.png', mimeType: 'image/png', byteSize: 500_000, ...size}, imageBucket(size.width, size.height) as never) as {media: {id: string}}
+      return (await stories().finalizeUpload(adminUserId, started.media.id, imageBucket(size.width, size.height) as never) as {id: string}).id
+    }
+
+    type AdminStory = {id: string; slug: string; version: number; status: string; featured: boolean; publishProblems: string[]}
+    const baseInput = (story: AdminStory, overrides: Record<string, unknown> = {}) => ({
+      expectedVersion: story.version, template: 'headliner' as const, title: 'Detroit Has Something to Say', slug: story.slug,
+      teaser: 'Inside the studios pushing Detroit forward.', authorName: 'MeJay Editorial', category: 'Stories', tags: ['detroit'],
+      content: [{type: 'paragraph' as const, text: 'Detroit has always been more than **music**.'}],
+      appearance: {palette: 'ink' as const, overlay: 50, coverFocal: {x: 50, y: 40}}, media: [], ...overrides,
+    })
+
+    async function publishedStory(title: string) {
+      const created = await stories().create(adminUserId, {template: 'headliner', title}) as AdminStory
+      const coverId = await uploadImage(created.id, 'cover')
+      const saved = await stories().update(adminUserId, created.id, baseInput(created, {title, coverMediaId: coverId, media: [{mediaId: coverId, altText: 'Producer at a mixing desk'}]})) as AdminStory
+      return await stories().command(adminUserId, created.id, {action: 'publish', expectedVersion: saved.version}) as AdminStory
+    }
+
+    beforeAll(async () => {
+      await pool.query('DELETE FROM editorial_stories')
+    })
+
+    it('lets only marketplace admins create and change stories', async () => {
+      await expect(stories().create(reviewerUserId, {template: 'headliner', title: 'Nope'})).rejects.toMatchObject({code: 'marketplace_admin_required'})
+      await expect(stories().create(crypto.randomUUID(), {template: 'headliner', title: 'Nope'})).rejects.toMatchObject({code: 'marketplace_staff_required'})
+      const story = await stories().create(adminUserId, {template: 'headliner', title: 'Staff Only'}) as AdminStory
+      await expect(stories().get(reviewerUserId, story.id)).resolves.toMatchObject({id: story.id})
+      await expect(stories().update(reviewerUserId, story.id, baseInput(story))).rejects.toMatchObject({code: 'marketplace_admin_required'})
+      await expect(stories().command(reviewerUserId, story.id, {action: 'publish', expectedVersion: story.version})).rejects.toMatchObject({code: 'marketplace_admin_required'})
+      await expect(stories().initiateUpload(reviewerUserId, story.id, {role: 'cover', fileName: 'a.png', mimeType: 'image/png', byteSize: 10, width: 1600, height: 900}, imageBucket(1600, 900) as never))
+        .rejects.toMatchObject({code: 'marketplace_admin_required'})
+    })
+
+    it('keeps drafts private, checks completeness before publishing and locks the link afterwards', async () => {
+      const draft = await stories().create(adminUserId, {template: 'headliner', title: 'Detroit Has Something to Say'}) as AdminStory
+      const twin = await stories().create(adminUserId, {template: 'headliner', title: 'Detroit Has Something to Say'}) as AdminStory
+      expect(draft.slug).toBe('detroit-has-something-to-say')
+      expect(twin.slug).toBe('detroit-has-something-to-say-2')
+      await expect(stories().getPublished(draft.slug)).rejects.toMatchObject({status: 404})
+      await expect(stories().command(adminUserId, draft.id, {action: 'publish', expectedVersion: draft.version})).rejects.toMatchObject({
+        code: 'story_incomplete', details: expect.arrayContaining(['Add a teaser. It appears on story cards.', 'Write the article body.', 'Upload a cover image.']),
+      })
+
+      const coverId = await uploadImage(draft.id, 'cover')
+      const unusedId = await uploadImage(draft.id, 'inline', {width: 900, height: 700})
+      await expect(stories().update(adminUserId, draft.id, baseInput(draft, {expectedVersion: draft.version + 5}))).rejects.toMatchObject({code: 'stale_story_version'})
+      const missingAlt = await stories().update(adminUserId, draft.id, baseInput(draft, {coverMediaId: coverId})) as AdminStory
+      expect(missingAlt.publishProblems).toContain('Describe every image (alt text) so screen-reader users know what it shows.')
+      const saved = await stories().update(adminUserId, draft.id, baseInput(missingAlt, {coverMediaId: coverId, media: [{mediaId: coverId, altText: 'Producer at a mixing desk', credit: 'MeJay'}]})) as AdminStory
+      expect(saved.publishProblems).toEqual([])
+      await expect(stories().getPublicMedia(coverId)).rejects.toMatchObject({status: 404})
+
+      const published = await stories().command(adminUserId, draft.id, {action: 'publish', expectedVersion: saved.version}) as AdminStory
+      expect(published.status).toBe('published')
+      const view = await stories().getPublished(draft.slug) as Record<string, unknown>
+      expect(view).toMatchObject({title: 'Detroit Has Something to Say', cover: {altText: 'Producer at a mixing desk', credit: 'MeJay'}})
+      for (const privateField of ['id', 'version', 'status', 'created_by_user_id', 'updated_by_user_id', 'featured']) expect(view).not.toHaveProperty(privateField)
+      await expect(stories().getPublicMedia(coverId)).resolves.toMatchObject({mimeType: 'image/png'})
+      await expect(stories().getPublicMedia(unusedId)).rejects.toMatchObject({status: 404})
+      await expect(stories().update(adminUserId, draft.id, baseInput(published, {slug: 'a-new-link', coverMediaId: coverId}))).rejects.toMatchObject({code: 'slug_locked'})
+      expect((await stories().listPublished()).items).toEqual(expect.arrayContaining([expect.objectContaining({slug: draft.slug})]))
+
+      const unpublished = await stories().command(adminUserId, draft.id, {action: 'unpublish', expectedVersion: published.version}) as AdminStory
+      expect(unpublished.status).toBe('draft')
+      await expect(stories().getPublished(draft.slug)).rejects.toMatchObject({status: 404})
+      await expect(stories().getPublicMedia(coverId)).rejects.toMatchObject({status: 404})
+      const archived = await stories().command(adminUserId, draft.id, {action: 'archive', expectedVersion: unpublished.version}) as AdminStory
+      expect(archived.status).toBe('archived')
+      await expect(stories().update(adminUserId, draft.id, baseInput(archived))).rejects.toMatchObject({code: 'story_archived'})
+      expect((await stories().listPublished()).items).not.toEqual(expect.arrayContaining([expect.objectContaining({slug: draft.slug})]))
+    })
+
+    it('rejects images that are not what they claim, and keeps the failure visible', async () => {
+      const story = await stories().create(adminUserId, {template: 'headliner', title: 'Upload Checks'}) as AdminStory
+      expect(() => mediaUploadSchema.parse({role: 'cover', fileName: 'small.png', mimeType: 'image/png', byteSize: 10, width: 600, height: 400})).toThrow(/at least 1200 x 630/)
+      expect(() => mediaUploadSchema.parse({role: 'cover', fileName: 'huge.png', mimeType: 'image/png', byteSize: 16 * 1024 * 1024, width: 1600, height: 900})).toThrow(/15 MB/)
+      expect(() => mediaUploadSchema.parse({role: 'cover', fileName: 'x.gif', mimeType: 'image/gif', byteSize: 10, width: 1600, height: 900})).toThrow()
+      const started = await stories().initiateUpload(adminUserId, story.id, {role: 'cover', fileName: 'lie.png', mimeType: 'image/png', byteSize: 500_000, width: 1600, height: 900}, imageBucket(1600, 900) as never) as {media: {id: string}}
+      await expect(stories().finalizeUpload(adminUserId, started.media.id, imageBucket(1300, 700) as never)).rejects.toMatchObject({code: 'upload_validation_failed'})
+      expect((await pool.query('SELECT status FROM editorial_media WHERE id = $1', [started.media.id])).rows[0].status).toBe('failed')
+      await expect(stories().update(adminUserId, story.id, baseInput(story, {coverMediaId: started.media.id}))).rejects.toMatchObject({code: 'media_not_ready'})
+    })
+
+    it('keeps exactly one featured story, replacing it atomically and clearing it on unpublish', async () => {
+      await pool.query(`UPDATE editorial_stories SET featured = FALSE`)
+      const first = await publishedStory('First Feature')
+      const second = await publishedStory('Second Feature')
+      const featuredFirst = await stories().command(adminUserId, first.id, {action: 'feature', expectedVersion: first.version}) as AdminStory
+      expect(featuredFirst.featured).toBe(true)
+      await Promise.allSettled([
+        stories().command(adminUserId, second.id, {action: 'feature', expectedVersion: second.version}),
+        stories().command(adminUserId, second.id, {action: 'feature', expectedVersion: second.version}),
+      ])
+      const featured = await pool.query(`SELECT id FROM editorial_stories WHERE featured`)
+      expect(featured.rows).toEqual([{id: second.id}])
+      expect((await stories().home()).featured).toMatchObject({slug: second.slug})
+      const current = (await pool.query('SELECT version FROM editorial_stories WHERE id = $1', [second.id])).rows[0].version
+      await stories().command(adminUserId, second.id, {action: 'unpublish', expectedVersion: current})
+      expect((await pool.query(`SELECT COUNT(*)::int AS n FROM editorial_stories WHERE featured`)).rows[0].n).toBe(0)
+      const home = await stories().home()
+      expect(home.featured).not.toMatchObject({slug: second.slug})
+      const draft = await stories().create(adminUserId, {template: 'headliner', title: 'Draft Only'}) as AdminStory
+      await expect(stories().command(adminUserId, draft.id, {action: 'feature', expectedVersion: draft.version})).rejects.toMatchObject({code: 'story_not_published'})
+    })
+
+    it('links releases and artists only while they are public, and never copies their data', async () => {
+      await resetIsrcState()
+      const live = await prepareLiveRelease('StoryDrop')
+      const drop = await stories().create(adminUserId, {template: 'release_drop', title: 'After Hours'}) as AdminStory
+      const saved = await stories().update(adminUserId, drop.id, baseInput(drop, {template: 'release_drop', title: 'After Hours', releaseId: live.release.id, artistId: live.artist.id})) as AdminStory
+      expect(saved.publishProblems).toEqual([])
+      await stories().command(adminUserId, drop.id, {action: 'publish', expectedVersion: saved.version})
+      const view = await stories().getPublished(drop.slug) as {release: {release: {id: string; amount_minor: number}} | null; artist: {slug: string} | null}
+      expect(view.release?.release).toMatchObject({id: live.release.id, amount_minor: 999})
+      expect(view.artist).toMatchObject({slug: expect.any(String)})
+      const card = (await stories().listPublished()).items.find((item) => (item as {slug: string}).slug === drop.slug) as {image: {url: string} | null}
+      expect(card.image?.url).toMatch(/^\/api\/store\/assets\//)
+
+      await pool.query(`UPDATE releases SET status = 'TAKEN_DOWN' WHERE id = $1`, [live.release.id])
+      await pool.query(`UPDATE provider_profiles SET suspended_at = CURRENT_TIMESTAMP WHERE id = $1`, [live.provider.id])
+      const hidden = await stories().getPublished(drop.slug) as {release: unknown; artist: unknown}
+      expect(hidden.release).toBeNull()
+      expect(hidden.artist).toBeNull()
+      const hiddenCard = (await stories().listPublished()).items.find((item) => (item as {slug: string}).slug === drop.slug) as {image: unknown}
+      expect(hiddenCard.image).toBeNull()
+      await pool.query(`UPDATE provider_profiles SET suspended_at = NULL WHERE id = $1`, [live.provider.id])
+      await pool.query(`DELETE FROM releases WHERE id = $1`, [live.release.id]).catch(() => undefined)
+    })
+
+    it('lists only live releases with an offer, with playable preview clips, on Discover', async () => {
+      await resetIsrcState()
+      const live = await prepareLiveRelease('DiscoverNew')
+      const clip = crypto.randomUUID()
+      await pool.query(
+        `INSERT INTO marketplace_assets (id, provider_profile_id, track_id, kind, storage_key, mime_type, byte_size, processing_status, metadata)
+         VALUES ($1, $2, $3, 'audio_preview', $4, 'audio/mpeg', 1000, 'ready', '{}'::jsonb)`,
+        [clip, live.provider.id, live.track.id, `mejay-artist/${live.provider.id}/audio_preview/${live.track.id}/${clip}.mp3`],
+      )
+      const scheduled = await prepareLiveRelease('DiscoverLater', {stage: 'pricing'})
+      const overview = await new DiscoveryService(new Database(connectionString!, pool) as never).getOverview()
+      const listed = overview.newestReleases.find((release) => release.id === live.release.id)
+      expect(listed).toMatchObject({preview_asset_id: clip})
+      expect(overview.newestReleases.some((release) => release.id === scheduled.release.id)).toBe(false)
     })
   })
 })

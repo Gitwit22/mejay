@@ -55,6 +55,8 @@ import {getProviderReporting, getRecipientEarnings} from './marketplace/reportin
 import {getPricingPolicy} from './marketplace/pricing'
 import {claimStorePurchases, createStoreCheckout, downloadGuestFile, downloadStorePurchase, exchangeGuestAccess, getGuestOrderStatus, getStoreOrderStatus, getStorePurchaseArtwork, listStorePurchases, recoverGuestAccess} from './store/commerce'
 import {getMusicDiscovery} from './music'
+import {getStoriesHome, getStory, getStoryMedia, listStories} from './stories'
+import {commandAdminStory, createAdminStory, deleteStoryMedia, finalizeStoryUpload, getAdminStory, getStaffStoryMedia, initiateStoryUpload, listAdminStories, lookupStoryLinks, updateAdminStory} from './marketplace-admin/stories'
 import {CLIENT_IP_HEADER} from './_security'
 import {assignTrackIsrc, exportIsrcRecords, getIsrcRecord, getIsrcSequence, listIsrcRecords, registerExistingIsrc} from './isrc'
 
@@ -79,6 +81,10 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'get', path: '/api/download/full-program', handler: downloadFullProgram},
   {method: 'get', path: '/api/entitlements', handler: entitlements},
   {method: 'get', path: '/api/music/discovery', handler: getMusicDiscovery},
+  {method: 'get', path: '/api/stories', handler: listStories},
+  {method: 'get', path: '/api/stories/home', handler: getStoriesHome},
+  {method: 'get', path: '/api/stories/media/:mediaId', handler: getStoryMedia},
+  {method: 'get', path: '/api/stories/:slug', handler: getStory},
   {method: 'get', path: '/api/store/releases', handler: listCatalog},
   {method: 'get', path: '/api/store/releases/:releaseId', handler: getCatalogRelease},
   {method: 'get', path: '/api/store/artists/:slug', handler: getPublicArtist},
@@ -157,6 +163,16 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'get', path: '/api/marketplace-admin/releases/:releaseId/review', handler: marketplaceAdminReleaseReview},
   {method: 'get', path: '/api/marketplace-admin/assets/:assetId', handler: marketplaceAdminReviewAsset},
   {method: 'get', path: '/api/marketplace-admin/change-requests', handler: listChangeRequests},
+  {method: 'get', path: '/api/marketplace-admin/stories', handler: listAdminStories},
+  {method: 'post', path: '/api/marketplace-admin/stories', handler: createAdminStory},
+  {method: 'get', path: '/api/marketplace-admin/stories/lookup', handler: lookupStoryLinks},
+  {method: 'get', path: '/api/marketplace-admin/stories/media/:mediaId', handler: getStaffStoryMedia},
+  {method: 'post', path: '/api/marketplace-admin/stories/media/:mediaId/finalize', handler: finalizeStoryUpload},
+  {method: 'delete', path: '/api/marketplace-admin/stories/media/:mediaId', handler: deleteStoryMedia},
+  {method: 'get', path: '/api/marketplace-admin/stories/:storyId', handler: getAdminStory},
+  {method: 'put', path: '/api/marketplace-admin/stories/:storyId', handler: updateAdminStory},
+  {method: 'post', path: '/api/marketplace-admin/stories/:storyId/commands', handler: commandAdminStory},
+  {method: 'post', path: '/api/marketplace-admin/stories/:storyId/media', handler: initiateStoryUpload},
   {method: 'get', path: '/api/marketplace-admin/change-requests/:changeRequestId', handler: getChangeRequestReview},
   {method: 'post', path: '/api/marketplace-admin/change-requests/:changeRequestId/commands', handler: commandChangeRequest},
   {method: 'put', path: '/api/marketplace-admin/discovery/features', handler: replaceDiscoveryFeatures},
