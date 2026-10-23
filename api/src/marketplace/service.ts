@@ -170,16 +170,23 @@ const PROVIDER_TRANSITION_TARGETS = new Set<string>([
   'DRAFT', 'METADATA_COMPLETE', 'RIGHTS_COMPLETE', 'ISRC_COMPLETE', 'PRICING_COMPLETE', 'SUBMITTED',
 ])
 
-async function assertProviderCanSubmit(db: Database, providerId: string): Promise<void> {
+/** Why the provider account cannot submit releases right now, or null when it can. */
+async function providerSubmissionBlocker(db: Database, providerId: string): Promise<{code: 'provider_suspended' | 'provider_not_approved'; message: string; prerequisite: string} | null> {
   const provider = await db.prepare(
     'SELECT status, suspended_at FROM provider_profiles WHERE id = ?1',
   ).bind(providerId).first<{status: string; suspended_at: string | null}>()
   if (provider?.suspended_at) {
-    throw new MarketplaceError(409, 'provider_suspended', 'Suspended providers cannot submit releases')
+    return {code: 'provider_suspended', message: 'Suspended providers cannot submit releases', prerequisite: 'artist account reinstated by MEJay (it is suspended)'}
   }
   if (provider?.status !== 'approved') {
-    throw new MarketplaceError(409, 'provider_not_approved', 'The provider must be approved before submitting releases')
+    return {code: 'provider_not_approved', message: 'The provider must be approved before submitting releases', prerequisite: 'artist account approved by MEJay (your application is still in review)'}
   }
+  return null
+}
+
+async function assertProviderCanSubmit(db: Database, providerId: string): Promise<void> {
+  const blocker = await providerSubmissionBlocker(db, providerId)
+  if (blocker) throw new MarketplaceError(409, blocker.code, blocker.message)
 }
 
 const JPEG_HEADER_SCAN_BYTES = 4 * 1024 * 1024
@@ -545,7 +552,13 @@ export class MarketplaceService {
       `SELECT decision, note, from_status, to_status, created_at
        FROM release_review_events WHERE release_id = ?1 ORDER BY created_at DESC`,
     ).bind(releaseId).all()
-    const prerequisites = await this.unmetPrerequisites(this.database, release, 'SUBMITTED')
+    // The account gate is enforced on submit; list it here too so the wizard never claims a
+    // release is ready to submit while the server would refuse it.
+    const accountBlocker = await providerSubmissionBlocker(this.database, context.providerId)
+    const prerequisites = [
+      ...(accountBlocker ? [accountBlocker.prerequisite] : []),
+      ...await this.unmetPrerequisites(this.database, release, 'SUBMITTED'),
+    ]
     return {release, tracks, assets, rights, product, trackProducts, splits, reviewEvents, prerequisites}
   }
 
