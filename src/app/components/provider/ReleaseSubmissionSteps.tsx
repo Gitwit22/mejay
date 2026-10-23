@@ -2,6 +2,8 @@ import {useEffect, useState} from 'react'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {AlertTriangle, FileText, Plus, ShieldCheck, Trash2, Upload} from 'lucide-react'
 
+import {usePendingSave} from './pendingStepSaves'
+
 import {Button} from '@/components/ui/button'
 import {Checkbox} from '@/components/ui/checkbox'
 import {Input} from '@/components/ui/input'
@@ -59,6 +61,11 @@ function TrackCredits({track, detail, editable}: {track: ProviderTrack; detail: 
       toast({title: `Credits saved for ${track.title}`})
     },
   })
+  // Blank rows are dropped on save, so they do not count as unsaved changes.
+  const unsaved = JSON.stringify(creditValues(featured, contributors)) !== JSON.stringify(creditValues(track.featured_artist_ids ?? [], track.contributors ?? []))
+  usePendingSave(`credits:${track.id}`, editable && unsaved, async () => {
+    await save.mutateAsync()
+  })
   const otherArtists = (artists.data ?? []).filter((artist) => artist.id !== detail.release.primary_artist_id)
   const update = (index: number, patch: Partial<TrackContributor>) => setContributors((rows) => rows.map((row, rowIndex) => rowIndex === index ? {...row, ...patch} : row))
   return <section className="rounded-md border border-white/10 bg-[#141417] p-5">
@@ -78,6 +85,13 @@ function TrackCredits({track, detail, editable}: {track: ProviderTrack; detail: 
     {editable && <Button className="mt-5" disabled={save.isPending} onClick={() => save.mutate()}>{save.isPending ? 'Saving...' : 'Save credits'}</Button>}
     {save.isError && <p className="mt-3 text-sm text-red-400">{save.error.message}</p>}
   </section>
+}
+
+function creditValues(featured: string[], contributors: TrackContributor[]) {
+  return {
+    featured: [...featured].sort(),
+    contributors: contributors.filter((row) => row.name.trim()).map((row) => ({name: row.name.trim(), role: row.role, publisherName: row.publisherName?.trim() || null})),
+  }
 }
 
 const thirdPartyOptions: Array<{value: ThirdPartyMaterial; label: string; detail: string}> = [

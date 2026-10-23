@@ -8,6 +8,8 @@ import {discoveryFeaturesSchema, providerAdminCommandSchema, releaseAdminCommand
 import {CommerceService} from '../../marketplace/commerce-service'
 import {MarketplaceFinanceService, normalizeFinanceFilters} from '../../marketplace/finance-service'
 import {MarketplaceError} from '../../marketplace/service'
+import {changeRequestReviewCommandSchema, ReleaseChangeRequestService} from '../../marketplace/change-request-service'
+import {deleteDiscardedUploads} from '../marketplace'
 import {getSessionUserId, readJson, type EnvWithDb} from '../_auth'
 
 type AdminEnv = EnvWithDb & {STRIPE_SECRET_KEY?: string; MARKETPLACE_PLATFORM_FEE_BPS?: string}
@@ -203,3 +205,29 @@ export const getReviewAsset = async (context: {request: Request; env: EnvWithDb 
     return json({ok: false, error: 'server_error'}, {status: 500})
   }
 }
+
+type AdminContext = {request: Request; env: EnvWithDb; params: Record<string, string | undefined>}
+
+async function adminChangeRequest(context: AdminContext, run: (service: ReleaseChangeRequestService, userId: string) => Promise<unknown>): Promise<Response> {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+  const userId = await getSessionUserId(context.request, context.env)
+  if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+  try {
+    return json({ok: true, data: await run(new ReleaseChangeRequestService(context.env.DB), userId)})
+  } catch (error) {
+    if (error instanceof ZodError) return json({ok: false, error: 'invalid_request', issues: error.issues}, {status: 400})
+    if (error instanceof MarketplaceError) return json({ok: false, error: error.code, message: error.message}, {status: error.status})
+    console.error('[marketplace-admin] change request failed', error)
+    return json({ok: false, error: 'server_error'}, {status: 500})
+  }
+}
+
+export const listChangeRequests = (context: AdminContext) => adminChangeRequest(context, (service, userId) => service.listForReview(userId))
+export const getChangeRequestReview = (context: AdminContext) => adminChangeRequest(context, (service, userId) =>
+  service.getForReview(userId, context.params.changeRequestId?.trim() ?? ''))
+export const commandChangeRequest = (context: AdminContext) => adminChangeRequest(context, async (service, userId) => {
+  const command = changeRequestReviewCommandSchema.parse(await readJson(context.request))
+  const result = await service.command(userId, context.params.changeRequestId?.trim() ?? '', command)
+  await deleteDiscardedUploads(context.env, result.discardedStorageKeys, 'change-request-review')
+  return result.request
+})

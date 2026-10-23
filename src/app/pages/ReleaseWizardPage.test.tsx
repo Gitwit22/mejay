@@ -3,7 +3,7 @@ import {fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {MemoryRouter, Route, Routes} from 'react-router-dom'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {generateProviderIsrc, getProviderRelease, listProviderArtists, updateProviderRelease, updateProviderTrack, type ProviderReleaseDetail} from '@/lib/providerApi'
+import {createProviderPricing, generateProviderIsrc, getMarketplacePricingPolicy, getProviderRelease, listProviderArtists, replaceProviderSplits, replaceTrackCredits, updateProviderRelease, updateProviderTrack, withdrawProviderRelease, type ProviderReleaseDetail} from '@/lib/providerApi'
 import ReleaseWizardPage from './ReleaseWizardPage'
 
 // Radix checkboxes measure themselves; jsdom has no ResizeObserver.
@@ -21,6 +21,11 @@ vi.mock('@/lib/providerApi', async (importOriginal) => ({
   updateProviderRelease: vi.fn(),
   generateProviderIsrc: vi.fn(),
   updateProviderTrack: vi.fn(),
+  withdrawProviderRelease: vi.fn(),
+  replaceTrackCredits: vi.fn(),
+  createProviderPricing: vi.fn(),
+  getMarketplacePricingPolicy: vi.fn(),
+  replaceProviderSplits: vi.fn(),
 }))
 
 const track = {id: 'track-1', title: 'Night Drive', version_title: null, disc_number: 1, track_number: 1, duration_ms: 180000, explicit: false, language_code: 'en', primary_artist_name: 'John Blaze', isrc: null}
@@ -223,5 +228,162 @@ describe('release wizard: additional artists', () => {
     await waitFor(() => expect(updateProviderRelease).toHaveBeenCalledWith('release-1', expect.objectContaining({
       additionalArtists: [{role: 'primary', artistId: 'artist-2', name: 'Kay'}],
     })))
+  })
+})
+
+describe('release wizard: locked while in review', () => {
+  beforeEach(() => {
+    vi.mocked(listProviderArtists).mockResolvedValue([{id: 'artist-1', name: 'John Blaze'} as never])
+    vi.mocked(updateProviderRelease).mockReset()
+    vi.mocked(withdrawProviderRelease).mockReset().mockResolvedValue({} as never)
+  })
+
+  const locked = (status: string) => vi.mocked(getProviderRelease).mockResolvedValue(detail({release: {...detail().release, status}}))
+
+  it('locks every field of a submitted release and unlocks it only through Edit → confirm', async () => {
+    locked('SUBMITTED')
+    renderStep('release-information')
+    expect(await screen.findByText('Waiting for MeJay review')).toBeInTheDocument()
+    expect(screen.getByLabelText('Release title')).toBeDisabled()
+    expect(screen.getByLabelText('UPC (optional)')).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', {name: 'Edit'}))
+    expect(await screen.findByText(/takes your release out of the review queue/)).toBeInTheDocument()
+    expect(withdrawProviderRelease).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', {name: 'Unlock and edit'}))
+    await waitFor(() => expect(withdrawProviderRelease).toHaveBeenCalledWith('release-1', 3))
+    expect(updateProviderRelease).not.toHaveBeenCalled()
+  })
+
+  it('offers no way to edit while MeJay is reviewing', async () => {
+    locked('UNDER_REVIEW')
+    renderStep('track-metadata')
+    expect(await screen.findByText('MeJay is reviewing this release')).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: 'Edit'})).not.toBeInTheDocument()
+    for (const input of screen.getAllByDisplayValue('Night Drive')) expect(input).toBeDisabled()
+    expect(screen.getByRole('button', {name: 'Save track metadata'})).toBeDisabled()
+  })
+
+  it('sends approved releases to a change request instead of editing in place', async () => {
+    locked('LIVE')
+    renderStep('release-information')
+    expect(await screen.findByText('Approved: changes need MeJay approval')).toBeInTheDocument()
+    expect(screen.getByRole('link', {name: 'Request changes'})).toHaveAttribute('href', '/app/artist/releases/release-1/changes')
+    expect(screen.getByLabelText('Release title')).toBeDisabled()
+  })
+})
+
+describe('release wizard: remaining submission requirements', () => {
+  beforeEach(() => {
+    vi.mocked(listProviderArtists).mockResolvedValue([{id: 'artist-1', name: 'John Blaze'} as never])
+  })
+
+  it('lists what is left under the disabled Submit button, linking to the step that fixes it', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail({prerequisites: ['active release product priced at least $0.99 USD', 'completed Stripe payout setup']}))
+    renderStep('review')
+    const submit = await screen.findByRole('button', {name: 'Submit to MEJay Review'})
+    expect(submit).toBeDisabled()
+    const remaining = screen.getByRole('region', {name: 'Remaining requirements'})
+    // The list sits below the button so it is where the artist looks when Submit is greyed out.
+    expect(submit.compareDocumentPosition(remaining) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(remaining).toHaveTextContent('active release product priced at least $0.99 USD')
+    expect(screen.getByRole('link', {name: 'Go to Pricing'})).toHaveAttribute('href', '/app/artist/releases/release-1/edit/pricing')
+    // Stripe setup happens outside the wizard, so it is listed without a misleading step link.
+    expect(remaining).toHaveTextContent('completed Stripe payout setup')
+    expect(screen.getAllByRole('link', {name: /^Go to /})).toHaveLength(1)
+  })
+
+  it('shows the ready message and no requirements list once everything is complete', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail({prerequisites: []}))
+    renderStep('review')
+    expect(await screen.findByText('All submission requirements are complete')).toBeInTheDocument()
+    expect(screen.queryByRole('region', {name: 'Remaining requirements'})).not.toBeInTheDocument()
+  })
+})
+
+describe('release wizard: Save and continue saves what is on screen', () => {
+  beforeEach(() => {
+    vi.mocked(listProviderArtists).mockResolvedValue([{id: 'artist-1', name: 'John Blaze'} as never])
+    vi.mocked(getProviderRelease).mockReset().mockResolvedValue(detail())
+    vi.mocked(updateProviderRelease).mockReset().mockResolvedValue({} as never)
+    vi.mocked(updateProviderTrack).mockReset().mockResolvedValue({} as never)
+    vi.mocked(replaceTrackCredits).mockReset().mockResolvedValue({} as never)
+    vi.mocked(createProviderPricing).mockReset().mockResolvedValue({} as never)
+    vi.mocked(replaceProviderSplits).mockReset().mockResolvedValue({} as never)
+    vi.mocked(getMarketplacePricingPolicy).mockResolvedValue({minimumPriceMinor: 99, platformFeeBps: 1000} as never)
+  })
+
+  it('saves typed songwriter credits before moving on (they used to be dropped)', async () => {
+    renderStep('credits')
+    fireEvent.click(await screen.findByRole('button', {name: 'Add contributor'}))
+    fireEvent.change(screen.getByLabelText('Contributor name'), {target: {value: 'James Clay Jones'}})
+    fireEvent.click(screen.getByRole('button', {name: /Save and continue/}))
+    await waitFor(() => expect(updateProviderRelease).toHaveBeenCalledWith('release-1', expect.objectContaining({draftStep: 'isrc'})))
+    expect(replaceTrackCredits).toHaveBeenCalledWith('track-1', {featuredArtistIds: [], contributors: [{name: 'James Clay Jones', role: 'writer', publisherName: null}]})
+    expect(vi.mocked(replaceTrackCredits).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(updateProviderRelease).mock.invocationCallOrder[0])
+  })
+
+  it('does not re-save credits that are already saved', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail({tracks: [{...track, contributors: [{name: 'John Steele', role: 'writer', publisherName: null}], featured_artist_ids: []}] as never}))
+    renderStep('credits')
+    fireEvent.click(await screen.findByRole('button', {name: /Save and continue/}))
+    await waitFor(() => expect(updateProviderRelease).toHaveBeenCalled())
+    expect(replaceTrackCredits).not.toHaveBeenCalled()
+  })
+
+  it('stays on the step and explains why when the unsaved edit cannot be saved', async () => {
+    vi.mocked(replaceTrackCredits).mockRejectedValue(new Error('Credits could not be saved'))
+    renderStep('credits')
+    fireEvent.click(await screen.findByRole('button', {name: 'Add contributor'}))
+    fireEvent.change(screen.getByLabelText('Contributor name'), {target: {value: 'James Clay Jones'}})
+    fireEvent.click(screen.getByRole('button', {name: /Save and continue/}))
+    expect((await screen.findAllByText('Credits could not be saved')).length).toBeGreaterThan(0)
+    expect(updateProviderRelease).not.toHaveBeenCalled()
+  })
+
+  it('saves the pre-filled minimum price instead of leaving the release unpriced', async () => {
+    renderStep('pricing')
+    await waitFor(() => expect(screen.getAllByRole('spinbutton')[0]).toHaveValue(0.99))
+    fireEvent.click(screen.getByRole('button', {name: /Save and continue/}))
+    await waitFor(() => expect(updateProviderRelease).toHaveBeenCalledWith('release-1', expect.objectContaining({draftStep: 'splits'})))
+    expect(createProviderPricing).toHaveBeenCalledWith('release-1', 'Night Drive', 99)
+  })
+
+  it('refuses to continue past a price below the minimum', async () => {
+    renderStep('pricing')
+    await waitFor(() => expect(screen.getAllByRole('spinbutton')[0]).toHaveValue(0.99))
+    fireEvent.change(screen.getAllByRole('spinbutton')[0], {target: {value: '0.50'}})
+    fireEvent.click(screen.getByRole('button', {name: /Save and continue/}))
+    expect(await screen.findByText('The price for the release must be at least $0.99 USD.')).toBeInTheDocument()
+    expect(createProviderPricing).not.toHaveBeenCalled()
+    expect(updateProviderRelease).not.toHaveBeenCalled()
+  })
+
+  it('saves edited track metadata', async () => {
+    renderStep('track-metadata')
+    const title = await screen.findByDisplayValue('Night Drive')
+    fireEvent.change(title, {target: {value: 'Night Drive (Remix)'}})
+    fireEvent.click(screen.getByRole('button', {name: /Save and continue/}))
+    await waitFor(() => expect(updateProviderTrack).toHaveBeenCalledWith('track-1', expect.objectContaining({title: 'Night Drive (Remix)'})))
+    await waitFor(() => expect(updateProviderRelease).toHaveBeenCalled())
+  })
+
+  it('saves the split payee shown on the Splits step', async () => {
+    renderStep('splits')
+    await screen.findByDisplayValue('John Blaze')
+    fireEvent.click(screen.getByRole('button', {name: /Save and continue/}))
+    await waitFor(() => expect(updateProviderRelease).toHaveBeenCalled())
+    expect(replaceProviderSplits).toHaveBeenCalledWith('track-1', [{payeeName: 'John Blaze', role: 'rights_holder', shareBps: 10000}])
+  })
+
+  it('saves edited release information and advances from the newly saved version', async () => {
+    let version = 3
+    vi.mocked(getProviderRelease).mockImplementation(async () => detail({release: {...detail().release, version}}))
+    vi.mocked(updateProviderRelease).mockImplementation(async () => {version += 1; return {} as never})
+    renderStep('release-information')
+    fireEvent.change(await screen.findByLabelText('Release title'), {target: {value: 'MIA'}})
+    fireEvent.click(screen.getByRole('button', {name: /Save and continue/}))
+    await waitFor(() => expect(updateProviderRelease).toHaveBeenCalledTimes(2))
+    expect(updateProviderRelease).toHaveBeenNthCalledWith(1, 'release-1', expect.objectContaining({title: 'MIA', expectedVersion: 3, draftStep: 'release-information'}))
+    expect(updateProviderRelease).toHaveBeenNthCalledWith(2, 'release-1', expect.objectContaining({expectedVersion: 4, draftStep: 'artwork'}))
   })
 })

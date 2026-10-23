@@ -1,9 +1,10 @@
 import {useState} from 'react'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
-import {ArrowDown, ArrowLeft, ArrowUp, BarChart3, BadgeDollarSign, Landmark, CheckCircle2, Copy, Copyright, Disc3, Download, Fingerprint, Menu, Plus, RefreshCw, Scale, Scissors, Send, ShieldAlert, Sparkles, Trash2, Users, UserRound, X, XCircle} from 'lucide-react'
+import {ArrowDown, ArrowLeft, ArrowUp, FilePen, BarChart3, BadgeDollarSign, Landmark, CheckCircle2, Copy, Copyright, Disc3, Download, Fingerprint, Menu, Plus, RefreshCw, Scale, Scissors, Send, ShieldAlert, Sparkles, Trash2, Users, UserRound, X, XCircle} from 'lucide-react'
 import {Link} from 'react-router-dom'
 
 import {ReleaseReviewDialog} from '@/app/components/admin/ReleaseReviewDialog'
+import {ChangeRequestsSection} from '@/app/components/admin/ChangeRequestReviewDialog'
 import {Button} from '@/components/ui/button'
 import {Dialog, DialogContent, DialogHeader, DialogTitle} from '@/components/ui/dialog'
 import {Input} from '@/components/ui/input'
@@ -11,10 +12,10 @@ import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
 import {getMarketplaceFinance, type MarketplaceFinanceFilters, commandMarketplaceProvider, commandMarketplaceRelease, recordSplitDispute, retryMarketplacePayouts, type ProviderAdminAction, createIndustryReportingBatch, downloadIndustryReportingBatch, downloadIsrcRegistryExport, getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview, replaceMarketplaceDiscoveryFeatures, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting, type AdminRecord, type IndustryReportingDashboard, type IsrcRegistryRecord, type MarketplaceAdminOverview, type ReleaseAdminAction} from '@/lib/marketplaceAdminApi'
 
-type Section = 'pending' | 'catalog' | 'discovery' | 'providers' | 'artists' | 'isrcs' | 'rights' | 'pricing' | 'splits' | 'takedowns' | 'reporting' | 'finance'
+type Section = 'pending' | 'changes' | 'catalog' | 'discovery' | 'providers' | 'artists' | 'isrcs' | 'rights' | 'pricing' | 'splits' | 'takedowns' | 'reporting' | 'finance'
 
 const navigation = [
-  ['pending', 'Pending Releases', ShieldAlert], ['catalog', 'Live Catalog', Disc3], ['discovery', 'Discovery', Sparkles], ['providers', 'Providers', Users],
+  ['pending', 'Pending Releases', ShieldAlert], ['changes', 'Change Requests', FilePen], ['catalog', 'Live Catalog', Disc3], ['discovery', 'Discovery', Sparkles], ['providers', 'Providers', Users],
   ['artists', 'Artists', UserRound], ['isrcs', 'ISRC Registry', Fingerprint], ['rights', 'Rights Review', Copyright],
   ['pricing', 'Pricing', BadgeDollarSign], ['splits', 'Splits', Scissors], ['takedowns', 'Takedowns', Scale],
   ['reporting', 'Reporting', BarChart3], ['finance', 'Finance', Landmark],
@@ -40,6 +41,7 @@ function Navigation({active, onSelect}: {active: Section; onSelect: (section: Se
 
 function SectionView({section, data, onNavigate}: {section: Section; data: Awaited<ReturnType<typeof getMarketplaceAdminOverview>>; onNavigate: (section: Section) => void}) {
   if (section === 'reporting') return <Reporting />
+  if (section === 'changes') return <ChangeRequestsSection />
   if (section === 'finance') return <FinanceSection data={data} />
   if (section === 'discovery') return <DiscoveryCuration data={data} />
   if (section === 'isrcs') return <IsrcRegistrySection />

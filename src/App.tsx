@@ -30,6 +30,7 @@ import {StoreReleasePage} from "./app/pages/MusicStorePage";
 import ProviderOnboardingPage from "./app/pages/ProviderOnboardingPage";
 import ProviderPortalPage from "./app/pages/ProviderPortalPage";
 import ReleaseWizardPage from "./app/pages/ReleaseWizardPage";
+import ReleaseChangeRequestPage from "./app/pages/ReleaseChangeRequestPage";
 import ArtistPortalGate from "./app/components/ArtistPortalGate";
 import MarketplaceAdminGate from "./app/components/MarketplaceAdminGate";
 import MarketplaceAdminPage from "./app/pages/MarketplaceAdminPage";
@@ -545,6 +546,7 @@ const AnimatedRoutes = () => {
             <Route index element={<ProviderPortalPage />} />
             <Route path="onboarding" element={<ProviderOnboardingPage />} />
             <Route path="releases/:releaseId/edit/:step" element={<ReleaseWizardPage />} />
+            <Route path="releases/:releaseId/changes" element={<ReleaseChangeRequestPage />} />
           </Route>
           <Route path="provider" element={<Navigate to="/app/artist" replace />} />
           <Route path="provider/onboarding" element={<Navigate to="/app/artist/onboarding" replace />} />

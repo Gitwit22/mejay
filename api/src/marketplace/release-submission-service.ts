@@ -146,6 +146,27 @@ export async function snapshotReleaseCertification(db: Database, release: Submit
   return {certificationId, rightsStatus}
 }
 
+/** Replaces a track's featured artists and contributors. Shared by draft edits and approved change requests. */
+export async function writeTrackCredits(db: Database, providerId: string, trackId: string, input: TrackCreditsInput): Promise<void> {
+  for (const artistId of input.featuredArtistIds) await assertOwned(db, 'artists', artistId, providerId)
+  await db.prepare(`DELETE FROM track_artists WHERE track_id = ?1 AND provider_profile_id = ?2 AND role = 'featured'`)
+    .bind(trackId, providerId).run()
+  for (const artistId of input.featuredArtistIds) {
+    await db.prepare(
+      `INSERT INTO track_artists (provider_profile_id, track_id, artist_id, role, is_primary)
+       VALUES (?1, ?2, ?3, 'featured', FALSE) ON CONFLICT DO NOTHING`,
+    ).bind(providerId, trackId, artistId).run()
+  }
+  await db.prepare('DELETE FROM track_contributors WHERE track_id = ?1 AND provider_profile_id = ?2')
+    .bind(trackId, providerId).run()
+  for (const contributor of input.contributors) {
+    await db.prepare(
+      `INSERT INTO track_contributors (id, provider_profile_id, track_id, name, role, publisher_name)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+    ).bind(crypto.randomUUID(), providerId, trackId, contributor.name, contributor.role, contributor.publisherName ?? null).run()
+  }
+}
+
 /** Credits, rights materials and the certification step. Every call is scoped to the caller's own artist account. */
 export class ReleaseSubmissionService {
   constructor(private readonly database: Database) {}
@@ -154,23 +175,7 @@ export class ReleaseSubmissionService {
     return this.database.transaction(async (db) => {
       const context = await providerContext(db, userId)
       await assertTrackMutable(db, trackId, context.providerId)
-      for (const artistId of input.featuredArtistIds) await assertOwned(db, 'artists', artistId, context.providerId)
-      await db.prepare(`DELETE FROM track_artists WHERE track_id = ?1 AND provider_profile_id = ?2 AND role = 'featured'`)
-        .bind(trackId, context.providerId).run()
-      for (const artistId of input.featuredArtistIds) {
-        await db.prepare(
-          `INSERT INTO track_artists (provider_profile_id, track_id, artist_id, role, is_primary)
-           VALUES (?1, ?2, ?3, 'featured', FALSE) ON CONFLICT DO NOTHING`,
-        ).bind(context.providerId, trackId, artistId).run()
-      }
-      await db.prepare('DELETE FROM track_contributors WHERE track_id = ?1 AND provider_profile_id = ?2')
-        .bind(trackId, context.providerId).run()
-      for (const contributor of input.contributors) {
-        await db.prepare(
-          `INSERT INTO track_contributors (id, provider_profile_id, track_id, name, role, publisher_name)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
-        ).bind(crypto.randomUUID(), context.providerId, trackId, contributor.name, contributor.role, contributor.publisherName ?? null).run()
-      }
+      await writeTrackCredits(db, context.providerId, trackId, input)
       await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'track', entityId: trackId, action: 'track.credits_replaced', after: input})
       return {trackId, ...input}
     })

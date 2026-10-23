@@ -1,4 +1,5 @@
 import {apiFetch, apiUrl} from './api'
+import type {ReleaseChangeRequest} from './providerApi'
 
 export type AdminRecord = Record<string, string | number | boolean | null>
 
@@ -331,7 +332,45 @@ export function getReleaseReview(releaseId: string): Promise<ReleaseReview> {
   return request(`/api/marketplace-admin/releases/${encodeURIComponent(releaseId)}/review`)
 }
 
-/** Staff-only private file (artwork or rights document); opened in a new tab with the staff session. */
+export type ChangeRequestQueueItem = {
+  id: string
+  release_id: string
+  status: 'submitted' | 'in_review'
+  submitted_at: string
+  same_recording_required: boolean
+  audio_replacement_count: number
+  replaces_artwork: boolean
+  release_title: string
+  release_status: string
+  provider_name: string
+}
+
+export type ChangeRequestReview = {
+  role: 'reviewer' | 'admin'
+  request: ReleaseChangeRequest
+  release: {id: string; title: string; status: string; version: number; scheduled_release_at: string | null; release_timezone: string | null}
+  sameRecordingRequired: boolean
+  /** Fields that changed on the release after submission; approval is refused while any remain. */
+  stale: string[]
+}
+
+export type ChangeRequestCommand = {action: 'start_review'} | {action: 'approve'; confirmSameRecording: boolean} | {action: 'reject'; note: string}
+
+export function listChangeRequests(): Promise<ChangeRequestQueueItem[]> {
+  return request('/api/marketplace-admin/change-requests')
+}
+
+export function getChangeRequestReview(changeRequestId: string): Promise<ChangeRequestReview> {
+  return request(`/api/marketplace-admin/change-requests/${encodeURIComponent(changeRequestId)}`)
+}
+
+export function commandChangeRequest(changeRequestId: string, command: ChangeRequestCommand): Promise<ReleaseChangeRequest & {release_date_needed?: boolean}> {
+  return request(`/api/marketplace-admin/change-requests/${encodeURIComponent(changeRequestId)}/commands`, {
+    method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(command),
+  })
+}
+
+/** Staff-only private file (artwork, audio or rights document); opened in a new tab with the staff session. */
 export function reviewAssetUrl(assetId: string): string {
   return apiUrl(`/api/marketplace-admin/assets/${encodeURIComponent(assetId)}`)
 }

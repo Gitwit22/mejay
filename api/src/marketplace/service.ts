@@ -218,6 +218,30 @@ export async function assertTrackMutable(db: Database, trackId: string, provider
   assertMutableStatus(release.status)
 }
 
+async function assertChangeRequestDraft(db: Database, providerId: string, changeRequestId: string): Promise<{release_id: string}> {
+  const request = await db.prepare(
+    'SELECT release_id, status FROM release_change_requests WHERE id = ?1 AND provider_profile_id = ?2 FOR UPDATE',
+  ).bind(changeRequestId, providerId).first<{release_id: string; status: string}>()
+  if (!request) throw new MarketplaceError(404, 'change_request_not_found', 'Change request was not found')
+  if (request.status !== 'draft') throw new MarketplaceError(409, 'change_request_locked', 'These changes were already submitted. Withdraw them to upload a different file.')
+  return request
+}
+
+/** Only cover art and audio can be replaced through a change request, and only on that request's release. */
+async function assertChangeRequestUpload(db: Database, providerId: string, input: UploadInitInput): Promise<void> {
+  const request = await assertChangeRequestDraft(db, providerId, input.changeRequestId!)
+  if (input.kind === 'artwork') {
+    if (input.releaseId === request.release_id) return
+  } else if (input.kind === 'audio') {
+    const track = await db.prepare('SELECT id FROM tracks WHERE id = ?1 AND release_id = ?2 AND provider_profile_id = ?3')
+      .bind(input.trackId, request.release_id, providerId).first()
+    if (track) return
+  } else {
+    throw new MarketplaceError(422, 'change_request_upload_kind', 'Only cover art and audio can be replaced through a change request')
+  }
+  throw new MarketplaceError(404, 'not_found', 'That track or release is not part of this change request')
+}
+
 /** `requireMutable` guards artist edits; approval-time assignment runs after the release is locked. */
 async function loadTrackIsrcContext(db: Database, trackId: string, providerId: string, requireMutable = true): Promise<TrackIsrcContext> {
   const track = await db.prepare(
@@ -779,7 +803,9 @@ export class MarketplaceService {
     if (!bucket) throw new MarketplaceError(503, 'storage_unavailable', 'Private upload storage is not configured')
     return this.database.transaction(async (db: Database) => {
       const context = await providerContext(db, userId)
-      if (input.kind === 'artwork' || input.kind === 'rights_document') await assertReleaseMutable(db, input.releaseId, context.providerId)
+      // Replacement cover art or audio for an approved release goes to its draft change request instead.
+      if (input.changeRequestId) await assertChangeRequestUpload(db, context.providerId, input)
+      else if (input.kind === 'artwork' || input.kind === 'rights_document') await assertReleaseMutable(db, input.releaseId, context.providerId)
       else if (input.kind === 'audio') await assertTrackMutable(db, input.trackId, context.providerId)
       // Profile imagery belongs to the artist identity, which stays editable after release.
       else await assertOwned(db, 'artists', input.artistId, context.providerId)
@@ -804,9 +830,10 @@ export class MarketplaceService {
       const artistId = 'artistId' in input ? input.artistId : null
       const targetId = releaseId ?? trackId ?? artistId
       const storageKey = `${MARKETPLACE_STORAGE_PREFIX}${context.providerId}/${input.kind}/${targetId}/${id}.${extension}`
-      const metadata = 'width' in input
-        ? {fileName: input.fileName, width: input.width, height: input.height}
-        : {fileName: input.fileName}
+      const metadata = {
+        ...('width' in input ? {fileName: input.fileName, width: input.width, height: input.height} : {fileName: input.fileName}),
+        ...(input.changeRequestId ? {changeRequestId: input.changeRequestId} : {}),
+      }
       const uploadUrl = await bucket.createUploadUrl(storageKey, input.mimeType, input.byteSize)
       const row = await inserted<any>(db.prepare(
         `INSERT INTO marketplace_assets
@@ -830,8 +857,13 @@ export class MarketplaceService {
         'SELECT * FROM marketplace_assets WHERE id = ?1 AND provider_profile_id = ?2 FOR UPDATE',
       ).bind(assetId, context.providerId).first<any>()
       if (!asset) throw new MarketplaceError(404, 'not_found', 'Upload was not found')
-      if (asset.release_id) await assertReleaseMutable(db, asset.release_id, context.providerId)
-      if (asset.track_id) await assertTrackMutable(db, asset.track_id, context.providerId)
+      const assetMetadata = typeof asset.metadata === 'string' ? JSON.parse(asset.metadata) : asset.metadata ?? {}
+      const changeRequestId = typeof assetMetadata.changeRequestId === 'string' ? assetMetadata.changeRequestId : null
+      if (changeRequestId) await assertChangeRequestDraft(db, context.providerId, changeRequestId)
+      else {
+        if (asset.release_id) await assertReleaseMutable(db, asset.release_id, context.providerId)
+        if (asset.track_id) await assertTrackMutable(db, asset.track_id, context.providerId)
+      }
       const object = await bucket.head(asset.storage_key)
       if (!object) throw new MarketplaceError(422, 'upload_missing', 'The uploaded object was not found')
       if (object.byteSize !== Number(asset.byte_size) || object.contentType !== asset.mime_type) {
@@ -856,10 +888,11 @@ export class MarketplaceService {
       if (validationErrors.length > 0) {
         throw new MarketplaceError(422, 'upload_validation_failed', 'The uploaded media failed validation', validationErrors)
       }
+      // A change request's upload stays invisible ('staged') until MeJay approves the request.
       const row = await inserted<any>(db.prepare(
-        `UPDATE marketplace_assets SET processing_status = 'ready'
+        `UPDATE marketplace_assets SET processing_status = ?3
          WHERE id = ?1 AND provider_profile_id = ?2 RETURNING *`,
-      ).bind(assetId, context.providerId))
+      ).bind(assetId, context.providerId, changeRequestId ? 'staged' : 'ready'))
       await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'asset', entityId: assetId, action: 'asset.upload_finalized', before: asset, after: row})
       return row
       })
@@ -1135,6 +1168,32 @@ export class MarketplaceService {
     })
   }
 
+  /**
+   * "Edit" on a submitted release: takes it out of the review queue back to DRAFT so every field is
+   * editable again; the artist submits again when done. Only allowed before a reviewer opens it
+   * (SUBMITTED). A race with a reviewer starting the review is settled by the row lock and version.
+   */
+  async withdrawSubmission(userId: string, releaseId: string, expectedVersion: number): Promise<unknown> {
+    return this.database.transaction(async (db: Database) => {
+      const context = await providerContext(db, userId)
+      const release = await db.prepare(
+        'SELECT id, status, version FROM releases WHERE id = ?1 AND provider_profile_id = ?2 FOR UPDATE',
+      ).bind(releaseId, context.providerId).first<{id: string; status: ReleaseStatus; version: number}>()
+      if (!release) throw new MarketplaceError(404, 'not_found', 'Release was not found')
+      if (release.status === 'UNDER_REVIEW') {
+        throw new MarketplaceError(409, 'release_in_review', 'MeJay has started reviewing this release, so it can no longer be withdrawn. You can edit it once the review is finished.')
+      }
+      if (release.status !== 'SUBMITTED') throw new MarketplaceError(409, 'release_not_withdrawable', 'Only a submitted release that is waiting for review can be withdrawn.')
+      if (release.version !== expectedVersion) throw new MarketplaceError(409, 'stale_release_version', 'The release was modified by another request')
+      const row = await inserted<Record<string, unknown>>(db.prepare(
+        `UPDATE releases SET status = 'DRAFT', version = version + 1, updated_at = ?1
+         WHERE id = ?2 AND version = ?3 AND status = 'SUBMITTED' RETURNING *`,
+      ).bind(nowIso(), releaseId, expectedVersion))
+      await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'release', entityId: releaseId, action: 'release.withdrawn', before: {status: release.status, version: release.version}, after: {status: 'DRAFT', version: row.version}})
+      return withCalendarDates(row)
+    })
+  }
+
   async submitRelease(userId: string, releaseId: string, input: SubmitReleaseInput, meta: RequestMeta | null = null): Promise<unknown> {
     return this.database.transaction(async (db: Database) => {
       const context = await providerContext(db, userId)
@@ -1335,7 +1394,7 @@ type AdditionalArtistInput = NonNullable<ReleaseDraftInput['additionalArtists']>
  * (their current name is stored as the credit); a name-only credit is someone not on MeJay. The lead
  * primary artist and repeats are refused so the credit line never names someone twice.
  */
-async function replaceReleaseCredits(db: Database, providerId: string, releaseId: string, leadArtistId: string, credits: AdditionalArtistInput): Promise<void> {
+export async function replaceReleaseCredits(db: Database, providerId: string, releaseId: string, leadArtistId: string, credits: AdditionalArtistInput): Promise<void> {
   const seen = new Set<string>()
   const rows: Array<{role: 'primary' | 'featured'; artistId: string | null; name: string}> = []
   for (const credit of credits) {
