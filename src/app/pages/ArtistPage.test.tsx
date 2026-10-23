@@ -51,6 +51,8 @@ describe('public artist page', () => {
     expect(screen.getByText('Detroit, MI')).toBeInTheDocument()
     expect(screen.getByText('Full biography text')).toBeInTheDocument()
     expect(screen.getByRole('link', {name: /Instagram/})).toHaveAttribute('href', 'https://instagram.com/johnblaze')
+    // Links sit in the header, above the music.
+    expect(screen.getByRole('banner')).toContainElement(screen.getByRole('navigation', {name: 'Follow John Blaze'}))
     expect(screen.getByRole('link', {name: /Spotify/})).toHaveAttribute('href', 'https://open.spotify.com/artist/1234567890123456789012')
     expect(screen.getByText('Featured release')).toBeInTheDocument()
     expect(screen.getByText('More from John Blaze')).toBeInTheDocument()
@@ -104,7 +106,7 @@ describe('public artist page', () => {
     expect(screen.queryByRole('region', {name: /More from/})).not.toBeInTheDocument()
     expect(screen.queryByRole('region', {name: 'Photos'})).not.toBeInTheDocument()
     expect(screen.queryByRole('region', {name: /About/})).not.toBeInTheDocument()
-    expect(screen.queryByRole('region', {name: /Follow/})).not.toBeInTheDocument()
+    expect(screen.queryByRole('navigation', {name: /Follow/})).not.toBeInTheDocument()
   })
 
   it('keeps accent buttons readable and rejects malformed colours', () => {

@@ -166,6 +166,12 @@ export function ArtistPageView({artist, releases, imageUrl, topBar}: {
             {artist.location && <span className="mr-2 inline-flex items-center gap-1"><MapPin className="h-4 w-4" />{artist.location}</span>}
             {artist.genres.map((genre) => <span key={genre} className="rounded-full border px-3 py-1 text-xs uppercase tracking-wider" style={{borderColor: `${accent}99`}}>{genre}</span>)}
           </div>
+          {(links.length > 0 || booking) && <nav aria-label={`Follow ${artist.name}`} className="mt-6 flex flex-wrap gap-2">
+            {links.map(([key, url]) => <Button key={key} asChild variant="outline" size="sm" className="gap-2 border-white/30 bg-black/30"><a href={url} target="_blank" rel="noopener noreferrer nofollow">{linkLabels[key]}<ExternalLink className="h-3.5 w-3.5" /></a></Button>)}
+            {booking && <Button asChild size="sm" className="gap-2 font-bold" style={{backgroundColor: accent, color: accentText}}>
+              <a href={booking} {...(booking.startsWith('https://') ? {target: '_blank', rel: 'noopener noreferrer nofollow'} : {})}><Mail className="h-3.5 w-3.5" />Booking &amp; contact</a>
+            </Button>}
+          </nav>}
           <div className="mt-8 flex flex-wrap gap-3">
             <Button size="lg" className="gap-2 font-bold hover:opacity-90" style={{backgroundColor: accent, color: accentText}} disabled={!featured?.preview_asset_id} onClick={() => featured && preview.toggle(featured.id, featured.preview_asset_id)}>
               {playing ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}{playing ? 'Pause' : 'Play Latest'}
@@ -231,15 +237,6 @@ export function ArtistPageView({artist, releases, imageUrl, topBar}: {
         </div>}
       </section>}
 
-      {(links.length > 0 || booking) && <section aria-labelledby="connect-heading" className="rounded-2xl border border-white/10 p-5 sm:p-10" style={{background: `linear-gradient(135deg, ${accent}22, transparent 60%)`}}>
-        <SectionHeading id="connect-heading" accent={accent} eyebrow="Stay connected" title={`Follow ${artist.name}`} />
-        <div className="flex flex-wrap gap-2">
-          {links.map(([key, url]) => <Button key={key} asChild variant="outline" size="sm" className="gap-2"><a href={url} target="_blank" rel="noopener noreferrer nofollow">{linkLabels[key]}<ExternalLink className="h-3.5 w-3.5" /></a></Button>)}
-          {booking && <Button asChild size="sm" className="gap-2 font-bold" style={{backgroundColor: accent, color: accentText}}>
-            <a href={booking} {...(booking.startsWith('https://') ? {target: '_blank', rel: 'noopener noreferrer nofollow'} : {})}><Mail className="h-3.5 w-3.5" />Booking &amp; contact</a>
-          </Button>}
-        </div>
-      </section>}
     </main>
 
     <Dialog open={openImage !== null} onOpenChange={(open) => !open && setOpenImage(null)}>
