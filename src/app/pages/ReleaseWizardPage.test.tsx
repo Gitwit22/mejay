@@ -3,7 +3,7 @@ import {fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {MemoryRouter, Route, Routes} from 'react-router-dom'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {generateProviderIsrc, getProviderRelease, listProviderArtists, updateProviderRelease, updateProviderTrack, withdrawProviderRelease, type ProviderReleaseDetail} from '@/lib/providerApi'
+import {generateProviderIsrc, getProviderRelease, getReleaseCertification, listProviderArtists, updateProviderRelease, updateProviderTrack, withdrawProviderRelease, type ProviderReleaseDetail} from '@/lib/providerApi'
 import ReleaseWizardPage from './ReleaseWizardPage'
 
 // Radix checkboxes measure themselves; jsdom has no ResizeObserver.
@@ -22,6 +22,7 @@ vi.mock('@/lib/providerApi', async (importOriginal) => ({
   generateProviderIsrc: vi.fn(),
   updateProviderTrack: vi.fn(),
   withdrawProviderRelease: vi.fn(),
+  getReleaseCertification: vi.fn(),
 }))
 
 const track = {id: 'track-1', title: 'Night Drive', version_title: null, disc_number: 1, track_number: 1, duration_ms: 180000, explicit: false, language_code: 'en', primary_artist_name: 'John Blaze', isrc: null}
@@ -266,4 +267,13 @@ describe('release wizard: locked while in review', () => {
     expect(screen.getByRole('link', {name: 'Request changes'})).toHaveAttribute('href', '/app/artist/releases/release-1/changes')
     expect(screen.getByLabelText('Release title')).toBeDisabled()
   })
+
+  it('reminds the artist to confirm the certification again after an edit', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail())
+    vi.mocked(getReleaseCertification).mockResolvedValue({draft: null, history: [{id: 'cert-1'}], previous: {version: 'v', thirdPartyMaterial: 'none', accepted: [], certifiedAt: '2026-10-22T00:00:00.000Z'}} as never)
+    renderStep('release-information')
+    expect(await screen.findByText('Confirm the rights certification again before you resubmit.')).toBeInTheDocument()
+    expect(screen.getByRole('link', {name: 'Go to certification'})).toHaveAttribute('href', '/app/artist/releases/release-1/edit/certification')
+  })
 })
+

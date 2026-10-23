@@ -123,6 +123,8 @@ export class MarketplaceAdminService {
       `SELECT t.id, t.title, t.version_title, t.disc_number, t.track_number, t.duration_ms, t.explicit, t.language_code,
          t.genre, t.instrumental, isrc.isrc, isrc.source AS isrc_source,
          EXISTS (SELECT 1 FROM marketplace_assets a WHERE a.track_id = t.id AND a.kind = 'audio' AND a.processing_status = 'ready') AS audio_ready,
+         (SELECT a.id FROM marketplace_assets a WHERE a.track_id = t.id AND a.kind = 'audio' AND a.processing_status = 'ready'
+           ORDER BY a.created_at DESC LIMIT 1) AS audio_asset_id,
          COALESCE((SELECT json_agg(json_build_object('name', c.name, 'role', c.role, 'publisherName', c.publisher_name) ORDER BY c.created_at, c.id)
            FROM track_contributors c WHERE c.track_id = t.id), '[]'::json) AS contributors,
          COALESCE((SELECT json_agg(json_build_object('id', fa.id, 'name', fa.name) ORDER BY fa.name)

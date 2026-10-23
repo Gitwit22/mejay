@@ -38,7 +38,7 @@ function renderStep(onContinue = vi.fn()) {
 
 describe('Rights Certification step', () => {
   beforeEach(() => {
-    vi.mocked(saveReleaseCertification).mockResolvedValue({saved: true})
+    vi.mocked(saveReleaseCertification).mockReset().mockResolvedValue({saved: true})
   })
 
   it('keeps Review Submission disabled until the question is answered and every statement is checked', async () => {
@@ -84,5 +84,37 @@ describe('Rights Certification step', () => {
     render(<QueryClientProvider client={client}><CertificationStep detail={{...detail, release: {...detail.release, status: 'SUBMITTED'}} as ProviderReleaseDetail} onBack={vi.fn()} onContinue={vi.fn()} /></QueryClientProvider>)
     expect(await screen.findByText(/can no longer be changed/)).toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'Review Submission'})).toBeDisabled()
+  })
+
+  it('prefills the last submitted answers after an edit, explains why, and saves only when confirmed', async () => {
+    vi.mocked(getReleaseCertification).mockResolvedValue(state({
+      previous: {version: '2026-10-v1', thirdPartyMaterial: 'none', accepted: statements.map((statement) => statement.key), certifiedAt: '2026-10-22T00:00:00.000Z'},
+      history: [{id: 'cert-1', certification_version: '2026-10-v1', third_party_material: 'none', rights_status: 'CERTIFIED_ORIGINAL', certified_at: '2026-10-22T00:00:00.000Z'}],
+    }))
+    const onContinue = renderStep()
+    expect(await screen.findByText(/You edited this release after certifying it/)).toBeInTheDocument()
+    expect(screen.getByRole('radio', {name: /entirely original/})).toHaveAttribute('aria-checked', 'true')
+    const confirm = screen.getByRole('button', {name: 'Review Submission'})
+    await waitFor(() => expect(confirm).toBeEnabled())
+    expect(saveReleaseCertification).not.toHaveBeenCalled()
+    fireEvent.click(confirm)
+    await waitFor(() => expect(saveReleaseCertification).toHaveBeenCalledWith('release-1', expect.objectContaining({thirdPartyMaterial: 'none', accepted: statements.map((statement) => statement.key)})))
+    await waitFor(() => expect(onContinue).toHaveBeenCalled())
+  })
+
+  it('does not pre-check statements whose wording changed since the last certification', async () => {
+    vi.mocked(getReleaseCertification).mockResolvedValue(state({previous: {version: '2025-01-v0', thirdPartyMaterial: 'none', accepted: statements.map((statement) => statement.key), certifiedAt: '2026-01-01T00:00:00.000Z'}}))
+    renderStep()
+    expect(await screen.findByText(/You edited this release after certifying it/)).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Review Submission'})).toBeDisabled()
+  })
+
+  it('warns that licensed material without a document is reviewed by hand', async () => {
+    vi.mocked(getReleaseCertification).mockResolvedValue(state({
+      draft: {version: '2026-10-v1', thirdPartyMaterial: 'licensed', accepted: [], savedAt: '2026-10-22T00:00:00.000Z'},
+      materials: [{id: 'mat-1', material_type: 'sample', licensor_name: 'Old Record', description: 'Hook', license_type: 'other', document_asset_id: null}],
+    }))
+    renderStep()
+    expect(await screen.findByText(/Without a license document, MeJay checks these rights by hand/)).toBeInTheDocument()
   })
 })

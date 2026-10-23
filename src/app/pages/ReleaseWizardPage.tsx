@@ -5,7 +5,7 @@ import {Link, useNavigate, useParams} from 'react-router-dom'
 
 import {CertificationStep, CreditsStep} from '@/app/components/provider/ReleaseSubmissionSteps'
 import {ReleaseDateTimePicker} from '@/app/components/provider/ReleaseDateTimePicker'
-import {ReleaseLockBanner} from '@/app/components/provider/ReleaseLockBanner'
+import {RecertifyNotice, ReleaseLockBanner} from '@/app/components/provider/ReleaseLockBanner'
 import {releaseEditState} from '@/lib/releaseEditState'
 import {AdditionalArtistsField} from '@/app/components/provider/AdditionalArtistsField'
 import {creditName, creditsInput, formatArtistCredit, rowsFromCredits, titleHasFeature, type AdditionalArtistRow} from '@/lib/artistCredit'
@@ -101,6 +101,7 @@ export default function ReleaseWizardPage() {
       </nav>
       <main className="min-w-0 max-w-3xl">
         <ReleaseLockBanner release={detail.data.release} />
+        {activeStep !== 'certification' && <RecertifyNotice release={detail.data.release} />}
         <fieldset disabled={readOnly} aria-disabled={readOnly} className="min-w-0">
         {activeStep === 'release-information' && <ReleaseInformation detail={detail.data} />}
         {activeStep === 'artwork' && <ArtworkStep releaseId={releaseId} detail={detail.data} />}

@@ -187,16 +187,21 @@ export const getReviewAsset = async (context: {request: Request; env: EnvWithDb 
   if (!assetId) return json({ok: false, error: 'missing_parameter'}, {status: 400})
   try {
     const asset = await new MarketplaceAdminService(context.env.DB).getReviewAsset(userId, assetId)
-    const object = await context.env.DOWNLOADS.getExact(asset.storageKey)
+    // Byte ranges let the review audio player seek through a full-length master.
+    const requestedRange = context.request.headers.get('range')
+    const range = requestedRange && /^bytes=\d*-\d*$/.test(requestedRange) && requestedRange !== 'bytes=-' ? requestedRange : undefined
+    const object = await context.env.DOWNLOADS.getExact(asset.storageKey, range)
     if (!object) return json({ok: false, error: 'not_found'}, {status: 404})
     return new Response(object.body, {
-      status: 200,
+      status: object.contentRange ? 206 : 200,
       headers: {
         'content-type': asset.mimeType,
         'content-disposition': `inline; filename="${asset.fileName}"`,
         'cache-control': 'private, no-store, max-age=0',
         'x-content-type-options': 'nosniff',
+        'accept-ranges': 'bytes',
         ...(object.contentLength !== undefined ? {'content-length': String(object.contentLength)} : {}),
+        ...(object.contentRange ? {'content-range': object.contentRange} : {}),
       },
     })
   } catch (error) {

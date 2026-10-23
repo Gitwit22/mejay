@@ -189,6 +189,8 @@ export type ReleaseCertificationState = {
   materials: RightsMaterial[]
   problems: string[]
   history: Array<{id: string; certification_version: string; third_party_material: ThirdPartyMaterial; rights_status: RightsStatus; certified_at: string}>
+  /** The last submitted certification (absent from older API responses); used to prefill a re-confirmation. */
+  previous?: {version: string; thirdPartyMaterial: ThirdPartyMaterial; accepted: string[]; certifiedAt: string} | null
 }
 
 export function replaceTrackCredits(trackId: string, input: {featuredArtistIds: string[]; contributors: TrackContributor[]}): Promise<unknown> {

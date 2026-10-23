@@ -315,6 +315,8 @@ export type ReleaseReview = {
   tracks: Array<{
     id: string; title: string; version_title: string | null; track_number: number; explicit: boolean; language_code: string | null
     isrc: string | null; isrc_source: string | null; audio_ready: boolean
+    /** Latest ready master, playable by staff through reviewAssetUrl (absent from older API responses). */
+    audio_asset_id?: string | null
     contributors: Array<{name: string; role: string; publisherName: string | null}>
     featured_artists: Array<{id: string; name: string}>
   }>

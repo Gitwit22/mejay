@@ -2021,6 +2021,21 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
           .rejects.toMatchObject({code: 'release_locked'})
       })
 
+      it('prefills the last certification after a withdraw and lets staff play the master', async () => {
+        const fixture = await submitted('Recertify')
+        const submissions = new ReleaseSubmissionService(db() as never)
+        const review = await adminService().getReleaseReview(reviewerUserId, fixture.release.id) as {tracks: Array<{audio_asset_id: string | null}>}
+        const master = await pool.query(`SELECT id FROM marketplace_assets WHERE track_id = $1 AND kind = 'audio' AND processing_status = 'ready'`, [fixture.track.id])
+        expect(review.tracks[0].audio_asset_id).toBe(master.rows[0].id)
+
+        await service.withdrawSubmission(fixture.userId, fixture.release.id, fixture.version)
+        const state = await submissions.getCertification(fixture.userId, fixture.release.id) as {draft: unknown; problems: string[]; previous: {thirdPartyMaterial: string; accepted: string[]; version: string} | null}
+        expect(state.draft).toBeNull()
+        expect(state.problems).toContain('rights certification')
+        expect(state.previous).toMatchObject({thirdPartyMaterial: 'none', version: CERTIFICATION_VERSION})
+        expect(state.previous!.accepted).toEqual(expect.arrayContaining(['original_recording', 'information_accurate']))
+      })
+
       it('lets exactly one of a withdraw and a review start win', async () => {
         const fixture = await submitted('WithdrawRace')
         const outcomes = await Promise.allSettled([
