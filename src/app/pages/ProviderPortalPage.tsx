@@ -2,6 +2,7 @@ import {useState} from 'react'
 import {Link, useNavigate, useSearchParams} from 'react-router-dom'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {
+  ArrowLeft,
   BadgeDollarSign,
   Banknote,
   BarChart3,
@@ -127,6 +128,7 @@ function PortalBrand() {
 
 function PortalNavigation({active, onSelect}: {active: Section; onSelect: (section: Section) => void}) {
   return <nav className="space-y-1" aria-label="Provider portal">
+    <Link to="/app" className="mb-4 flex w-full items-center gap-3 rounded-md border border-white/10 px-3 py-2.5 text-sm text-zinc-300 transition hover:bg-white/5 hover:text-white"><ArrowLeft className="h-4 w-4" />Back to MEJay</Link>
     {navigation.map((item) => {
       const Icon = item.icon
       return <button key={item.id} type="button" onClick={() => onSelect(item.id)} className={`flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition ${active === item.id ? 'bg-emerald-400 text-zinc-950' : 'text-zinc-400 hover:bg-white/5 hover:text-white'}`}>
