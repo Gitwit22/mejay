@@ -1,3 +1,5 @@
+import {isMarketplaceStorageKey} from '../marketplace/storage-keys'
+
 type Statement = {
   bind: (...values: unknown[]) => Statement
   first: <T = Record<string, unknown>>() => Promise<T | null>
@@ -102,7 +104,7 @@ export class AccountDeletionService {
         const {results: assets} = await db.prepare(
           'SELECT storage_key FROM marketplace_assets WHERE provider_profile_id = ?1',
         ).bind(membership.provider_profile_id).all<{storage_key: string}>()
-        storageKeys = assets.map((asset) => asset.storage_key).filter((key) => key.startsWith('marketplace/'))
+        storageKeys = assets.map((asset) => asset.storage_key).filter(isMarketplaceStorageKey)
         // Abandoned (unpaid) checkouts and operational incidents reference the provider's catalog
         // with RESTRICT foreign keys; detach them so the catalog can be removed.
         await db.prepare(

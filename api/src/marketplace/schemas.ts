@@ -1,4 +1,5 @@
 import {z} from 'zod'
+import {isValidTimeZone} from './release-schedule'
 import {externalIsrcProblem} from './isrc'
 import {formatMinimumPrice, MINIMUM_RELEASE_PRICE_MINOR} from './sale-policy'
 import {ARTIST_IMAGE_RULES} from './upload-validation'
@@ -16,6 +17,18 @@ export const providerSchema = z.object({
   countryCode,
   bio: z.string().trim().max(2000).optional(),
 })
+
+/**
+ * Business details an artist account can edit from Settings. The page address (slug) is fixed after
+ * onboarding, and review status is never changed from here.
+ */
+export const providerSettingsSchema = z.object({
+  displayName: nonEmpty,
+  legalName: z.string().trim().max(300).nullable(),
+  contactEmail: z.string().trim().toLowerCase().email(),
+  countryCode,
+  bio: z.string().trim().max(2000).nullable(),
+}).strict()
 
 export const artistSchema = z.object({
   name: nonEmpty,
@@ -49,6 +62,18 @@ export const releaseDraftSchema = z.object({
   upc: z.string().trim().regex(/^[0-9]{12,14}$/).nullable().optional(),
   originalReleaseDate: z.string().date().nullable().optional(),
   scheduledReleaseAt: z.string().datetime({offset: true}).nullable().optional(),
+  /** The artist's chosen public release time. Omitted keeps the stored value; null clears it. */
+  requestedReleaseAt: z.string().datetime({offset: true}).nullable().optional(),
+  releaseTimezone: z.string().trim().refine(isValidTimeZone, 'Choose a valid timezone').nullable().optional(),
+  preordersEnabled: z.boolean().optional(),
+  /** Whether store previews play during pre-orders or only once the release is live. */
+  previewTiming: z.enum(['before_release', 'after_release']).optional(),
+  /** More primary and featured artists beyond the lead. Omitted keeps the stored list; [] clears it. */
+  additionalArtists: z.array(z.object({
+    role: z.enum(['primary', 'featured']),
+    artistId: id.nullable().optional(),
+    name: nonEmpty.max(300),
+  }).strict()).max(10).optional(),
   copyrightYear: z.number().int().min(1900).max(2200).nullable().optional(),
   copyrightHolder: nonEmpty.nullable().optional(),
   phonographicCopyrightYear: z.number().int().min(1900).max(2200).nullable().optional(),
@@ -80,6 +105,8 @@ export const trackDraftSchema = z.object({
   instrumental: z.boolean(),
   recordingYear: z.number().int().min(1900).max(2200).nullable().optional(),
   recordingLocation: nonEmpty.nullable().optional(),
+  /** Where the 10-second store preview starts, in ms; null = automatic. Omitted keeps the stored value. */
+  previewStartMs: z.number().int().min(0).max(24 * 60 * 60 * 1000).nullable().optional(),
 })
 
 export const assetSchema = z.object({
@@ -263,6 +290,7 @@ export const submitReleaseSchema = z.object({
 })
 
 export type ProviderInput = z.infer<typeof providerSchema>
+export type ProviderSettingsInput = z.infer<typeof providerSettingsSchema>
 export type ArtistInput = z.infer<typeof artistSchema>
 export type ReleaseInput = z.infer<typeof releaseSchema>
 export type ReleaseDraftInput = z.infer<typeof releaseDraftSchema>

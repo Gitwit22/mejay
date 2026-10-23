@@ -4,14 +4,20 @@ import {ArrowLeft, Check, ChevronRight, Disc3, Upload} from 'lucide-react'
 import {Link, useNavigate, useParams} from 'react-router-dom'
 
 import {CertificationStep, CreditsStep} from '@/app/components/provider/ReleaseSubmissionSteps'
+import {ReleaseDateTimePicker} from '@/app/components/provider/ReleaseDateTimePicker'
+import {AdditionalArtistsField} from '@/app/components/provider/AdditionalArtistsField'
+import {creditName, creditsInput, formatArtistCredit, rowsFromCredits, titleHasFeature, type AdditionalArtistRow} from '@/lib/artistCredit'
 
 import {Button} from '@/components/ui/button'
+import {Checkbox} from '@/components/ui/checkbox'
+import {Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger} from '@/components/ui/dialog'
 import {Input} from '@/components/ui/input'
 import {Label} from '@/components/ui/label'
 import {Switch} from '@/components/ui/switch'
 import {toast} from '@/hooks/use-toast'
 import {
   assignProviderIsrc,
+  generateProviderIsrc,
   createProviderPricing,
   createProviderRights,
   createProviderTrack,
@@ -29,6 +35,7 @@ import {
   setProviderTrackPrice,
   clearProviderTrackPrice,
 } from '@/lib/providerApi'
+import {browserTimeZone, formatPreviewStart, formatReleaseTime, listTimeZones, meetsReleaseLead, parsePreviewStart, PREVIEW_SECONDS, RELEASE_LEAD_MESSAGE, SCHEDULER_NOTE, utcToZonedLocal, zonedLocalToUtcIso} from '@/lib/releaseTime'
 
 const steps: Array<{id: ReleaseDraftStep; label: string}> = [
   {id: 'release-information', label: 'Release Information'},
@@ -36,7 +43,7 @@ const steps: Array<{id: ReleaseDraftStep; label: string}> = [
   {id: 'tracks', label: 'Upload Tracks'},
   {id: 'track-metadata', label: 'Track Metadata'},
   {id: 'credits', label: 'Credits'},
-  {id: 'isrc', label: 'Existing ISRCs'},
+  {id: 'isrc', label: 'ISRCs'},
   {id: 'rights', label: 'Rights'},
   {id: 'pricing', label: 'Pricing'},
   {id: 'splits', label: 'Splits'},
@@ -116,22 +123,123 @@ function ReleaseInformation({detail}: {detail: ProviderReleaseDetail}) {
   const release = detail.release
   const artists = useQuery({queryKey: ['provider', 'artists'], queryFn: listProviderArtists})
   const [form, setForm] = useState({title: release.title, versionTitle: release.version_title || '', releaseType: release.release_type, primaryArtistId: release.primary_artist_id, labelName: release.label_name || '', catalogNumber: release.catalog_number || '', genre: release.genre || '', subgenre: release.subgenre || '', upc: release.upc || '', originalReleaseDate: release.original_release_date || '', copyrightYear: release.copyright_year?.toString() || '', copyrightHolder: release.copyright_holder || '', phonographicCopyrightYear: release.phonographic_copyright_year?.toString() || '', phonographicCopyrightHolder: release.phonographic_copyright_holder || ''})
-  const save = useMutation({mutationFn: () => updateProviderRelease(release.id, {expectedVersion: release.version, draftStep: 'release-information', ...form, versionTitle: form.versionTitle || null, labelName: form.labelName || null, catalogNumber: form.catalogNumber || null, genre: form.genre || null, subgenre: form.subgenre || null, upc: form.upc || null, originalReleaseDate: form.originalReleaseDate || null, copyrightYear: form.copyrightYear ? Number(form.copyrightYear) : null, copyrightHolder: form.copyrightHolder || null, phonographicCopyrightYear: form.phonographicCopyrightYear ? Number(form.phonographicCopyrightYear) : null, phonographicCopyrightHolder: form.phonographicCopyrightHolder || null}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', release.id]}); toast({title: 'Release information saved'})}})
+  const save = useMutation({mutationFn: () => updateProviderRelease(release.id, {expectedVersion: release.version, draftStep: 'release-information', ...form, ...scheduleInput(schedule), additionalArtists: additionalArtists ?? [], versionTitle: form.versionTitle || null, labelName: form.labelName || null, catalogNumber: form.catalogNumber || null, genre: form.genre || null, subgenre: form.subgenre || null, upc: form.upc || null, originalReleaseDate: form.originalReleaseDate || null, copyrightYear: form.copyrightYear ? Number(form.copyrightYear) : null, copyrightHolder: form.copyrightHolder || null, phonographicCopyrightYear: form.phonographicCopyrightYear ? Number(form.phonographicCopyrightYear) : null, phonographicCopyrightHolder: form.phonographicCopyrightHolder || null}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', release.id]}); toast({title: 'Release information saved'})}})
   const field = (key: keyof typeof form) => ({value: form[key], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({...form, [key]: event.target.value})})
-  return <><StepHeading title="Release Information" detail="Core catalog details for this release." /><form onSubmit={(event) => {event.preventDefault(); save.mutate()}} className="grid gap-5 sm:grid-cols-2">
-    <Field label="Release title"><Input required {...field('title')} /></Field><Field label="Version"><Input placeholder="Optional" {...field('versionTitle')} /></Field>
+  const upcProblem = upcError(form.upc)
+  const [schedule, setSchedule] = useState<ReleaseScheduleValue>(() => scheduleFromRelease(release))
+  const scheduleProblem = releaseScheduleError(schedule)
+  const [extraArtists, setExtraArtists] = useState<AdditionalArtistRow[]>(() => rowsFromCredits(release.additional_artists))
+  const artistList = artists.data ?? []
+  const additionalArtists = creditsInput(extraArtists, artistList)
+  const leadName = artistList.find((artist) => artist.id === form.primaryArtistId)?.name ?? release.primary_artist_name ?? ''
+  const creditLine = formatArtistCredit(leadName, extraArtists.map((row) => ({role: row.role, name: creditName(row, artistList)})))
+  return <><StepHeading title="Release Information" detail="Core catalog details for this release." /><form onSubmit={(event) => {event.preventDefault(); if (!upcProblem && !scheduleProblem && additionalArtists) save.mutate()}} className="grid gap-5 sm:grid-cols-2">
+    <div className="space-y-2"><Label htmlFor="release-title-input">Release title</Label><Input id="release-title-input" required {...field('title')} />{titleHasFeature(form.title) && <p className="text-xs text-amber-300">Add featured artists under Additional artists instead of in the title, so stores and players credit them properly.</p>}</div><Field label="Version"><Input placeholder="Optional" {...field('versionTitle')} /></Field>
     <Field label="Release type"><select className="h-10 w-full rounded-md border border-white/10 bg-zinc-950 px-3 text-sm" {...field('releaseType')}><option value="single">Single</option><option value="ep">EP</option><option value="album">Album</option></select></Field>
     <Field label="Primary artist"><select required className="h-10 w-full rounded-md border border-white/10 bg-zinc-950 px-3 text-sm" {...field('primaryArtistId')}>{artists.data?.map((artist) => <option key={artist.id} value={artist.id}>{artist.name}</option>)}</select></Field>
+    <AdditionalArtistsField rows={extraArtists} onChange={setExtraArtists} artists={artistList} leadArtistId={form.primaryArtistId} />
+    <p className="text-sm text-zinc-400 sm:col-span-2" aria-live="polite">Credited as: <span className="font-semibold text-zinc-100">{form.title || 'Untitled'}</span> · <span className="text-zinc-200">{creditLine || 'Choose a primary artist'}</span></p>
     <Field label="Label"><Input {...field('labelName')} /></Field><Field label="Catalog number"><Input {...field('catalogNumber')} /></Field>
     <Field label="Genre"><Input {...field('genre')} /></Field><Field label="Subgenre"><Input {...field('subgenre')} /></Field>
-    <Field label="UPC"><Input inputMode="numeric" {...field('upc')} /></Field><Field label="Original release date"><Input type="date" {...field('originalReleaseDate')} /></Field>
+    <div className="space-y-2">
+      <Label htmlFor="release-upc">UPC (optional)</Label>
+      <Input id="release-upc" inputMode="numeric" placeholder="12-14 digits" aria-invalid={Boolean(upcProblem)} aria-describedby="release-upc-help" value={form.upc} onChange={(event) => setForm({...form, upc: event.target.value.replace(/[\s-]/g, '')})} />
+      <p id="release-upc-help" className={`text-xs ${upcProblem ? 'text-red-400' : 'text-zinc-500'}`}>{upcProblem ?? 'Already released? Enter the UPC/EAN your distributor assigned. Leave blank if it has none.'}</p>
+    </div>
+    <div className="space-y-2">
+      <Label htmlFor="release-original-date">Original release date (optional)</Label>
+      <Input id="release-original-date" type="date" aria-describedby="release-original-date-help" {...field('originalReleaseDate')} />
+      <p id="release-original-date-help" className="text-xs text-zinc-500">When this music first came out anywhere. This is history only; it does not schedule anything.</p>
+    </div>
+    <ReleaseScheduleFields value={schedule} onChange={setSchedule} problem={scheduleProblem} />
     <Field label="Copyright year"><Input type="number" min="1900" max="2200" {...field('copyrightYear')} /></Field><Field label="Copyright holder"><Input {...field('copyrightHolder')} /></Field>
     <Field label="Phonographic copyright year"><Input type="number" min="1900" max="2200" {...field('phonographicCopyrightYear')} /></Field><Field label="Phonographic copyright holder"><Input {...field('phonographicCopyrightHolder')} /></Field>
-    {save.isError && <p className="text-sm text-red-400 sm:col-span-2">{save.error.message}</p>}<Button disabled={save.isPending} className="sm:col-span-2">{save.isPending ? 'Saving...' : 'Save information'}</Button>
+    {save.isError && <p className="text-sm text-red-400 sm:col-span-2">{save.error.message}</p>}{!additionalArtists && <p className="text-sm text-amber-300 sm:col-span-2">Enter a name for each additional artist, or remove the empty row.</p>}<Button disabled={save.isPending || Boolean(upcProblem) || Boolean(scheduleProblem) || !additionalArtists} className="sm:col-span-2">{save.isPending ? 'Saving...' : 'Save information'}</Button>
   </form></>
 }
 
+/** Same rule as the API (12-14 digits, UPC-A or EAN-13/14); empty means the release has no UPC. */
+function upcError(value: string): string | null {
+  if (!value) return null
+  return /^[0-9]{12,14}$/.test(value) ? null : 'A UPC is 12 to 14 digits (numbers only).'
+}
+
 function Field({label, children}: {label: string; children: React.ReactNode}) { return <div className="space-y-2"><Label>{label}</Label>{children}</div> }
+
+type ReleaseScheduleValue = {mode: 'on_approval' | 'scheduled'; local: string; timeZone: string; preorders: boolean; previewTiming: 'before_release' | 'after_release'}
+
+function scheduleFromRelease(release: ProviderReleaseDetail['release']): ReleaseScheduleValue {
+  const timeZone = release.release_timezone || browserTimeZone()
+  return {
+    mode: release.requested_release_at ? 'scheduled' : 'on_approval',
+    local: utcToZonedLocal(release.requested_release_at, timeZone),
+    timeZone,
+    preorders: Boolean(release.preorders_enabled),
+    previewTiming: release.preview_timing ?? 'after_release',
+  }
+}
+
+function scheduledInstant(value: ReleaseScheduleValue): string | null {
+  return value.mode === 'scheduled' ? zonedLocalToUtcIso(value.local, value.timeZone) : null
+}
+
+/** Mirrors the API: a chosen time must be valid and in the future; pre-orders need a date. */
+function releaseScheduleError(value: ReleaseScheduleValue): string | null {
+  if (value.mode === 'on_approval') return null
+  const instant = scheduledInstant(value)
+  if (!instant) return 'Choose a release date and time.'
+  if (new Date(instant).getTime() <= Date.now()) return 'Choose a release date and time in the future.'
+  return null
+}
+
+function scheduleInput(value: ReleaseScheduleValue): {requestedReleaseAt: string | null; releaseTimezone: string | null; preordersEnabled: boolean; previewTiming: 'before_release' | 'after_release'} {
+  const instant = scheduledInstant(value)
+  return {requestedReleaseAt: instant, releaseTimezone: instant ? value.timeZone : null, preordersEnabled: Boolean(instant) && value.preorders, previewTiming: value.previewTiming}
+}
+
+/** Public release date and pre-order opt-in. "Original release date" stays a separate, historical field. */
+export function ReleaseScheduleFields({value, onChange, problem}: {value: ReleaseScheduleValue; onChange: (value: ReleaseScheduleValue) => void; problem: string | null}) {
+  const zones = listTimeZones()
+  const instant = scheduledInstant(value)
+  const tooSoon = Boolean(instant) && !meetsReleaseLead(instant)
+  return <fieldset className="space-y-4 rounded-md border border-white/10 p-4 sm:col-span-2">
+    <legend className="px-1 text-sm font-medium">Release date on MeJay</legend>
+    <p className="text-xs text-zinc-400">{RELEASE_LEAD_MESSAGE} MeJay still reviews and approves every release.</p>
+    <div className="flex flex-wrap gap-4 text-sm">
+      <label className="flex items-center gap-2"><input type="radio" name="release-mode" checked={value.mode === 'on_approval'} onChange={() => onChange({...value, mode: 'on_approval', preorders: false})} />As soon as MeJay approves</label>
+      <label className="flex items-center gap-2"><input type="radio" name="release-mode" checked={value.mode === 'scheduled'} onChange={() => onChange({...value, mode: 'scheduled'})} />On a date I choose</label>
+    </div>
+    {value.mode === 'scheduled' && <div className="grid gap-4 sm:grid-cols-2">
+      <div className="sm:col-span-2">
+        <ReleaseDateTimePicker value={value.local} invalid={Boolean(problem)} onChange={(local) => onChange({...value, local})} />
+      </div>
+      <div className="space-y-2 sm:col-span-2">
+        <Label htmlFor="release-timezone">Timezone</Label>
+        <select id="release-timezone" className="h-10 w-full rounded-md border border-white/10 bg-zinc-950 px-3 text-sm" value={value.timeZone} onChange={(event) => onChange({...value, timeZone: event.target.value})}>
+          {(zones.includes(value.timeZone) ? zones : [value.timeZone, ...zones]).map((zone) => <option key={zone} value={zone}>{zone.replace(/_/g, ' ')}</option>)}
+        </select>
+      </div>
+      <div className="sm:col-span-2 space-y-1 text-xs" aria-live="polite">
+        {problem ? <p className="text-red-400">{problem}</p> : instant && <p className="text-zinc-300">Releases {formatReleaseTime(instant, value.timeZone)} ({new Date(instant).toISOString().replace('.000Z', 'Z')} UTC).</p>}
+        {tooSoon && !problem && <p className="text-amber-300">This is less than 7 days away. Pick a later date before you submit for review.</p>}
+        <p className="text-zinc-500">{SCHEDULER_NOTE}</p>
+      </div>
+      <label className="flex items-start gap-3 sm:col-span-2">
+        <Checkbox checked={value.preorders} onCheckedChange={(checked) => onChange({...value, preorders: checked === true})} aria-describedby="release-preorders-help" />
+        <span><span className="block text-sm font-medium">Enable pre-orders</span><span id="release-preorders-help" className="block text-xs text-zinc-500">Once MeJay approves and schedules this release, fans can buy it before release day. They're charged at checkout and get their download on release day.</span></span>
+      </label>
+    </div>}
+    <div className="space-y-2 border-t border-white/10 pt-4">
+      <p className="text-sm font-medium">Song previews</p>
+      <p className="text-xs text-zinc-500">Fans hear a {PREVIEW_SECONDS}-second clip that fades in and out. Choose where each song's clip starts in Track Metadata.</p>
+      <div className="flex flex-col gap-2 text-sm sm:flex-row sm:gap-5">
+        <label className="flex items-center gap-2"><input type="radio" name="preview-timing" checked={value.previewTiming === 'after_release'} onChange={() => onChange({...value, previewTiming: 'after_release'})} />After release only</label>
+        <label className="flex items-center gap-2"><input type="radio" name="preview-timing" checked={value.previewTiming === 'before_release'} onChange={() => onChange({...value, previewTiming: 'before_release'})} />Before release too (during pre-orders)</label>
+      </div>
+      {value.previewTiming === 'before_release' && !(value.mode === 'scheduled' && value.preorders) && <p className="text-xs text-amber-300">Previews before release only play while the release is open for pre-order. Turn on pre-orders above to use this.</p>}
+    </div>
+  </fieldset>
+}
 
 function ArtworkStep({releaseId, detail}: {releaseId: string; detail: ProviderReleaseDetail}) {
   const queryClient = useQueryClient()
@@ -162,12 +270,32 @@ function MetadataStep({detail}: {detail: ProviderReleaseDetail}) {
 function TrackMetadataForm({track, artistId, releaseId}: {track: ProviderTrack; artistId: string; releaseId: string}) {
   const queryClient = useQueryClient()
   const [title, setTitle] = useState(track.title), [genre, setGenre] = useState(track.genre || ''), [language, setLanguage] = useState(track.language_code || ''), [explicit, setExplicit] = useState(track.explicit), [instrumental, setInstrumental] = useState(track.instrumental || false)
-  const save = useMutation({mutationFn: () => updateProviderTrack(track.id, {title, primaryArtistId: artistId, discNumber: track.disc_number, trackNumber: track.track_number, durationMs: track.duration_ms, explicit, languageCode: language || null, genre: genre || null, instrumental}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', releaseId]}); toast({title: `${title} saved`})}})
-  return <form onSubmit={(event) => {event.preventDefault(); save.mutate()}} className="grid gap-4 rounded-md border border-white/10 bg-[#141417] p-5 sm:grid-cols-2"><Field label="Title"><Input value={title} onChange={(event) => setTitle(event.target.value)} required /></Field><Field label="Genre"><Input value={genre} onChange={(event) => setGenre(event.target.value)} /></Field><Field label="Language code"><Input value={language} onChange={(event) => setLanguage(event.target.value)} placeholder="en" maxLength={3} /></Field><div className="flex items-end gap-6 pb-2"><Label className="flex items-center gap-2"><Switch checked={explicit} onCheckedChange={setExplicit} />Explicit</Label><Label className="flex items-center gap-2"><Switch checked={instrumental} onCheckedChange={setInstrumental} />Instrumental</Label></div><Button className="sm:col-span-2" disabled={save.isPending}>Save track metadata</Button></form>
+  const [previewStart, setPreviewStart] = useState(formatPreviewStart(track.preview_start_ms))
+  const previewStartMs = parsePreviewStart(previewStart)
+  const previewProblem = previewStartMs === undefined ? 'Use minutes:seconds, like 1:05, or leave blank for automatic.'
+    : previewStartMs !== null && track.duration_ms && previewStartMs > track.duration_ms - PREVIEW_SECONDS * 1000 ? `Start at least ${PREVIEW_SECONDS} seconds before the end of the song.` : null
+  const save = useMutation({mutationFn: () => updateProviderTrack(track.id, {title, primaryArtistId: artistId, discNumber: track.disc_number, trackNumber: track.track_number, durationMs: track.duration_ms, explicit, languageCode: language || null, genre: genre || null, instrumental, previewStartMs: previewStartMs ?? null}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', releaseId]}); toast({title: `${title} saved`})}})
+  return <form onSubmit={(event) => {event.preventDefault(); if (!previewProblem) save.mutate()}} className="grid gap-4 rounded-md border border-white/10 bg-[#141417] p-5 sm:grid-cols-2"><Field label="Title"><Input value={title} onChange={(event) => setTitle(event.target.value)} required /></Field><Field label="Genre"><Input value={genre} onChange={(event) => setGenre(event.target.value)} /></Field><Field label="Language code"><Input value={language} onChange={(event) => setLanguage(event.target.value)} placeholder="en" maxLength={3} /></Field><div className="flex items-end gap-6 pb-2"><Label className="flex items-center gap-2"><Switch checked={explicit} onCheckedChange={setExplicit} />Explicit</Label><Label className="flex items-center gap-2"><Switch checked={instrumental} onCheckedChange={setInstrumental} />Instrumental</Label></div>
+    <div className="space-y-2 sm:col-span-2">
+      <Label htmlFor={`preview-start-${track.id}`}>Preview starts at</Label>
+      <div className="flex flex-wrap items-center gap-3">
+        <Input id={`preview-start-${track.id}`} className="w-28" inputMode="numeric" placeholder="Automatic" value={previewStart} aria-invalid={Boolean(previewProblem)} aria-describedby={`preview-start-help-${track.id}`} onChange={(event) => setPreviewStart(event.target.value)} />
+        <PreviewStatus status={track.preview_status} />
+      </div>
+      <p id={`preview-start-help-${track.id}`} className={`text-xs ${previewProblem ? 'text-red-400' : 'text-zinc-500'}`}>{previewProblem ?? `Fans hear ${PREVIEW_SECONDS} seconds from this point (minutes:seconds), fading in and out. Leave blank to start 30 seconds in automatically.`}</p>
+    </div>
+    {save.isError && <p className="text-sm text-red-400 sm:col-span-2">{save.error.message}</p>}
+    <Button className="sm:col-span-2" disabled={save.isPending || Boolean(previewProblem)}>Save track metadata</Button></form>
+}
+
+function PreviewStatus({status}: {status: ProviderTrack['preview_status']}) {
+  if (!status) return null
+  const label = status === 'ready' ? 'Preview ready' : status === 'processing' ? 'Preview being prepared' : 'Preview not made yet'
+  return <span className={`rounded-full border px-2.5 py-1 text-xs ${status === 'ready' ? 'border-emerald-400/30 text-emerald-300' : 'border-white/10 text-zinc-400'}`} role="status">{label}</span>
 }
 
 function IsrcStep({detail}: {detail: ProviderReleaseDetail}) {
-  return <><StepHeading title="Existing ISRCs" detail="Already have an ISRC for a recording? Register it here. Tracks without one get a MeJay ISRC automatically after the release is approved." /><div className="divide-y divide-white/10 border-y border-white/10">{detail.tracks.map((track) => <IsrcRow key={track.id} track={track} releaseId={detail.release.id} />)}</div>{detail.tracks.length === 0 && <p className="text-sm text-zinc-500">Add tracks before assigning ISRCs.</p>}</>
+  return <><StepHeading title="ISRCs" detail="Every recording needs one ISRC. Register the code it already has, or have MeJay assign one of its QT-A3L codes now. Tracks left without one get a MeJay ISRC automatically when the release is approved." /><div className="divide-y divide-white/10 border-y border-white/10">{detail.tracks.map((track) => <IsrcRow key={track.id} track={track} releaseId={detail.release.id} />)}</div>{detail.tracks.length === 0 && <p className="text-sm text-zinc-500">Add tracks before assigning ISRCs.</p>}</>
 }
 
 function IsrcRow({track, releaseId}: {track: ProviderTrack; releaseId: string}) {
@@ -194,10 +322,61 @@ function IsrcRow({track, releaseId}: {track: ProviderTrack; releaseId: string}) 
     {!track.isrc && <div className="space-y-3 rounded-md border border-white/10 bg-[#141417] p-4">
       <p className="text-sm font-medium text-zinc-100">Enter Existing ISRC</p>
       <div className="flex flex-wrap gap-3"><Input className="max-w-xs font-mono" value={value} onChange={(event) => setValue(event.target.value)} placeholder="CC-XXX-YY-NNNNN" /><Button variant="outline" disabled={!value.trim() || assign.isPending} onClick={() => assign.mutate()}>Register existing ISRC</Button></div>
-      <p className="text-xs text-zinc-500">No ISRC? Leave this empty. MeJay assigns one when the release is approved.</p>
+      <p className="text-xs text-zinc-500">Songs that are already out almost always have one. Check with your distributor before asking for a new code.</p>
+    </div>}
+    {!track.isrc && <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-white/10 bg-[#141417] p-4">
+      <div>
+        <p className="text-sm font-medium text-zinc-100">No ISRC for this recording?</p>
+        <p className="text-xs text-zinc-500">Get a MeJay ISRC now, or skip this and one is assigned when the release is approved.</p>
+      </div>
+      <AssignMejayIsrcDialog track={track} releaseId={releaseId} />
     </div>}
     {assign.isError && <p className="text-sm text-red-400">{assign.error.message}</p>}
   </div>
+}
+
+const ISRC_ATTESTATIONS = [
+  ['controlsRecording', 'I own or control the rights to this recording.'],
+  ['neverAssignedIsrc', 'This recording has never been given an ISRC (by a distributor, label or anyone else).'],
+  ['authorizeAssignment', 'I authorize MeJay to assign a permanent ISRC to this recording.'],
+] as const
+
+/**
+ * Issues one of MeJay's QT-A3L codes right away. A recording must only ever have one ISRC, so the
+ * artist confirms all three statements first; the API refuses tracks that already have a code.
+ */
+function AssignMejayIsrcDialog({track, releaseId}: {track: ProviderTrack; releaseId: string}) {
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [checked, setChecked] = useState<Record<(typeof ISRC_ATTESTATIONS)[number][0], boolean>>({controlsRecording: false, neverAssignedIsrc: false, authorizeAssignment: false})
+  const allChecked = ISRC_ATTESTATIONS.every(([key]) => checked[key])
+  const generate = useMutation({
+    mutationFn: () => generateProviderIsrc(track.id, {controlsRecording: true, neverAssignedIsrc: true, authorizeAssignment: true}),
+    onSuccess: async (result) => {
+      setOpen(false)
+      await queryClient.invalidateQueries({queryKey: ['provider', 'release', releaseId]})
+      toast({title: 'ISRC assigned', description: result?.isrc ? formatIsrc(result.isrc) : undefined})
+    },
+  })
+  return <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (!next) generate.reset() }}>
+    <DialogTrigger asChild><Button>Assign MeJay ISRC</Button></DialogTrigger>
+    <DialogContent className="border-white/10 bg-[#111114] text-zinc-100">
+      <DialogHeader>
+        <DialogTitle>Assign a MeJay ISRC</DialogTitle>
+        <DialogDescription>For “{track.title}”. The code is permanent and stays with this recording wherever it is sold or streamed.</DialogDescription>
+      </DialogHeader>
+      <div className="space-y-3">
+        {ISRC_ATTESTATIONS.map(([key, label]) => <Label key={key} className="flex items-start gap-3 text-sm font-normal leading-5">
+          <Checkbox checked={checked[key]} onCheckedChange={(value) => setChecked((current) => ({...current, [key]: value === true}))} className="mt-0.5" />{label}
+        </Label>)}
+      </div>
+      {generate.isError && <p role="alert" className="text-sm text-red-400">{generate.error.message}</p>}
+      <DialogFooter>
+        <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+        <Button disabled={!allChecked || generate.isPending} onClick={() => generate.mutate()}>{generate.isPending ? 'Assigning...' : 'Assign ISRC'}</Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
 }
 
 function formatIsrc(value: string) {const canonical = value.replace(/[-\s]/g, '').toUpperCase(); return canonical.length === 12 ? `${canonical.slice(0, 2)}-${canonical.slice(2, 5)}-${canonical.slice(5, 7)}-${canonical.slice(7)}` : value}
@@ -296,7 +475,14 @@ function ReviewStep({detail}: {detail: ProviderReleaseDetail}) {
   const submit = useMutation({mutationFn: () => submitProviderRelease(detail.release.id, detail.release.version), onSuccess: () => {toast({title: 'Submitted for MeJay Review', description: 'We will let you know when the review is complete.'}); navigate('/app/artist')}})
   const editable = ['DRAFT', 'METADATA_COMPLETE', 'RIGHTS_COMPLETE', 'ISRC_COMPLETE', 'PRICING_COMPLETE', 'CHANGES_REQUESTED'].includes(detail.release.status)
   const latestFeedback = detail.reviewEvents.find((event) => event.note)?.note
-  return <><StepHeading title="Review & Submit" detail="Confirm the release package before sending it to MEJay Publishing." />{latestFeedback && <div className="mb-5 border border-amber-400/30 bg-amber-400/5 p-4 text-sm text-amber-200"><p className="font-medium">Review feedback</p><p className="mt-1">{latestFeedback}</p></div>}<div className="divide-y divide-white/10 border-y border-white/10">{detail.prerequisites.length === 0 ? <div className="flex items-center gap-3 py-4 text-emerald-400"><Check className="h-4 w-4" />All submission requirements are complete</div> : detail.prerequisites.map((item) => <div key={item} className="py-3 text-sm text-zinc-400">Required: {item}</div>)}</div><Button className="mt-6 bg-emerald-400 text-zinc-950 hover:bg-emerald-300" disabled={!editable || detail.prerequisites.length > 0 || submit.isPending} onClick={() => submit.mutate()}>{submit.isPending ? 'Submitting...' : editable ? 'Submit to MEJay Review' : `Release is ${detail.release.status.replace(/_/g, ' ')}`}</Button>{submit.isError && <p className="mt-3 text-sm text-red-400">{submit.error.message}</p>}</>
+  const requested = detail.release.requested_release_at
+  const schedule = <div className="mb-5 border border-white/10 bg-white/[0.03] p-4 text-sm">
+    <p className="font-medium">Release date</p>
+    <p className="mt-1 text-zinc-300">{requested ? `${formatReleaseTime(requested, detail.release.release_timezone)}${detail.release.preorders_enabled ? ' · pre-orders on' : ''}` : 'As soon as MeJay approves'}</p>
+    <p className="mt-1 text-xs text-zinc-500">{RELEASE_LEAD_MESSAGE}</p>
+    {requested && !meetsReleaseLead(requested) && editable && <p className="mt-2 text-xs text-amber-300">Your release date is less than 7 days away. Choose a later date in Release Information before submitting.</p>}
+  </div>
+  return <><StepHeading title="Review & Submit" detail="Confirm the release package before sending it to MEJay Publishing." />{schedule}{latestFeedback && <div className="mb-5 border border-amber-400/30 bg-amber-400/5 p-4 text-sm text-amber-200"><p className="font-medium">Review feedback</p><p className="mt-1">{latestFeedback}</p></div>}<div className="divide-y divide-white/10 border-y border-white/10">{detail.prerequisites.length === 0 ? <div className="flex items-center gap-3 py-4 text-emerald-400"><Check className="h-4 w-4" />All submission requirements are complete</div> : detail.prerequisites.map((item) => <div key={item} className="py-3 text-sm text-zinc-400">Required: {item}</div>)}</div><Button className="mt-6 bg-emerald-400 text-zinc-950 hover:bg-emerald-300" disabled={!editable || detail.prerequisites.length > 0 || submit.isPending} onClick={() => submit.mutate()}>{submit.isPending ? 'Submitting...' : editable ? 'Submit to MEJay Review' : `Release is ${detail.release.status.replace(/_/g, ' ')}`}</Button>{submit.isError && <p className="mt-3 text-sm text-red-400">{submit.error.message}</p>}</>
 }
 /** Per-sale estimate computed by the API with the same calculator used when a sale is fulfilled. */
 function PayoutEstimate({amountMinor}: {amountMinor: number}) {

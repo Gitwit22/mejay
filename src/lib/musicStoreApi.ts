@@ -11,6 +11,8 @@ export type StoreRelease = {
   artist_name: string
   /** Public artist page slug (absent from older API responses). */
   artist_slug?: string
+  /** Full credit, e.g. "John Blaze & Kay feat. Boldy James" (absent from older API responses). */
+  artist_credit?: string
   artwork_asset_id: string | null
   product_id: string
   amount_minor: number
@@ -18,6 +20,10 @@ export type StoreRelease = {
   purchase_available: boolean
   track_count: number
   preview_asset_id: string | null
+  /** 'preorder' for an approved, scheduled release open for pre-order (absent = available). */
+  availability?: 'available' | 'preorder'
+  release_at?: string | null
+  release_timezone?: string | null
 }
 
 export type StoreTrack = {
@@ -84,6 +90,19 @@ export type PublicArtist = {
 /** Public artist page: profile plus the artist's LIVE releases (same data as the marketplace). */
 export function getPublicArtist(slug: string): Promise<{artist: PublicArtist; releases: StoreRelease[]}> {
   return request(`/api/store/artists/${encodeURIComponent(slug)}`)
+}
+
+/** Why an artist page is or is not public; shown to the artist on their preview. */
+export type ArtistPageVisibility = {public: boolean; suspended: boolean; payoutsReady: boolean; hasLiveRelease: boolean}
+
+/** The signed-in owner's view of their own artist page, available before it is public. */
+export function getArtistPagePreview(artistId: string): Promise<{artist: PublicArtist; releases: StoreRelease[]; visibility: ArtistPageVisibility}> {
+  return request(`/api/marketplace/artists/${encodeURIComponent(artistId)}/page-preview`)
+}
+
+/** One of the owner's profile images, served only to the owning account. */
+export function artistPreviewImageUrl(artistId: string, assetId: string | null | undefined): string | null {
+  return assetId ? apiUrl(`/api/marketplace/artists/${encodeURIComponent(artistId)}/page-preview/images/${encodeURIComponent(assetId)}`) : null
 }
 
 export function getStoreRelease(releaseId: string): Promise<StoreReleaseDetail> {

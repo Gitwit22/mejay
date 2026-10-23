@@ -1,4 +1,5 @@
 import {bootstrapProviderAccount} from './onboarding'
+import {MARKETPLACE_STORAGE_PREFIX} from './storage-keys'
 import {userHasArtistPortalAccess} from '../account/artist-access'
 import {buildGeneratedIsrc, externalIsrcProblem, type IsrcGenerationConfig} from './isrc'
 import type {PrivateBucket} from '../services/r2'
@@ -10,6 +11,7 @@ import type {
   PriceInput,
   ProductInput,
   ProviderInput,
+  ProviderSettingsInput,
   ReleaseDraftInput,
   ReleaseInput,
   ReleasePriceInput,
@@ -26,6 +28,9 @@ import {formatMinimumPrice, getReleaseSaleReadiness, MINIMUM_RELEASE_PRICE_MINOR
 import {inspectUpload, validateInspectedUpload, isTruncatedJpegHeader} from './upload-validation'
 import {slugifyArtistName} from './artist-profile'
 import {releaseCertificationProblems, snapshotReleaseCertification, type RequestMeta} from './release-submission-service'
+import {requestedReleaseProblem} from './release-schedule'
+import {maxPreviewStartMs} from '../audio/transcode'
+import {formatArtistCredit} from './artist-credit'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -165,16 +170,23 @@ const PROVIDER_TRANSITION_TARGETS = new Set<string>([
   'DRAFT', 'METADATA_COMPLETE', 'RIGHTS_COMPLETE', 'ISRC_COMPLETE', 'PRICING_COMPLETE', 'SUBMITTED',
 ])
 
-async function assertProviderCanSubmit(db: Database, providerId: string): Promise<void> {
+/** Why the provider account cannot submit releases right now, or null when it can. */
+async function providerSubmissionBlocker(db: Database, providerId: string): Promise<{code: 'provider_suspended' | 'provider_not_approved'; message: string; prerequisite: string} | null> {
   const provider = await db.prepare(
     'SELECT status, suspended_at FROM provider_profiles WHERE id = ?1',
   ).bind(providerId).first<{status: string; suspended_at: string | null}>()
   if (provider?.suspended_at) {
-    throw new MarketplaceError(409, 'provider_suspended', 'Suspended providers cannot submit releases')
+    return {code: 'provider_suspended', message: 'Suspended providers cannot submit releases', prerequisite: 'artist account reinstated by MEJay (it is suspended)'}
   }
   if (provider?.status !== 'approved') {
-    throw new MarketplaceError(409, 'provider_not_approved', 'The provider must be approved before submitting releases')
+    return {code: 'provider_not_approved', message: 'The provider must be approved before submitting releases', prerequisite: 'artist account approved by MEJay (your application is still in review)'}
   }
+  return null
+}
+
+async function assertProviderCanSubmit(db: Database, providerId: string): Promise<void> {
+  const blocker = await providerSubmissionBlocker(db, providerId)
+  if (blocker) throw new MarketplaceError(409, blocker.code, blocker.message)
 }
 
 const JPEG_HEADER_SCAN_BYTES = 4 * 1024 * 1024
@@ -437,8 +449,8 @@ export class MarketplaceService {
        WHERE r.provider_profile_id = ?1
        GROUP BY r.id, a.id, a.name
        ORDER BY r.updated_at DESC, r.created_at DESC`,
-    ).bind(context.providerId).all()
-    return results
+    ).bind(context.providerId).all<Record<string, unknown>>()
+    return results.map(withCalendarDates)
   }
 
   async getRelease(userId: string, releaseId: string): Promise<unknown> {
@@ -449,11 +461,23 @@ export class MarketplaceService {
        LEFT JOIN release_artists ra ON ra.release_id = r.id AND ra.provider_profile_id = r.provider_profile_id AND ra.is_primary = TRUE
        LEFT JOIN artists a ON a.id = ra.artist_id AND a.provider_profile_id = r.provider_profile_id
        WHERE r.id = ?1 AND r.provider_profile_id = ?2`,
-    ).bind(releaseId, context.providerId).first()
+    ).bind(releaseId, context.providerId).first<Record<string, unknown>>().then((row) => row && withCalendarDates(row))
     if (!release) throw new MarketplaceError(404, 'not_found', 'Release was not found')
+    const {results: additionalArtists} = await this.database.prepare(
+      `SELECT role, artist_id, display_name AS name FROM release_artist_credits
+       WHERE release_id = ?1 AND provider_profile_id = ?2 ORDER BY role DESC, position`,
+    ).bind(releaseId, context.providerId).all<{role: 'primary' | 'featured'; artist_id: string | null; name: string}>()
+    release.additional_artists = additionalArtists
+    release.artist_credit = formatArtistCredit(release.primary_artist_name as string | null, additionalArtists)
 
     const {results: tracks} = await this.database.prepare(
       `SELECT t.*, a.name AS primary_artist_name, i.isrc,
+        -- Store preview clip for the track's current setting: ready, being made, or not yet made.
+        CASE
+          WHEN EXISTS (SELECT 1 FROM marketplace_assets clip WHERE clip.track_id = t.id AND clip.kind = 'audio_preview'
+            AND clip.processing_status = 'ready' AND ${PREVIEW_MATCHES_SETTING_SQL('clip', 't')}) THEN 'ready'
+          WHEN EXISTS (SELECT 1 FROM audio_processing_jobs job WHERE job.track_id = t.id AND job.status IN ('queued', 'processing')) THEN 'processing'
+          ELSE 'waiting' END AS preview_status,
         COALESCE((SELECT json_agg(json_build_object('name', c.name, 'role', c.role, 'publisherName', c.publisher_name) ORDER BY c.created_at, c.id)
           FROM track_contributors c WHERE c.track_id = t.id), '[]'::json) AS contributors,
         COALESCE((SELECT json_agg(fa.artist_id ORDER BY fa.artist_id) FROM track_artists fa
@@ -466,8 +490,10 @@ export class MarketplaceService {
        ORDER BY t.disc_number, t.track_number, t.created_at`,
     ).bind(releaseId, context.providerId).all()
     const {results: assets} = await this.database.prepare(
+      // MeJay-generated delivery/preview files are not artist uploads; keep the draft view to uploads.
       `SELECT * FROM marketplace_assets
-       WHERE release_id = ?1 OR track_id IN (SELECT id FROM tracks WHERE release_id = ?1 AND provider_profile_id = ?2)
+       WHERE (release_id = ?1 OR track_id IN (SELECT id FROM tracks WHERE release_id = ?1 AND provider_profile_id = ?2))
+         AND kind NOT IN ('audio_delivery', 'audio_preview')
        ORDER BY created_at`,
     ).bind(releaseId, context.providerId).all()
     const {results: rights} = await this.database.prepare(
@@ -502,8 +528,53 @@ export class MarketplaceService {
       `SELECT decision, note, from_status, to_status, created_at
        FROM release_review_events WHERE release_id = ?1 ORDER BY created_at DESC`,
     ).bind(releaseId).all()
-    const prerequisites = await this.unmetPrerequisites(this.database, release, 'SUBMITTED')
+    // The account gate is enforced on submit; list it here too so the wizard never claims a
+    // release is ready to submit while the server would refuse it.
+    const accountBlocker = await providerSubmissionBlocker(this.database, context.providerId)
+    const prerequisites = [
+      ...(accountBlocker ? [accountBlocker.prerequisite] : []),
+      ...await this.unmetPrerequisites(this.database, release, 'SUBMITTED'),
+    ]
     return {release, tracks, assets, rights, product, trackProducts, splits, reviewEvents, prerequisites}
+  }
+
+  /**
+   * Deletes a release the artist is still drafting, with its tracks, uploads and draft data.
+   * Refused once a release has been submitted or published, when any track carries an ISRC (a code
+   * stays with its recording, so it must not be orphaned by a delete), or when anyone has checked out.
+   * Returns the storage keys of the deleted uploads so the caller can remove the files after commit.
+   */
+  async deleteReleaseDraft(userId: string, releaseId: string): Promise<{deleted: true; storageKeys: string[]}> {
+    return this.database.transaction(async (db: Database) => {
+      const context = await providerContext(db, userId)
+      const release = await db.prepare(
+        'SELECT * FROM releases WHERE id = ?1 AND provider_profile_id = ?2 FOR UPDATE',
+      ).bind(releaseId, context.providerId).first<{id: string; title: string; status: ReleaseStatus; published_at: string | null}>()
+      if (!release) throw new MarketplaceError(404, 'not_found', 'Release was not found')
+      if (!isReleaseMutable(release.status) || release.published_at) {
+        throw new MarketplaceError(409, 'release_not_deletable', 'Only drafts can be deleted. Submitted or published releases stay on record; ask MeJay to take a live release down instead.')
+      }
+      const blockers = await db.prepare(
+        `SELECT
+           EXISTS (SELECT 1 FROM isrc_assignments isrc JOIN tracks t ON t.id = isrc.track_id
+             WHERE t.release_id = ?1 AND isrc.revoked_at IS NULL) AS has_isrc,
+           EXISTS (SELECT 1 FROM marketplace_checkout_attempts WHERE release_id = ?1)
+             OR EXISTS (SELECT 1 FROM marketplace_order_items WHERE release_id = ?1) AS has_checkout`,
+      ).bind(releaseId).first<{has_isrc: boolean; has_checkout: boolean}>()
+      if (blockers?.has_isrc) {
+        throw new MarketplaceError(409, 'release_has_isrc', 'A track on this draft has an ISRC, so it cannot be deleted here. Contact MeJay support to remove it.')
+      }
+      if (blockers?.has_checkout) {
+        throw new MarketplaceError(409, 'release_has_orders', 'This release has checkout history, so it cannot be deleted.')
+      }
+      const {results: assets} = await db.prepare(
+        `SELECT storage_key FROM marketplace_assets
+         WHERE release_id = ?1 OR track_id IN (SELECT id FROM tracks WHERE release_id = ?1)`,
+      ).bind(releaseId).all<{storage_key: string}>()
+      await db.prepare('DELETE FROM releases WHERE id = ?1 AND provider_profile_id = ?2').bind(releaseId, context.providerId).run()
+      await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'release', entityId: releaseId, action: 'release.deleted', before: release})
+      return {deleted: true as const, storageKeys: assets.map((asset) => asset.storage_key)}
+    })
   }
 
   async updateReleaseDraft(userId: string, releaseId: string, input: ReleaseDraftInput): Promise<unknown> {
@@ -518,6 +589,7 @@ export class MarketplaceService {
         throw new MarketplaceError(409, 'stale_release_version', 'The release was modified by another request')
       }
       await assertOwned(db, 'artists', input.primaryArtistId, context.providerId)
+      const schedule = resolveDraftSchedule(before, input)
       const now = nowIso()
       const duplicateFingerprint = releaseFingerprint(input)
       const row = await inserted<Record<string, unknown>>(db.prepare(
@@ -526,6 +598,7 @@ export class MarketplaceService {
           original_release_date = ?6, scheduled_release_at = ?7, genre = ?8, subgenre = ?9, upc = ?10,
           copyright_year = ?11, copyright_holder = ?12, phonographic_copyright_year = ?13,
           phonographic_copyright_holder = ?14, draft_step = ?15, duplicate_fingerprint = ?16,
+          requested_release_at = ?21, release_timezone = ?22, preorders_enabled = ?23, preview_timing = ?24,
           version = version + 1, updated_at = ?17
          WHERE id = ?18 AND provider_profile_id = ?19 AND version = ?20 RETURNING *`,
       ).bind(
@@ -534,7 +607,8 @@ export class MarketplaceService {
         input.genre ?? null, input.subgenre ?? null, input.upc ?? null, input.copyrightYear ?? null,
         input.copyrightHolder ?? null, input.phonographicCopyrightYear ?? null,
         input.phonographicCopyrightHolder ?? null, input.draftStep, duplicateFingerprint, now, releaseId, context.providerId,
-        input.expectedVersion,
+        input.expectedVersion, schedule.requestedReleaseAt, schedule.releaseTimezone, schedule.preordersEnabled,
+        input.previewTiming ?? (before.preview_timing as string | undefined) ?? 'after_release',
       ))
       await db.prepare(
         `UPDATE release_artists SET is_primary = FALSE
@@ -545,8 +619,9 @@ export class MarketplaceService {
          VALUES (?1, ?2, ?3, 'primary', TRUE)
          ON CONFLICT (release_id, artist_id, role) DO UPDATE SET is_primary = TRUE`,
       ).bind(context.providerId, releaseId, input.primaryArtistId).run()
-      await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'release', entityId: releaseId, action: 'release.draft_updated', before, after: row})
-      return {...row, primary_artist_id: input.primaryArtistId}
+      if (input.additionalArtists !== undefined) await replaceReleaseCredits(db, context.providerId, releaseId, input.primaryArtistId, input.additionalArtists)
+      await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'release', entityId: releaseId, action: 'release.draft_updated', before, after: {...row, additional_artists: input.additionalArtists}})
+      return {...withCalendarDates(row), primary_artist_id: input.primaryArtistId}
     })
   }
 
@@ -568,6 +643,31 @@ export class MarketplaceService {
       await db.prepare("UPDATE users SET account_intent = 'provider', updated_at = ?1 WHERE id = ?2").bind(now, userId).run()
       await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'provider', entityId: context.providerId, action: 'provider.completed', after: row})
       return row
+    })
+  }
+
+  /**
+   * Saves the account's business details from Settings. Owners and admins only. Unlike
+   * completeProvider (onboarding), this never changes review status or account intent.
+   */
+  async updateProviderSettings(userId: string, input: ProviderSettingsInput): Promise<unknown> {
+    return this.database.transaction(async (db: Database) => {
+      const context = await providerContext(db, userId)
+      if (!['owner', 'admin'].includes(context.role)) {
+        throw new MarketplaceError(403, 'provider_settings_forbidden', 'Only the account owner or an admin can change these settings')
+      }
+      const before = await db.prepare(
+        `SELECT display_name, legal_name, contact_email, country_code, bio FROM provider_profiles WHERE id = ?1 FOR UPDATE`,
+      ).bind(context.providerId).first()
+      if (!before) throw new MarketplaceError(404, 'not_found', 'Provider profile was not found')
+      const row = await inserted<Record<string, unknown>>(db.prepare(
+        `UPDATE provider_profiles SET display_name = ?1, legal_name = ?2, contact_email = ?3, country_code = ?4, bio = ?5,
+           updated_at = ?6
+         WHERE id = ?7
+         RETURNING id, display_name, legal_name, slug, contact_email, country_code, bio, status, created_at, updated_at`,
+      ).bind(input.displayName, input.legalName || null, input.contactEmail, input.countryCode, input.bio || null, nowIso(), context.providerId))
+      await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'provider', entityId: context.providerId, action: 'provider.settings_updated', before, after: row})
+      return {...row, role: context.role}
     })
   }
 
@@ -633,17 +733,18 @@ export class MarketplaceService {
       await assertOwned(db, 'artists', input.primaryArtistId, context.providerId)
       const before = await db.prepare(
         'SELECT * FROM tracks WHERE id = ?1 AND provider_profile_id = ?2',
-      ).bind(trackId, context.providerId).first()
+      ).bind(trackId, context.providerId).first<Record<string, unknown>>()
+      const previewStartMs = resolvePreviewStart(before, input)
       const row = await inserted<any>(db.prepare(
         `UPDATE tracks SET title = ?1, version_title = ?2, disc_number = ?3, track_number = ?4,
           duration_ms = ?5, explicit = ?6, language_code = ?7, genre = ?8, instrumental = ?9,
-          recording_year = ?10, recording_location = ?11, updated_at = CURRENT_TIMESTAMP
+          recording_year = ?10, recording_location = ?11, preview_start_ms = ?14, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?12 AND provider_profile_id = ?13 RETURNING *`,
       ).bind(
         input.title, input.versionTitle ?? null, input.discNumber, input.trackNumber,
         input.durationMs ?? null, input.explicit, input.languageCode ?? null, input.genre ?? null,
         input.instrumental, input.recordingYear ?? null, input.recordingLocation ?? null,
-        trackId, context.providerId,
+        trackId, context.providerId, previewStartMs,
       ))
       await db.prepare(
         'UPDATE track_artists SET is_primary = FALSE WHERE track_id = ?1 AND provider_profile_id = ?2 AND is_primary = TRUE',
@@ -685,7 +786,8 @@ export class MarketplaceService {
       await db.prepare('SELECT id FROM provider_profiles WHERE id = ?1 FOR UPDATE').bind(context.providerId).first()
       const storage = await db.prepare(
         `SELECT COALESCE(SUM(byte_size), 0)::bigint AS used_bytes FROM marketplace_assets
-         WHERE provider_profile_id = ?1 AND processing_status <> 'failed'`,
+         WHERE provider_profile_id = ?1 AND processing_status <> 'failed'
+           AND kind NOT IN ('audio_delivery', 'audio_preview')`,
       ).bind(context.providerId).first<{used_bytes: number | string}>()
       if (exceedsProviderStorageLimit(Number(storage?.used_bytes ?? 0), input.byteSize)) {
         throw new MarketplaceError(422, 'provider_storage_limit_exceeded', 'Provider storage limit exceeded')
@@ -701,7 +803,7 @@ export class MarketplaceService {
       const trackId = input.kind === 'audio' ? input.trackId : null
       const artistId = 'artistId' in input ? input.artistId : null
       const targetId = releaseId ?? trackId ?? artistId
-      const storageKey = `marketplace/${context.providerId}/${input.kind}/${targetId}/${id}.${extension}`
+      const storageKey = `${MARKETPLACE_STORAGE_PREFIX}${context.providerId}/${input.kind}/${targetId}/${id}.${extension}`
       const metadata = 'width' in input
         ? {fileName: input.fileName, width: input.width, height: input.height}
         : {fileName: input.fileName}
@@ -1149,8 +1251,114 @@ export class MarketplaceService {
       if (pricing?.missing_splits !== 0) unmet.push('active revenue splits totaling 10000 basis points for every track')
     }
 
-    if (targetStatus === 'SUBMITTED') unmet.push(...await releaseCertificationProblems(db, release))
+    if (targetStatus === 'SUBMITTED') {
+      unmet.push(...await releaseCertificationProblems(db, release))
+      // Measured from the moment of submission; releases without a requested date are unaffected.
+      const releaseDateProblem = requestedReleaseProblem(release.requested_release_at)
+      if (releaseDateProblem) unmet.push(releaseDateProblem)
+    }
 
     return unmet
   }
 }
+
+/**
+ * The release-date fields a draft save will store. Omitted fields keep their stored value so older
+ * clients and step saves never clear them; null clears. A newly chosen time must be in the future,
+ * and pre-orders need a release time to count down to.
+ */
+export function resolveDraftSchedule(
+  before: Record<string, unknown>,
+  input: Pick<ReleaseDraftInput, 'requestedReleaseAt' | 'releaseTimezone' | 'preordersEnabled'>,
+  now = Date.now(),
+): {requestedReleaseAt: string | null; releaseTimezone: string | null; preordersEnabled: boolean} {
+  const stored = before.requested_release_at ? new Date(before.requested_release_at as string).toISOString() : null
+  const requestedReleaseAt = input.requestedReleaseAt === undefined
+    ? stored
+    : input.requestedReleaseAt === null ? null : new Date(input.requestedReleaseAt).toISOString()
+  if (requestedReleaseAt && requestedReleaseAt !== stored && new Date(requestedReleaseAt).getTime() <= now) {
+    throw new MarketplaceError(422, 'release_date_in_past', 'Choose a release date and time in the future.')
+  }
+  const releaseTimezone = requestedReleaseAt
+    ? (input.releaseTimezone === undefined ? (before.release_timezone as string | null) : input.releaseTimezone) || 'UTC'
+    : null
+  const preordersEnabled = input.preordersEnabled === undefined ? Boolean(before.preorders_enabled) : input.preordersEnabled
+  if (preordersEnabled && !requestedReleaseAt) {
+    throw new MarketplaceError(422, 'preorders_need_release_date', 'Pre-orders need a release date. Choose one or turn pre-orders off.')
+  }
+  return {requestedReleaseAt, releaseTimezone, preordersEnabled}
+}
+
+/**
+ * SQL: the preview clip `clip` was made for track `track`'s current preview setting (start choice,
+ * null = automatic) from its latest audio upload. Clips made before artists could choose a start do
+ * not match, so they are regenerated.
+ */
+export function PREVIEW_MATCHES_SETTING_SQL(clip: string, track: string): string {
+  return `(${clip}.metadata ? 'previewSetting'
+    AND ${clip}.metadata->>'previewSetting' IS NOT DISTINCT FROM ${track}.preview_start_ms::text
+    AND ${clip}.metadata->>'sourceAssetId' = (SELECT latest.id FROM marketplace_assets latest WHERE latest.track_id = ${track}.id
+      AND latest.kind = 'audio' AND latest.processing_status = 'ready' ORDER BY latest.created_at DESC LIMIT 1))`
+}
+
+/** Preview start to store for a track save: omitted keeps it; it must leave a full 10-second clip. */
+export function resolvePreviewStart(before: Record<string, unknown> | null, input: Pick<TrackDraftInput, 'previewStartMs' | 'durationMs'>): number | null {
+  if (input.previewStartMs === undefined) return (before?.preview_start_ms as number | null | undefined) ?? null
+  if (input.previewStartMs === null) return null
+  const duration = input.durationMs ?? (before?.duration_ms as number | null | undefined) ?? null
+  if (duration && input.previewStartMs > maxPreviewStartMs(duration)) {
+    const latest = Math.floor(maxPreviewStartMs(duration) / 1000)
+    throw new MarketplaceError(422, 'preview_start_too_late', `The preview must start early enough to play 10 seconds. The latest start for this song is ${Math.floor(latest / 60)}:${String(latest % 60).padStart(2, '0')}.`)
+  }
+  return input.previewStartMs
+}
+
+/**
+ * Postgres DATE columns arrive as JS Dates (local midnight), which serialize as full timestamps
+ * ("2026-11-06T00:00:00.000Z"). The draft API accepts and the date inputs expect plain calendar
+ * dates, so release rows sent to the artist portal carry "YYYY-MM-DD".
+ */
+export function withCalendarDates<T extends Record<string, unknown>>(row: T): T {
+  const value = row.original_release_date
+  if (value instanceof Date) {
+    const pad = (part: number) => String(part).padStart(2, '0')
+    return {...row, original_release_date: `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`}
+  }
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) return {...row, original_release_date: value.slice(0, 10)}
+  return row
+}
+
+type AdditionalArtistInput = NonNullable<ReleaseDraftInput['additionalArtists']>
+
+/**
+ * Replaces a draft's extra primary/featured credits. Account artists must belong to this account
+ * (their current name is stored as the credit); a name-only credit is someone not on MeJay. The lead
+ * primary artist and repeats are refused so the credit line never names someone twice.
+ */
+async function replaceReleaseCredits(db: Database, providerId: string, releaseId: string, leadArtistId: string, credits: AdditionalArtistInput): Promise<void> {
+  const seen = new Set<string>()
+  const rows: Array<{role: 'primary' | 'featured'; artistId: string | null; name: string}> = []
+  for (const credit of credits) {
+    let name = credit.name.replace(/\s+/g, ' ').trim()
+    const artistId = credit.artistId ?? null
+    if (artistId) {
+      if (artistId === leadArtistId) throw new MarketplaceError(422, 'duplicate_artist_credit', 'The primary artist is already credited. Choose a different artist.')
+      const artist = await db.prepare('SELECT name FROM artists WHERE id = ?1 AND provider_profile_id = ?2').bind(artistId, providerId).first<{name: string}>()
+      if (!artist) throw new MarketplaceError(404, 'not_found', 'Artist was not found')
+      name = artist.name
+    }
+    const key = artistId ? `id:${artistId}` : `name:${name.toLowerCase()}`
+    if (seen.has(key) || seen.has(`name:${name.toLowerCase()}`)) throw new MarketplaceError(422, 'duplicate_artist_credit', `${name} is listed more than once.`)
+    seen.add(key)
+    seen.add(`name:${name.toLowerCase()}`)
+    rows.push({role: credit.role, artistId, name})
+  }
+  await db.prepare('DELETE FROM release_artist_credits WHERE release_id = ?1 AND provider_profile_id = ?2').bind(releaseId, providerId).run()
+  for (const [position, row] of rows.entries()) {
+    await db.prepare(
+      `INSERT INTO release_artist_credits (id, provider_profile_id, release_id, role, artist_id, display_name, position)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+    ).bind(crypto.randomUUID(), providerId, releaseId, row.role, row.artistId, row.name, position).run()
+  }
+}
+

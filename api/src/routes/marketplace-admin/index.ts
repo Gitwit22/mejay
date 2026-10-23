@@ -33,6 +33,13 @@ export const commandRelease = async (context: {request: Request; env: EnvWithDb;
       // Read only for approval, so an ISRC misconfiguration cannot block unrelated admin actions.
       isrcConfig: command.action === 'approve' ? readIsrcGenerationConfig(context.env as unknown as NodeJS.ProcessEnv) : null,
     })
+    // Cancelled pre-orders: request the refunds right away; the scheduler retries any that fail.
+    const stripeKey = String((context.env as {STRIPE_SECRET_KEY?: string}).STRIPE_SECRET_KEY ?? '').trim()
+    if (command.action === 'cancel_preorders' && stripeKey) {
+      await new CommerceService(context.env.DB, stripeKey).processPreorderRefunds().catch((refundError) => {
+        console.error('[marketplace-admin] pre-order refunds deferred to the scheduler', refundError instanceof Error ? refundError.name : 'unknown')
+      })
+    }
     return json({ok: true, data})
   } catch (error) {
     if (error instanceof ZodError) return json({ok: false, error: 'invalid_request', issues: error.issues}, {status: 400})
