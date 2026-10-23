@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react'
+import {useEffect, useRef, useState} from 'react'
 import {keepPreviousData, useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {ArrowLeft, Check, ChevronRight, Disc3, Upload} from 'lucide-react'
 import {Link, useNavigate, useParams} from 'react-router-dom'
@@ -6,6 +6,7 @@ import {Link, useNavigate, useParams} from 'react-router-dom'
 import {CertificationStep, CreditsStep} from '@/app/components/provider/ReleaseSubmissionSteps'
 import {ReleaseDateTimePicker} from '@/app/components/provider/ReleaseDateTimePicker'
 import {ReleaseLockBanner} from '@/app/components/provider/ReleaseLockBanner'
+import {flushPendingSaves, PendingSavesProvider, usePendingSave, type PendingSaveRegistry} from '@/app/components/provider/pendingStepSaves'
 import {releaseEditState} from '@/lib/releaseEditState'
 import {AdditionalArtistsField} from '@/app/components/provider/AdditionalArtistsField'
 import {creditName, creditsInput, formatArtistCredit, rowsFromCredits, titleHasFeature, type AdditionalArtistRow} from '@/lib/artistCredit'
@@ -59,10 +60,14 @@ export default function ReleaseWizardPage() {
   const queryClient = useQueryClient()
   const detail = useQuery({queryKey: ['provider', 'release', releaseId], queryFn: () => getProviderRelease(releaseId), enabled: Boolean(releaseId)})
   const activeStep = steps.some((item) => item.id === step) ? step as ReleaseDraftStep : 'release-information'
+  const pendingSaves = useRef<PendingSaveRegistry>(new Map())
   const advance = useMutation({
     mutationFn: async (next: ReleaseDraftStep) => {
       if (!detail.data) throw new Error('Release is still loading')
-      const release = detail.data.release
+      // Save what is on screen first, then advance from the release as it now stands (its version
+      // changes when Release Information is saved).
+      await flushPendingSaves(pendingSaves.current)
+      const {release} = await queryClient.fetchQuery({queryKey: ['provider', 'release', releaseId], queryFn: () => getProviderRelease(releaseId), staleTime: 0})
       return updateProviderRelease(releaseId, {
         expectedVersion: release.version, draftStep: next, title: release.title,
         versionTitle: release.version_title, releaseType: release.release_type,
@@ -101,6 +106,7 @@ export default function ReleaseWizardPage() {
       </nav>
       <main className="min-w-0 max-w-3xl">
         <ReleaseLockBanner release={detail.data.release} />
+        <PendingSavesProvider value={pendingSaves.current}>
         <fieldset disabled={readOnly} aria-disabled={readOnly} className="min-w-0">
         {activeStep === 'release-information' && <ReleaseInformation detail={detail.data} />}
         {activeStep === 'artwork' && <ArtworkStep releaseId={releaseId} detail={detail.data} />}
@@ -114,6 +120,7 @@ export default function ReleaseWizardPage() {
         {activeStep === 'certification' && <CertificationStep detail={detail.data} onBack={() => navigate(`/app/artist/releases/${releaseId}/edit/splits`)} onContinue={() => advance.mutate('review')} />}
         {activeStep === 'review' && <ReviewStep detail={detail.data} />}
         </fieldset>
+        </PendingSavesProvider>
         {advance.isError && <p className="mt-5 text-sm text-red-400">{advance.error.message}</p>}
         {next && activeStep !== 'certification' && <div className="mt-8 flex justify-end border-t border-white/10 pt-5"><Button onClick={() => readOnly ? navigate(`/app/artist/releases/${releaseId}/edit/${next}`) : advance.mutate(next)} disabled={advance.isPending} className="gap-2 bg-emerald-400 text-zinc-950 hover:bg-emerald-300">{readOnly ? 'Next' : 'Save and continue'} <ChevronRight className="h-4 w-4" /></Button></div>}
       </main>
@@ -129,7 +136,7 @@ function ReleaseInformation({detail}: {detail: ProviderReleaseDetail}) {
   const queryClient = useQueryClient()
   const release = detail.release
   const artists = useQuery({queryKey: ['provider', 'artists'], queryFn: listProviderArtists})
-  const [form, setForm] = useState({title: release.title, versionTitle: release.version_title || '', releaseType: release.release_type, primaryArtistId: release.primary_artist_id, labelName: release.label_name || '', catalogNumber: release.catalog_number || '', genre: release.genre || '', subgenre: release.subgenre || '', upc: release.upc || '', originalReleaseDate: release.original_release_date || '', copyrightYear: release.copyright_year?.toString() || '', copyrightHolder: release.copyright_holder || '', phonographicCopyrightYear: release.phonographic_copyright_year?.toString() || '', phonographicCopyrightHolder: release.phonographic_copyright_holder || ''})
+  const [form, setForm] = useState(() => releaseForm(release))
   const save = useMutation({mutationFn: () => updateProviderRelease(release.id, {expectedVersion: release.version, draftStep: 'release-information', ...form, ...scheduleInput(schedule), additionalArtists: additionalArtists ?? [], versionTitle: form.versionTitle || null, labelName: form.labelName || null, catalogNumber: form.catalogNumber || null, genre: form.genre || null, subgenre: form.subgenre || null, upc: form.upc || null, originalReleaseDate: form.originalReleaseDate || null, copyrightYear: form.copyrightYear ? Number(form.copyrightYear) : null, copyrightHolder: form.copyrightHolder || null, phonographicCopyrightYear: form.phonographicCopyrightYear ? Number(form.phonographicCopyrightYear) : null, phonographicCopyrightHolder: form.phonographicCopyrightHolder || null}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', release.id]}); toast({title: 'Release information saved'})}})
   const field = (key: keyof typeof form) => ({value: form[key], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({...form, [key]: event.target.value})})
   const upcProblem = upcError(form.upc)
@@ -140,6 +147,14 @@ function ReleaseInformation({detail}: {detail: ProviderReleaseDetail}) {
   const additionalArtists = creditsInput(extraArtists, artistList)
   const leadName = artistList.find((artist) => artist.id === form.primaryArtistId)?.name ?? release.primary_artist_name ?? ''
   const creditLine = formatArtistCredit(leadName, extraArtists.map((row) => ({role: row.role, name: creditName(row, artistList)})))
+  const unsaved = JSON.stringify(form) !== JSON.stringify(releaseForm(release))
+    || JSON.stringify(schedule) !== JSON.stringify(scheduleFromRelease(release))
+    || JSON.stringify(creditRowValues(extraArtists)) !== JSON.stringify(creditRowValues(rowsFromCredits(release.additional_artists)))
+  usePendingSave('release-information', unsaved, async () => {
+    const problem = !form.title.trim() ? 'Enter a release title.' : upcProblem ?? scheduleProblem ?? (!additionalArtists ? 'Enter a name for each additional artist, or remove the empty row.' : null)
+    if (problem) throw new Error(problem)
+    await save.mutateAsync()
+  })
   return <><StepHeading title="Release Information" detail="Core catalog details for this release." /><form onSubmit={(event) => {event.preventDefault(); if (!upcProblem && !scheduleProblem && additionalArtists) save.mutate()}} className="grid gap-5 sm:grid-cols-2">
     <div className="space-y-2"><Label htmlFor="release-title-input">Release title</Label><Input id="release-title-input" required {...field('title')} />{titleHasFeature(form.title) && <p className="text-xs text-amber-300">Add featured artists under Additional artists instead of in the title, so stores and players credit them properly.</p>}</div><Field label="Version"><Input placeholder="Optional" {...field('versionTitle')} /></Field>
     <Field label="Release type"><select className="h-10 w-full rounded-md border border-white/10 bg-zinc-950 px-3 text-sm" {...field('releaseType')}><option value="single">Single</option><option value="ep">EP</option><option value="album">Album</option></select></Field>
@@ -163,6 +178,15 @@ function ReleaseInformation({detail}: {detail: ProviderReleaseDetail}) {
     <Field label="Phonographic copyright year"><Input type="number" min="1900" max="2200" {...field('phonographicCopyrightYear')} /></Field><Field label="Phonographic copyright holder"><Input {...field('phonographicCopyrightHolder')} /></Field>
     {save.isError && <p className="text-sm text-red-400 sm:col-span-2">{save.error.message}</p>}{!additionalArtists && <p className="text-sm text-amber-300 sm:col-span-2">Enter a name for each additional artist, or remove the empty row.</p>}<Button disabled={save.isPending || Boolean(upcProblem) || Boolean(scheduleProblem) || !additionalArtists} className="sm:col-span-2">{save.isPending ? 'Saving...' : 'Save information'}</Button>
   </form></>
+}
+
+function releaseForm(release: ProviderReleaseDetail['release']) {
+  return {title: release.title, versionTitle: release.version_title || '', releaseType: release.release_type, primaryArtistId: release.primary_artist_id, labelName: release.label_name || '', catalogNumber: release.catalog_number || '', genre: release.genre || '', subgenre: release.subgenre || '', upc: release.upc || '', originalReleaseDate: release.original_release_date || '', copyrightYear: release.copyright_year?.toString() || '', copyrightHolder: release.copyright_holder || '', phonographicCopyrightYear: release.phonographic_copyright_year?.toString() || '', phonographicCopyrightHolder: release.phonographic_copyright_holder || ''}
+}
+
+/** Credit rows without their client-only React keys, for comparing against what is saved. */
+function creditRowValues(rows: AdditionalArtistRow[]) {
+  return rows.map(({role, artistId, name}) => ({role, artistId, name}))
 }
 
 /** Same rule as the API (12-14 digits, UPC-A or EAN-13/14); empty means the release has no UPC. */
@@ -282,6 +306,13 @@ function TrackMetadataForm({track, artistId, releaseId}: {track: ProviderTrack; 
   const previewStartMs = parsePreviewStart(previewStart)
   const previewProblem = previewStartMs === undefined ? 'Use minutes:seconds, like 1:05, or leave blank for automatic.'
     : previewStartMs !== null && track.duration_ms && previewStartMs > track.duration_ms - PREVIEW_SECONDS * 1000 ? `Start at least ${PREVIEW_SECONDS} seconds before the end of the song.` : null
+  const unsaved = title !== track.title || genre !== (track.genre || '') || language !== (track.language_code || '') || explicit !== track.explicit
+    || instrumental !== (track.instrumental || false) || previewStart !== formatPreviewStart(track.preview_start_ms)
+  usePendingSave(`track-metadata:${track.id}`, unsaved, async () => {
+    if (!title.trim()) throw new Error('Enter a title for every track.')
+    if (previewProblem) throw new Error(`${track.title}: ${previewProblem}`)
+    await save.mutateAsync()
+  })
   const save = useMutation({mutationFn: () => updateProviderTrack(track.id, {title, primaryArtistId: artistId, discNumber: track.disc_number, trackNumber: track.track_number, durationMs: track.duration_ms, explicit, languageCode: language || null, genre: genre || null, instrumental, previewStartMs: previewStartMs ?? null}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', releaseId]}); toast({title: `${title} saved`})}})
   return <form onSubmit={(event) => {event.preventDefault(); if (!previewProblem) save.mutate()}} className="grid gap-4 rounded-md border border-white/10 bg-[#141417] p-5 sm:grid-cols-2"><Field label="Title"><Input value={title} onChange={(event) => setTitle(event.target.value)} required /></Field><Field label="Genre"><Input value={genre} onChange={(event) => setGenre(event.target.value)} /></Field><Field label="Language code"><Input value={language} onChange={(event) => setLanguage(event.target.value)} placeholder="en" maxLength={3} /></Field><div className="flex items-end gap-6 pb-2"><Label className="flex items-center gap-2"><Switch checked={explicit} onCheckedChange={setExplicit} />Explicit</Label><Label className="flex items-center gap-2"><Switch checked={instrumental} onCheckedChange={setInstrumental} />Instrumental</Label></div>
     <div className="space-y-2 sm:col-span-2">
@@ -423,6 +454,12 @@ function PricingStep({detail}: {detail: ProviderReleaseDetail}) {
   const meetsMinimum = amountMinor !== null && minimumMinor !== undefined && amountMinor >= minimumMinor
   const pricingEditable = ['DRAFT', 'METADATA_COMPLETE', 'RIGHTS_COMPLETE', 'ISRC_COMPLETE', 'PRICING_COMPLETE', 'CHANGES_REQUESTED'].includes(detail.release.status)
   const save = useMutation({mutationFn: () => createProviderPricing(detail.release.id, detail.release.title, amountMinor!), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', detail.release.id]}); toast({title: 'Release price saved'})}})
+  // The field starts at the minimum, so a release can look priced before anything is saved.
+  const savedMinor = detail.product?.amount_minor != null ? Number(detail.product.amount_minor) : null
+  usePendingSave('pricing:release', pricingEditable && price.trim() !== '' && amountMinor !== savedMinor, async () => {
+    await assertSavablePrice(amountMinor, minimumMinor, 'the release')
+    await save.mutateAsync()
+  })
   const headline = minimumMinor === undefined ? 'Every MEJay release is sold in USD.' : `Every MEJay release is sold in USD for at least ${usd(minimumMinor)}.`
   return <><StepHeading title="Pricing" detail={headline} /><div className="max-w-sm space-y-5">
     <Field label="Track price (USD)"><Input type="number" inputMode="decimal" min={minimumMinor !== undefined ? minimumMinor / 100 : undefined} step="0.01" value={price} onChange={(event) => setPrice(event.target.value)} disabled={!pricingEditable} /></Field>
@@ -452,6 +489,11 @@ function SongPriceRow({track, detail, minimumMinor, editable}: {track: ProviderT
   const meetsMinimum = amountMinor !== null && minimumMinor !== undefined && amountMinor >= minimumMinor
   const refresh = () => queryClient.invalidateQueries({queryKey: ['provider', 'release', detail.release.id]})
   const save = useMutation({mutationFn: () => setProviderTrackPrice(track.id, amountMinor!), onSuccess: async () => {await refresh(); toast({title: `${track.title} price saved`})}})
+  // Only a typed price is saved on continue; clearing the box never removes a song's price by itself.
+  usePendingSave(`pricing:${track.id}`, editable && price.trim() !== '' && amountMinor !== (current ? Number(current.amount_minor) : null), async () => {
+    await assertSavablePrice(amountMinor, minimumMinor, track.title)
+    await save.mutateAsync()
+  })
   const remove = useMutation({mutationFn: () => clearProviderTrackPrice(track.id), onSuccess: async () => {setPrice(''); await refresh(); toast({title: `${track.title} is sold with the release only`})}})
   return <div className="space-y-3 py-4">
     <div className="flex flex-wrap items-center gap-3"><p className="min-w-0 flex-1 truncate text-sm font-medium">{track.track_number}. {track.title}</p>
@@ -466,6 +508,12 @@ function SongPriceRow({track, detail, minimumMinor, editable}: {track: ProviderT
   </div>
 }
 
+async function assertSavablePrice(amountMinor: number | null, minimumMinor: number | undefined, item: string): Promise<void> {
+  if (amountMinor === null) throw new Error(`Enter the price for ${item} in dollars and cents, like 1.29.`)
+  if (minimumMinor === undefined) throw new Error('Pricing rules are still loading. Try again in a moment.')
+  if (amountMinor < minimumMinor) throw new Error(`The price for ${item} must be at least ${usd(minimumMinor)} USD.`)
+}
+
 function SplitsStep({detail}: {detail: ProviderReleaseDetail}) {
   return <><StepHeading title="Splits" detail="Every track needs an active split totaling exactly 100%." /><p className="mb-4 max-w-2xl border border-white/10 bg-white/[0.03] p-3 text-xs text-zinc-400">Splits drive earnings reports for each collaborator. MEJay pays the full release payout to your Stripe account; you settle collaborator shares from there.</p><div className="space-y-4">{detail.tracks.map((track) => <TrackSplitForm key={track.id} track={track} detail={detail} />)}</div></>
 }
@@ -475,6 +523,10 @@ function TrackSplitForm({track, detail}: {track: ProviderTrack; detail: Provider
   const existing = detail.splits.filter((split) => split.track_id === track.id)
   const [payee, setPayee] = useState(existing[0]?.payee_name || detail.release.primary_artist_name || '')
   const save = useMutation({mutationFn: () => replaceProviderSplits(track.id, [{payeeName: payee.trim(), role: 'rights_holder', shareBps: 10000}]), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', detail.release.id]}); toast({title: `${track.title} split saved`})}})
+  // The payee starts as the primary artist, so an unsaved split can look complete.
+  usePendingSave(`split:${track.id}`, payee.trim() !== '' && (existing.length === 0 || payee.trim() !== existing[0].payee_name), async () => {
+    await save.mutateAsync()
+  })
   return <div className="rounded-md border border-white/10 bg-[#141417] p-5"><p className="mb-4 font-medium">{track.track_number}. {track.title}</p><div className="flex flex-wrap gap-3"><Input className="min-w-52 flex-1" value={payee} onChange={(event) => setPayee(event.target.value)} placeholder="Payee name" /><Input className="w-28" value="100%" disabled /><Button disabled={!payee.trim() || save.isPending} onClick={() => save.mutate()}>{existing.length ? 'Replace split' : 'Save split'}</Button></div>{existing.length > 0 && <p className="mt-2 text-xs text-emerald-400">Active split totals {existing.reduce((sum, entry) => sum + Number(entry.share_bps), 0) / 100}%.</p>}</div>
 }
 
