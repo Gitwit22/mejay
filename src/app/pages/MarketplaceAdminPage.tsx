@@ -1,8 +1,7 @@
 import {useState} from 'react'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
-import {ArrowDown, ArrowUp, FilePen, Newspaper, BarChart3, BadgeDollarSign, Landmark, CheckCircle2, Copy, Copyright, Disc3, Download, Fingerprint, Menu, Plus, RefreshCw, Scale, Scissors, Send, ShieldAlert, Sparkles, Trash2, Users, UserRound, X, XCircle} from 'lucide-react'
-
-import {useSearchParams} from 'react-router-dom'
+import {ArrowDown, ArrowLeft, ArrowUp, FilePen, Newspaper, BarChart3, BadgeDollarSign, Landmark, CheckCircle2, Copy, Copyright, Disc3, Download, Fingerprint, Menu, Plus, RefreshCw, Scale, Scissors, Send, ShieldAlert, Sparkles, Trash2, Users, UserRound, X, XCircle} from 'lucide-react'
+import {Link, useSearchParams} from 'react-router-dom'
 
 import {ReleaseReviewDialog} from '@/app/components/admin/ReleaseReviewDialog'
 import {ChangeRequestsSection} from '@/app/components/admin/ChangeRequestReviewDialog'
@@ -41,7 +40,7 @@ export default function MarketplaceAdminPage() {
 }
 
 function Brand() { return <div className="mb-8"><p className="text-xl font-bold">MEJay</p><p className="text-xs font-medium uppercase text-emerald-400">Publishing Desk</p></div> }
-function Navigation({active, onSelect}: {active: Section; onSelect: (section: Section) => void}) { return <nav className="space-y-1">{navigation.map(([id, label, Icon]) => <button key={id} type="button" onClick={() => onSelect(id)} className={`flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm ${active === id ? 'bg-emerald-400 text-zinc-950' : 'text-zinc-400 hover:bg-white/5 hover:text-white'}`}><Icon className="h-4 w-4" />{label}</button>)}</nav> }
+function Navigation({active, onSelect}: {active: Section; onSelect: (section: Section) => void}) { return <nav className="space-y-1"><Link to="/app" className="mb-4 flex w-full items-center gap-3 rounded-md border border-white/10 px-3 py-2.5 text-sm text-zinc-300 hover:bg-white/5 hover:text-zinc-100"><ArrowLeft className="h-4 w-4" />Back to MEJay</Link>{navigation.map(([id, label, Icon]) => <button key={id} type="button" onClick={() => onSelect(id)} className={`flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm ${active === id ? 'bg-emerald-400 text-zinc-950' : 'text-zinc-400 hover:bg-white/5 hover:text-white'}`}><Icon className="h-4 w-4" />{label}</button>)}</nav> }
 
 function SectionView({section, data, onNavigate}: {section: Section; data: Awaited<ReturnType<typeof getMarketplaceAdminOverview>>; onNavigate: (section: Section) => void}) {
   if (section === 'reporting') return <Reporting />

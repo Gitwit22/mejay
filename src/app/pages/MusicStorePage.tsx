@@ -1,13 +1,11 @@
-import {useMemo, useState} from 'react'
 import {useMutation, useQuery} from '@tanstack/react-query'
-import {ArrowLeft, Disc3, Pause, Play, Search, ShoppingBag} from 'lucide-react'
-import {Link, useParams, useSearchParams} from 'react-router-dom'
+import {ArrowLeft, Disc3, Pause, Play} from 'lucide-react'
+import {Link, useParams} from 'react-router-dom'
 
 import {Button} from '@/components/ui/button'
-import {Input} from '@/components/ui/input'
 import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
-import {getStoreRelease, listStoreReleases, storeAssetUrl, type StoreRelease, type StoreTrack} from '@/lib/musicStoreApi'
+import {getStoreRelease, storeAssetUrl, type StoreRelease, type StoreTrack} from '@/lib/musicStoreApi'
 import {startStoreCheckout} from '@/lib/marketplaceCommerceApi'
 import {usePreview, type PreviewController} from '@/hooks/useStorePreview'
 import {isPreorder, PREORDER_CHARGE_NOTICE, preorderLabel} from '@/lib/releaseTime'
@@ -18,40 +16,6 @@ export function PreorderBadge({release, className}: {release: Pick<StoreRelease,
 }
 
 
-export default function MusicStorePage() {
-  const catalog = useQuery({queryKey: ['music-store', 'catalog'], queryFn: listStoreReleases})
-  const preview = usePreview()
-  const [searchParams, setSearchParams] = useSearchParams()
-  const [search, setSearch] = useState('')
-  const [genre, setGenre] = useState<string | null>(null)
-  const releases = useMemo(() => catalog.data ?? [], [catalog.data])
-  const artistId = searchParams.get('artist')
-  const selectedArtist = artistId ? releases.find((release) => release.artist_id === artistId)?.artist_name : null
-  const genres = useMemo(() => [...new Set(releases.map((release) => release.genre).filter((value): value is string => Boolean(value)))].sort(), [releases])
-  const filtered = releases.filter((release) => {
-    const terms = `${release.title} ${release.artist_name} ${release.genre || ''}`.toLowerCase()
-    return terms.includes(search.trim().toLowerCase()) && (!genre || release.genre === genre) && (!artistId || release.artist_id === artistId)
-  })
-
-  if (catalog.isLoading) return <StoreLoading />
-  if (catalog.isError) return <StoreError message={catalog.error.message} />
-
-  return <div className="min-h-screen bg-[#0a0a0b] text-zinc-100">
-    <header className="border-b border-white/10 bg-[#0a0a0b]/95 px-4 py-5 sm:px-8"><div className="mx-auto flex max-w-7xl items-center gap-3"><Button asChild variant="ghost" size="icon" className="shrink-0"><Link to="/app" aria-label="Back to MEJay"><ArrowLeft className="h-4 w-4" /></Link></Button><div className="min-w-0"><p className="text-base font-black tracking-[0.1em] sm:text-xl sm:tracking-[0.12em]">MUSIC MARKETPLACE</p><p className="mt-1 truncate text-xs text-zinc-500">Independent releases, direct from artists</p></div><Button asChild variant="outline" size="icon" className="ml-auto shrink-0 sm:h-10 sm:w-auto sm:gap-2 sm:px-4"><Link to="/app/purchased" aria-label="Purchases"><ShoppingBag className="h-4 w-4" /><span className="hidden sm:inline">Purchases</span></Link></Button></div></header>
-    <main className="mx-auto max-w-7xl space-y-12 px-4 py-8 sm:px-8">
-      <div className="relative max-w-2xl"><Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-zinc-500" /><Input value={search} onChange={(event) => setSearch(event.target.value)} className="h-12 border-white/10 bg-[#151517] pl-12 text-base" placeholder="Search releases, artists, and genres" /></div>
-      {artistId && <div className="flex items-center gap-3 text-sm"><span className="text-zinc-500">Artist:</span><Button size="sm" variant="outline" onClick={() => {const next = new URLSearchParams(searchParams); next.delete('artist'); setSearchParams(next)}}>{selectedArtist || 'Selected artist'} x</Button></div>}
-      {genre && <div className="flex items-center gap-3 text-sm"><span className="text-zinc-500">Genre:</span><Button size="sm" variant="outline" onClick={() => setGenre(null)}>{genre} x</Button></div>}
-      {releases.length === 0 ? <EmptyCatalog /> : search || genre || artistId ? <ReleaseSection title="Search Results" releases={filtered} preview={preview} /> : <>
-        <ReleaseSection title="New Releases" releases={releases.slice(0, 8)} preview={preview} />
-        <ReleaseSection title="Singles" releases={releases.filter((release) => release.release_type === 'single').slice(0, 8)} preview={preview} />
-        <ReleaseSection title="Projects" releases={releases.filter((release) => release.release_type !== 'single').slice(0, 8)} preview={preview} />
-        <section><SectionTitle title="Genres" /><div className="flex flex-wrap gap-2">{genres.map((item) => <Button key={item} variant="outline" onClick={() => setGenre(item)} className="border-white/10 bg-[#131315] hover:border-emerald-400/50">{item}</Button>)}</div></section>
-      </>}
-    </main>
-  </div>
-}
-
 export function StoreReleasePage() {
   const {releaseId = ''} = useParams()
   const detail = useQuery({queryKey: ['music-store', 'release', releaseId], queryFn: () => getStoreRelease(releaseId), enabled: Boolean(releaseId)})
@@ -59,15 +23,10 @@ export function StoreReleasePage() {
   if (detail.isLoading) return <StoreLoading />
   if (detail.isError || !detail.data) return <StoreError message={detail.error?.message || 'Release not found'} />
   const {release, tracks} = detail.data
-  return <div className="min-h-screen bg-[#0a0a0b] text-zinc-100"><main className="mx-auto max-w-6xl px-4 py-6 sm:px-8 sm:py-10"><Button asChild variant="ghost" className="mb-7 gap-2"><Link to="/app/store"><ArrowLeft className="h-4 w-4" />Back to Marketplace</Link></Button>
+  return <div className="min-h-screen bg-[#0a0a0b] text-zinc-100"><main className="mx-auto max-w-6xl px-4 py-6 sm:px-8 sm:py-10"><Button asChild variant="ghost" className="mb-7 gap-2"><Link to="/app?tab=music"><ArrowLeft className="h-4 w-4" />Back to Discover</Link></Button>
     <div className="grid gap-8 md:grid-cols-[minmax(240px,380px)_1fr] md:gap-12"><Cover release={release} className="aspect-square w-full" /><div className="min-w-0 md:pt-4"><p className="text-sm font-semibold uppercase text-emerald-400"><ArtistCredit release={release} linkClassName="hover:underline" /></p><h1 className="mt-2 text-4xl font-black sm:text-5xl">{release.title}</h1>{release.version_title && <p className="mt-2 text-lg text-zinc-400">{release.version_title}</p>}<div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-sm text-zinc-400"><span>{releaseTypeLabel(release.release_type)}</span><span>{release.genre || 'Uncategorized'}</span>{!isPreorder(release) && <span>{formatDate(release.original_release_date || release.published_at)}</span>}{release.label_name && <span>{release.label_name}</span>}</div><PreorderBadge release={release} className="mt-5 text-sm" /><p className="mt-8 text-3xl font-bold">{formatPrice(release.amount_minor, release.currency)}</p><PurchaseButton className="mt-5 h-12 w-full sm:w-56" label={isPreorder(release) ? 'Pre-order' : undefined} available={release.purchase_available} productId={release.product_id} />{isPreorder(release) && <p className="mt-3 max-w-sm text-xs text-zinc-400">{PREORDER_CHARGE_NOTICE}{tracks.some((track) => track.preview_asset_id) ? ' Play a 10-second preview below.' : ' Previews unlock on release day.'}</p>}</div></div>
     <section className="mt-12"><SectionTitle title="Track List" /><div className="divide-y divide-white/10 border-y border-white/10">{tracks.map((track) => <TrackRow key={track.id} track={track} purchaseAvailable={release.purchase_available} preview={preview} preorder={isPreorder(release)} />)}</div></section>
   </main></div>
-}
-
-function ReleaseSection({title, releases, preview, featured = false}: {title: string; releases: StoreRelease[]; preview: PreviewController; featured?: boolean}) {
-  if (releases.length === 0) return null
-  return <section><SectionTitle title={title} /><div className={`grid gap-x-4 gap-y-8 ${featured ? 'sm:grid-cols-2 lg:grid-cols-4' : 'min-[420px]:grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5'}`}>{releases.map((release) => <ProductCard key={release.id} release={release} preview={preview} featured={featured} />)}</div></section>
 }
 
 export function ProductCard({release, preview, featured}: {release: StoreRelease; preview: PreviewController; featured: boolean}) {
@@ -104,9 +63,8 @@ export function ArtistCredit({release, linkClassName}: {release: Pick<StoreRelea
 }
 
 export function SectionTitle({title}: {title: string}) { return <div className="mb-5 flex items-center gap-4"><h2 className="shrink-0 text-xl font-black">{title}</h2><div className="h-px flex-1 bg-white/10" /></div> }
-function EmptyCatalog() { return <div className="grid min-h-80 place-items-center border-y border-dashed border-white/10 text-center"><div><Disc3 className="mx-auto h-10 w-10 text-zinc-700" /><h2 className="mt-4 text-lg font-bold">The catalog is quiet</h2><p className="mt-1 text-sm text-zinc-500">Published releases will appear here automatically.</p></div></div> }
 export function StoreLoading() { return <div className="min-h-screen bg-[#0a0a0b] p-8"><div className="mx-auto max-w-7xl space-y-8"><Skeleton className="h-12 w-80 bg-white/5" /><div className="grid grid-cols-2 gap-4 sm:grid-cols-4"><Skeleton className="aspect-square bg-white/5" /><Skeleton className="aspect-square bg-white/5" /><Skeleton className="aspect-square bg-white/5" /><Skeleton className="aspect-square bg-white/5" /></div></div></div> }
-export function StoreError({message}: {message: string}) { return <div className="grid min-h-screen place-items-center bg-[#0a0a0b] px-6 text-center text-red-300"><div><p className="font-semibold">Marketplace unavailable</p><p className="mt-2 text-sm text-red-300/70">{message}</p></div></div> }
+export function StoreError({message}: {message: string}) { return <div className="grid min-h-screen place-items-center bg-[#0a0a0b] px-6 text-center text-red-300"><div><p className="font-semibold">Music unavailable</p><p className="mt-2 text-sm text-red-300/70">{message}</p></div></div> }
 function releaseTypeLabel(type: StoreRelease['release_type']) { return type === 'ep' ? 'EP' : type.charAt(0).toUpperCase() + type.slice(1) }
 function formatPrice(amount: number, currency: string) { return new Intl.NumberFormat('en-US', {style: 'currency', currency: currency || 'USD'}).format(Number(amount) / 100) }
 function formatDate(value: string | null) { return value ? new Intl.DateTimeFormat('en-US', {year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC'}).format(new Date(/^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00Z` : value)) : 'Release date pending' }
