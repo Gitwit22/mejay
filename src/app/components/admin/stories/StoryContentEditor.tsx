@@ -31,7 +31,7 @@ export function StoryContentEditor({blocks, onChange, inlineImages, onUploadInli
   const add = (block: StoryBlock) => onChange([...blocks, block])
 
   return <div className="space-y-3">
-    <p className="text-xs text-zinc-500">Formatting: <code>**bold**</code>, <code>*italic*</code>, and links as <code>[words](https://example.com)</code>. Only https:// and http:// links are allowed.</p>
+    <p className="text-xs text-zinc-500">You can paste a whole article into one paragraph block: every line becomes its own paragraph, and a short line in ALL CAPS becomes a subheading. Formatting: <code>**bold**</code>, <code>*italic*</code>, and links as <code>[words](https://example.com)</code> (https:// or http:// only).</p>
     {blocks.length === 0 && <p className="rounded-md border border-dashed border-white/10 p-4 text-sm text-zinc-500">Start with a paragraph.</p>}
     <ol className="space-y-3">{blocks.map((block, index) => <li key={index} className="rounded-md border border-white/10 bg-white/[0.02] p-3">
       <div className="mb-2 flex items-center gap-1">

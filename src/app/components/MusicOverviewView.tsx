@@ -7,13 +7,16 @@ import {Button} from '@/components/ui/button'
 import {Skeleton} from '@/components/ui/skeleton'
 import {usePreview, type PreviewController} from '@/hooks/useStorePreview'
 import {getMusicDiscovery, type DiscoveryArtist} from '@/lib/musicDiscoveryApi'
-import {storeAssetUrl, type StoreRelease} from '@/lib/musicStoreApi'
+import {listStoreReleases, storeAssetUrl, type StoreRelease} from '@/lib/musicStoreApi'
 import {getStoriesHome, type StoryCard} from '@/lib/storiesApi'
 import {LeadStoryCard, StoryCardItem} from '@/app/components/stories/StoryCards'
 import {BrowseAllMusic} from './BrowseAllMusic'
 
 export function MusicOverviewView() {
   const discovery = useQuery({queryKey: ['music', 'discovery'], queryFn: getMusicDiscovery})
+  // Same request Browse All Music makes (shared by React Query). The curated rails are LIVE-only,
+  // so a catalog of only pre-orders leaves them empty while there is still music to buy below.
+  const catalog = useQuery({queryKey: ['music-store', 'catalog'], queryFn: listStoreReleases})
   // Stories load separately: if they fail, Discover simply stays music-only.
   const stories = useQuery({queryKey: ['stories', 'home'], queryFn: getStoriesHome, retry: 1})
   const preview = usePreview()
@@ -24,6 +27,7 @@ export function MusicOverviewView() {
 
   const data = discovery.data
   const empty = Object.values(data).every((items) => items.length === 0)
+  const nothingForSale = catalog.isError || (catalog.isSuccess && catalog.data.length === 0)
   const lead = stories.data?.featured ?? null
   const latest = stories.data?.latest ?? []
 
@@ -35,7 +39,7 @@ export function MusicOverviewView() {
 
     {lead && <FeaturedStories lead={lead} more={latest.slice(0, 3)} />}
 
-    {empty ? <EmptyMusic /> : <div className="space-y-12 py-8">
+    {empty ? (nothingForSale ? <EmptyMusic /> : null) : <div className="space-y-12 py-8">
       <NewReleases all={data.newestReleases} singles={data.newestSingles} projects={data.newestProjects} preview={preview} />
       <ReleaseRail title="Admin Picks" releases={data.featuredReleases} preview={preview} icon={<Sparkles className="h-4 w-4 text-emerald-400" />} />
       {(data.mostPurchased.length > 0 || data.mostPreviewed.length > 0) && <section>

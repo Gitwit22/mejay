@@ -157,7 +157,15 @@ function Body({story, palette, dropCap = false}: {story: StoryView; palette: Pal
 
 function BlockView({block, story, palette, dropCap}: {block: StoryBlock; story: StoryView; palette: Palette; dropCap: boolean}) {
   switch (block.type) {
-    case 'paragraph': return block.text.trim() ? <p className={dropCap ? 'first-letter:float-left first-letter:mr-2 first-letter:text-6xl first-letter:font-black first-letter:leading-[0.85]' : undefined}><InlineText text={block.text} palette={palette} /></p> : null
+    case 'paragraph': {
+      // A pasted article keeps its line breaks: each line is its own paragraph, and a short
+      // all-caps line on its own reads as a subheading.
+      const lines = splitLines(block.text)
+      if (lines.length === 0) return null
+      return <>{lines.map((line, index) => isSubheading(line)
+        ? <h2 key={index} className="pt-3 font-sans text-xl font-black tracking-wide">{line}</h2>
+        : <p key={index} className={dropCap && index === 0 ? 'first-letter:float-left first-letter:mr-2 first-letter:text-6xl first-letter:font-black first-letter:leading-[0.85]' : undefined}><InlineText text={line} palette={palette} /></p>)}</>
+    }
     case 'heading': return block.text.trim() ? <h2 className="pt-3 font-sans text-2xl font-black">{block.text}</h2> : null
     case 'list': return <ul className="list-disc space-y-1 pl-6">{block.items.filter((item) => item.trim()).map((item, index) => <li key={index}><InlineText text={item} palette={palette} /></li>)}</ul>
     case 'quote': return block.text.trim() ? <PullQuote quote={{text: block.text, attribution: block.attribution ?? null}} palette={palette} /> : null
@@ -211,6 +219,15 @@ function Footer({story, palette}: {story: StoryView; palette: Palette}) {
 
 function SectionRule({label, palette}: {label: string; palette: Palette}) {
   return <div className="flex items-center gap-4"><h2 className="shrink-0 text-xs font-bold uppercase tracking-[0.2em]">{label}</h2><div className={`h-px flex-1 border-t ${palette.rule}`} /></div>
+}
+
+function splitLines(text: string): string[] {
+  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+}
+
+/** A short standalone line with letters and no lowercase, like "SNAP DOGG: THE PROBLEM GOES DEEPER". */
+function isSubheading(line: string): boolean {
+  return line.length <= 120 && /[A-Z]/.test(line) && !/[a-z]/.test(line) && !/[.!?,]$/.test(line)
 }
 
 function formatPrice(amount: number, currency: string) {

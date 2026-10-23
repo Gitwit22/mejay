@@ -178,6 +178,28 @@ describe('Discover new releases and stories', () => {
   })
 })
 
+describe('Discover empty state', () => {
+  const emptyDiscovery = {newestReleases: [], newestSingles: [], newestProjects: [], mostPurchased: [], mostPreviewed: [], featuredReleases: [], featuredArtists: []}
+  beforeEach(() => {
+    vi.mocked(getMusicDiscovery).mockResolvedValue(emptyDiscovery)
+    vi.mocked(getStoriesHome).mockReset().mockResolvedValue({featured: null, latest: []})
+  })
+
+  it('does not say new music is on the way while a pre-order is on sale', async () => {
+    vi.mocked(listStoreReleases).mockResolvedValue([{...release, title: 'MIA', availability: 'preorder', release_at: '2026-11-06T05:00:00Z'}])
+    renderDiscover()
+    expect(await screen.findByRole('heading', {name: 'Browse All Music'})).toBeInTheDocument()
+    expect(await within(browseSection()).findByText('MIA')).toBeInTheDocument()
+    expect(screen.queryByText('New music is on the way')).not.toBeInTheDocument()
+  })
+
+  it('still says so when nothing at all is on sale', async () => {
+    vi.mocked(listStoreReleases).mockResolvedValue([])
+    renderDiscover()
+    expect(await screen.findByText('New music is on the way')).toBeInTheDocument()
+  })
+})
+
 describe('LegacyStoreRedirect', () => {
   function LocationProbe() {
     const location = useLocation()

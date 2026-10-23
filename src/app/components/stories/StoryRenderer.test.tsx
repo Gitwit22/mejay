@@ -78,4 +78,11 @@ describe('StoryRenderer', () => {
     rerender(<MemoryRouter><StoryRenderer story={story({background, appearance: {palette: 'paper', overlay: 60, coverFocal: {x: 50, y: 50}}})} /></MemoryRouter>)
     expect(container.querySelector('img[src*="/api/stories/media/b1"]')).toBeNull()
   })
+
+  it('splits a pasted article into paragraphs and turns standalone all-caps lines into subheadings', () => {
+    const {container} = render$(story({quote: null, content: [{type: 'paragraph', text: 'Is Detroit rap dying?\n\nThe conversation has opened a debate.\nSNAP DOGG: THE PROBLEM GOES DEEPER THAN MUSIC\nAccording to the outlet, Snap agrees. NOT a heading because of lowercase.'}]}))
+    const paragraphs = Array.from(container.querySelectorAll('p')).map((element) => element.textContent)
+    expect(paragraphs).toEqual(expect.arrayContaining(['Is Detroit rap dying?', 'The conversation has opened a debate.', 'According to the outlet, Snap agrees. NOT a heading because of lowercase.']))
+    expect(screen.getByRole('heading', {level: 2, name: 'SNAP DOGG: THE PROBLEM GOES DEEPER THAN MUSIC'})).toBeInTheDocument()
+  })
 })
