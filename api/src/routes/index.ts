@@ -21,13 +21,14 @@ import {
   assignGeneratedIsrc,
   createArtist,
   createPrice,
-  setReleasePrice, setTrackPrice, replaceTrackCredits, getReleaseCertification, saveReleaseCertification, addRightsMaterial, deleteRightsMaterial, getArtistProfile, updateArtistProfile, replaceArtistGallery, clearTrackPrice,
+  setReleasePrice, setTrackPrice, replaceTrackCredits, getReleaseCertification, saveReleaseCertification, addRightsMaterial, deleteRightsMaterial, getArtistProfile, getArtistPagePreview, listProviderIsrcs, exportProviderIsrcs, getArtistPagePreviewImage, updateArtistProfile, replaceArtistGallery, clearTrackPrice,
   createProduct,
   createProvider,
   createRelease,
   createRightsDeclaration,
   createTrack,
   getDashboard,
+  updateProviderSettings,
   getRelease,
   initiateUpload,
   listArtists,
@@ -36,6 +37,7 @@ import {
   submitRelease,
   transitionRelease,
   updateReleaseDraft,
+  deleteReleaseDraft,
   updateTrack,
   finalizeUpload,
 } from './marketplace'
@@ -46,7 +48,7 @@ import {getCatalogAsset, getCatalogRelease, getPublicArtist, listCatalog, record
 import {createConnectDashboard, createConnectOnboarding, getConnectStatus} from './marketplace/connect'
 import {getProviderReporting, getRecipientEarnings} from './marketplace/reporting'
 import {getPricingPolicy} from './marketplace/pricing'
-import {createStoreCheckout, downloadStorePurchase, getStoreOrderStatus, getStorePurchaseArtwork, listStorePurchases} from './store/commerce'
+import {claimStorePurchases, createStoreCheckout, downloadGuestFile, downloadStorePurchase, exchangeGuestAccess, getGuestOrderStatus, getStoreOrderStatus, getStorePurchaseArtwork, listStorePurchases, recoverGuestAccess} from './store/commerce'
 import {getMusicDiscovery} from './music'
 import {CLIENT_IP_HEADER} from './_security'
 import {assignTrackIsrc, exportIsrcRecords, getIsrcRecord, getIsrcSequence, listIsrcRecords, registerExistingIsrc} from './isrc'
@@ -82,23 +84,34 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'get', path: '/api/store/purchases', handler: listStorePurchases},
   {method: 'get', path: '/api/store/purchases/:entitlementId/files/:fileId/download', handler: downloadStorePurchase},
   {method: 'get', path: '/api/store/purchases/:entitlementId/artwork', handler: getStorePurchaseArtwork},
+  {method: 'post', path: '/api/store/purchases/claim', handler: claimStorePurchases},
+  {method: 'get', path: '/api/store/orders/guest/:sessionId', handler: getGuestOrderStatus},
+  {method: 'post', path: '/api/store/guest-access/exchange', handler: exchangeGuestAccess},
+  {method: 'post', path: '/api/store/guest-access/recover', handler: recoverGuestAccess},
+  {method: 'get', path: '/api/store/guest-downloads/files/:fileId', handler: downloadGuestFile},
   {method: 'get', path: '/api/marketplace/connect', handler: getConnectStatus},
   {method: 'post', path: '/api/marketplace/connect/onboarding', handler: createConnectOnboarding},
   {method: 'post', path: '/api/marketplace/connect/dashboard', handler: createConnectDashboard},
   {method: 'get', path: '/api/marketplace/reporting', handler: getProviderReporting},
   {method: 'get', path: '/api/marketplace/pricing-policy', handler: getPricingPolicy},
+  {method: 'get', path: '/api/marketplace/isrcs', handler: listProviderIsrcs},
+  {method: 'get', path: '/api/marketplace/isrcs/export', handler: exportProviderIsrcs},
   {method: 'get', path: '/api/marketplace/recipient-earnings', handler: getRecipientEarnings},
   {method: 'post', path: '/api/marketplace/providers', handler: createProvider},
   {method: 'get', path: '/api/marketplace/dashboard', handler: getDashboard},
+  {method: 'patch', path: '/api/marketplace/provider/settings', handler: updateProviderSettings},
   {method: 'get', path: '/api/marketplace/artists', handler: listArtists},
   {method: 'post', path: '/api/marketplace/artists', handler: createArtist},
   {method: 'get', path: '/api/marketplace/artists/:artistId/profile', handler: getArtistProfile},
+  {method: 'get', path: '/api/marketplace/artists/:artistId/page-preview', handler: getArtistPagePreview},
+  {method: 'get', path: '/api/marketplace/artists/:artistId/page-preview/images/:assetId', handler: getArtistPagePreviewImage},
   {method: 'put', path: '/api/marketplace/artists/:artistId/profile', handler: updateArtistProfile},
   {method: 'put', path: '/api/marketplace/artists/:artistId/gallery', handler: replaceArtistGallery},
   {method: 'get', path: '/api/marketplace/releases', handler: listReleases},
   {method: 'post', path: '/api/marketplace/releases', handler: createRelease},
   {method: 'get', path: '/api/marketplace/releases/:releaseId', handler: getRelease},
   {method: 'patch', path: '/api/marketplace/releases/:releaseId', handler: updateReleaseDraft},
+  {method: 'delete', path: '/api/marketplace/releases/:releaseId', handler: deleteReleaseDraft},
   {method: 'post', path: '/api/marketplace/releases/:releaseId/tracks', handler: createTrack},
   {method: 'patch', path: '/api/marketplace/tracks/:trackId', handler: updateTrack},
   {method: 'post', path: '/api/marketplace/uploads', handler: initiateUpload},

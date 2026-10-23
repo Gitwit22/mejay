@@ -14,9 +14,18 @@ import {ArtistProfileService} from './artist-profile-service'
 import {CERTIFICATION_VERSION} from './release-certification'
 import {claimStripeWebhookEvent} from './webhook-events'
 import {MarketplaceService} from './service'
+import {providerSettingsSchema, releaseDraftSchema} from './schemas'
+import {ProviderIsrcService} from './provider-isrc-service'
 import {sendOrderConfirmation} from './order-email'
 import {onRequest as stripeWebhook} from '../routes/stripe-webhook'
-import {createHmac} from 'node:crypto'
+import {createHash, createHmac} from 'node:crypto'
+import {processEmailJobs, retryFailedConfirmations, sendAccessRecovery} from './email-jobs'
+import {exchangeEmailLink, issueEmailLink, resolveSessionDownload} from './guest-access'
+import {claimGuestPurchases} from './commerce-service'
+import {claimStorePurchases, downloadGuestFile, recoverGuestAccess} from '../routes/store/commerce'
+import {signVerifiedToken} from '../routes/_auth'
+import {ensurePreviewJobs, wakeConverterIfQueued} from './preview-jobs'
+import {getCatalogAsset} from '../routes/store'
 
 const connectionString = process.env.TEST_DATABASE_URL
 const describeWithDatabase = connectionString ? describe : describe.skip
@@ -426,11 +435,16 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
     await pool.query(`UPDATE releases SET status = 'PRICING_COMPLETE' WHERE id = $1`, [release.id])
     await expect(service.transitionRelease(userId, release.id, {targetStatus: 'SUBMITTED', expectedVersion: release.version}))
       .rejects.toMatchObject({code: 'provider_not_approved'})
+    // The wizard must not report the release as ready while the account gate would refuse it.
+    const pendingDetail = await service.getRelease(userId, release.id) as {prerequisites: string[]}
+    expect(pendingDetail.prerequisites).toContain('artist account approved by MEJay (your application is still in review)')
 
     await expect(adminService().commandProvider(reviewerUserId, provider.id, {action: 'approve'}))
       .rejects.toMatchObject({code: 'marketplace_admin_required'})
     const approved = await adminService().commandProvider(adminUserId, provider.id, {action: 'approve'}) as {status: string}
     expect(approved.status).toBe('approved')
+    const approvedDetail = await service.getRelease(userId, release.id) as {prerequisites: string[]}
+    expect(approvedDetail.prerequisites.some((item) => item.startsWith('artist account'))).toBe(false)
   })
 
   it('does not let staff publish through the provider transition endpoint', async () => {
@@ -626,9 +640,22 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
         expect(content).toContain('$9.99')
         expect(content).toContain(orderId)
         expect(content).toContain('https://app.test/app/purchased')
-        // Only the sign-in page is linked: no download routes, storage keys, or asset URLs.
-        expect(content.match(/https?:\/\/[^\s"<]+/g)).toEqual(['https://app.test/app/purchased', 'https://app.test/app/purchased'])
-        expect(content).not.toMatch(/download\?|\/files\/|\.wav|r2|storage/i)
+        // The only links are the tokenized download page (secret in the fragment) and Purchases:
+        // never an API download route, storage key or asset URL.
+        const links = [...new Set(content.match(/https?:\/\/[^\s"<]+/g))]
+        expect(links).toHaveLength(2)
+        expect(links).toContain('https://app.test/app/purchased')
+        const downloadLink = links.find((link) => link.startsWith('https://app.test/download#token='))!
+        expect(downloadLink).toMatch(/^https:\/\/app\.test\/download#token=[A-Za-z0-9_-]{43}$/)
+        expect(content).toContain('Download your music')
+        expect(content).not.toMatch(/\/api\/|\/files\/|\.wav|r2|storage/i)
+        // Only the token's hash is stored, scoped to this purchase, valid for 7 days.
+        const token = downloadLink.split('#token=')[1]
+        const stored = await pool.query(
+          `SELECT token_hash, kind, issued_for, expires_at - created_at > INTERVAL '6 days 23 hours' AS seven_days FROM marketplace_guest_access_tokens WHERE order_id = $1`,
+          [orderId],
+        )
+        expect(stored.rows).toEqual([{token_hash: expect.not.stringContaining(token), kind: 'email_link', issued_for: 'purchase', seven_days: true}])
         const row = await pool.query('SELECT status, attempts, sent_at IS NOT NULL AS sent FROM marketplace_order_notifications WHERE order_id = $1', [orderId])
         expect(row.rows).toEqual([{status: 'sent', attempts: 1, sent: true}])
       })
@@ -1033,6 +1060,57 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
     })
   })
   describe('artist profiles and release certification', () => {
+    it('lists and exports only the signed-in account\'s own ISRCs', async () => {
+      await resetIsrcState()
+      const mine = await prepareLiveRelease('IsrcMine')
+      const theirs = await prepareLiveRelease('IsrcTheirs')
+      const isrcs = new ProviderIsrcService(new Database(connectionString!, pool) as never)
+      const rows = await isrcs.list(mine.userId)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({track_title: 'IsrcMine Track', release_id: mine.release.id, release_title: 'IsrcMine Release', assignment_type: 'MEJAY_ASSIGNED'})
+      expect(rows[0].isrc).toMatch(/^QT-A3L-\d{2}-\d{5}$/)
+      const theirRows = await isrcs.list(theirs.userId)
+      expect(theirRows).toHaveLength(1)
+      expect(theirRows[0].isrc).not.toBe(rows[0].isrc)
+
+      const csv = await isrcs.exportCsv(mine.userId)
+      expect(csv.fileName).toMatch(/^mejay-isrcs-\d{4}-\d{2}-\d{2}\.csv$/)
+      const lines = csv.data.trim().split('\n')
+      expect(lines[0]).toBe('ISRC,Track,Artist,Release,Source,Status,Assigned')
+      expect(lines).toHaveLength(2)
+      expect(lines[1]).toContain(rows[0].isrc)
+      expect(lines[1]).toContain('Issued by MeJay')
+      expect(csv.data).not.toContain(theirRows[0].isrc)
+      // No artist account: refused rather than returning anything.
+      await expect(isrcs.list(crypto.randomUUID())).rejects.toMatchObject({status: 403})
+    })
+
+    it('saves account settings for owners only, without touching review status or the page address', async () => {
+      const fixture = await createProviderFixture('Settings')
+      const before = await pool.query<{slug: string; status: string}>('SELECT slug, status FROM provider_profiles WHERE id = $1', [fixture.provider.id])
+      // Parsed with the route's schema, exactly as the API applies it.
+      const saved = await service.updateProviderSettings(fixture.userId, providerSettingsSchema.parse({
+        displayName: 'Settings Music', legalName: 'Settings Music LLC', contactEmail: 'Team@Example.TEST', countryCode: 'ca', bio: '',
+      })) as Record<string, unknown>
+      expect(() => providerSettingsSchema.parse({displayName: 'X', legalName: null, contactEmail: 'x@example.test', countryCode: 'US', bio: null, slug: 'taken'})).toThrow()
+      expect(saved).toMatchObject({display_name: 'Settings Music', legal_name: 'Settings Music LLC', contact_email: 'team@example.test', country_code: 'CA', bio: null, role: 'owner'})
+      const after = await pool.query<{slug: string; status: string}>('SELECT slug, status FROM provider_profiles WHERE id = $1', [fixture.provider.id])
+      expect(after.rows[0]).toEqual(before.rows[0])
+      const audits = await pool.query(`SELECT 1 FROM marketplace_audit_events WHERE provider_profile_id = $1 AND action = 'provider.settings_updated'`, [fixture.provider.id])
+      expect(audits.rowCount).toBe(1)
+
+      // A viewer on the account cannot change them; a user with no account gets nothing.
+      await pool.query(`UPDATE provider_members SET role = 'viewer' WHERE user_id = $1`, [fixture.userId])
+      await expect(service.updateProviderSettings(fixture.userId, {displayName: 'Hijack', legalName: null, contactEmail: 'x@example.test', countryCode: 'US', bio: null}))
+        .rejects.toMatchObject({code: 'provider_write_forbidden'})
+      await pool.query(`UPDATE provider_members SET role = 'editor' WHERE user_id = $1`, [fixture.userId])
+      await expect(service.updateProviderSettings(fixture.userId, {displayName: 'Hijack', legalName: null, contactEmail: 'x@example.test', countryCode: 'US', bio: null}))
+        .rejects.toMatchObject({code: 'provider_settings_forbidden'})
+      await expect(service.updateProviderSettings(crypto.randomUUID(), {displayName: 'Nobody', legalName: null, contactEmail: 'x@example.test', countryCode: 'US', bio: null}))
+        .rejects.toMatchObject({status: 403})
+      expect((await pool.query('SELECT display_name FROM provider_profiles WHERE id = $1', [fixture.provider.id])).rows[0].display_name).toBe('Settings Music')
+    })
+
     afterEach(() => {
       vi.unstubAllGlobals()
     })
@@ -1178,11 +1256,24 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       expect(updated).toMatchObject({tagline: 'Hello', profile_photo_asset_id: photoId, links: {instagram: 'https://instagram.com/ownera'}})
     })
 
-    it('shows a public artist page only while the artist has LIVE music, and never exposes rights documents', async () => {
+    it('shows a public artist page while the artist has LIVE music or Stripe payouts, and never exposes rights documents', async () => {
       await resetIsrcState()
       const draft = await prepareLiveRelease('Hidden', {stage: 'pricing'})
       const hiddenSlug = (await pool.query<{slug: string}>('SELECT slug FROM artists WHERE id = $1', [draft.artist.id])).rows[0].slug
+      const setPayouts = (providerId: string, ready: boolean) => pool.query(
+        `UPDATE provider_profiles SET stripe_payouts_enabled = $2, stripe_transfers_status = $3 WHERE id = $1`,
+        [providerId, ready, ready ? 'active' : 'inactive'],
+      )
+      // No LIVE music and no Stripe payouts: not public.
+      await setPayouts(draft.provider.id, false)
       await expect(profiles().getPublicArtist(hiddenSlug)).rejects.toMatchObject({code: 'not_found'})
+      // Connecting Stripe makes the page public before any music is live; the draft is not listed.
+      await setPayouts(draft.provider.id, true)
+      expect((await profiles().getPublicArtist(hiddenSlug)).releases).toEqual([])
+      // Suspension hides it again whatever else is true.
+      await pool.query('UPDATE provider_profiles SET suspended_at = CURRENT_TIMESTAMP WHERE id = $1', [draft.provider.id])
+      await expect(profiles().getPublicArtist(hiddenSlug)).rejects.toMatchObject({code: 'not_found'})
+      await pool.query('UPDATE provider_profiles SET suspended_at = NULL WHERE id = $1', [draft.provider.id])
 
       const live = await prepareLiveRelease('Shown')
       const slug = (await pool.query<{slug: string}>('SELECT slug FROM artists WHERE id = $1', [live.artist.id])).rows[0].slug
@@ -1211,13 +1302,31 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       )
       await expect(store.getAsset(photoId)).resolves.toMatchObject({mimeType: 'image/jpeg'})
 
-      // Taking the only LIVE release down removes the page and its imagery.
+      // With Stripe payouts off, the LIVE release alone keeps the page up...
+      await setPayouts(live.provider.id, false)
+      await expect(profiles().getPublicArtist(slug)).resolves.toMatchObject({artist: {name: 'Shown Artist'}})
+      // ...and taking it down removes the page and its imagery.
       await adminService().commandRelease(adminUserId, live.release.id, {action: 'takedown', expectedVersion: live.version, note: 'Rights claim'})
       await expect(profiles().getPublicArtist(slug)).rejects.toMatchObject({code: 'not_found'})
       await expect(store.getAsset(photoId)).rejects.toMatchObject({code: 'not_found'})
+
+      // The owner can still preview the hidden page and its imagery, and is told why it is hidden.
+      const preview = await profiles().getOwnerPreview(live.userId, live.artist.id)
+      expect(preview.artist).toMatchObject({name: 'Shown Artist'})
+      expect(preview.artist).not.toHaveProperty('provider_profile_id')
+      expect(preview.visibility).toEqual({public: false, suspended: false, payoutsReady: false, hasLiveRelease: false})
+      await expect(profiles().getOwnedProfileImage(live.userId, live.artist.id, photoId)).resolves.toMatchObject({mimeType: 'image/jpeg'})
+      // Rights documents are never served as profile images, even to the owner.
+      await expect(profiles().getOwnedProfileImage(live.userId, live.artist.id, documentId)).rejects.toMatchObject({code: 'not_found'})
+      // Another account can neither preview the page nor read its images.
+      await expect(profiles().getOwnerPreview(draft.userId, live.artist.id)).rejects.toMatchObject({code: 'not_found'})
+      await expect(profiles().getOwnedProfileImage(draft.userId, live.artist.id, photoId)).rejects.toMatchObject({code: 'not_found'})
+      await setPayouts(live.provider.id, true)
+      expect((await profiles().getOwnerPreview(live.userId, live.artist.id)).visibility).toEqual({public: true, suspended: false, payoutsReady: true, hasLiveRelease: false})
+      await expect(store.getAsset(photoId)).resolves.toMatchObject({mimeType: 'image/jpeg'})
     })
 
-    it('saves release-page fields and galleries for the owning artist only, exposing them only while LIVE', async () => {
+    it('saves release-page fields and galleries for the owning artist only, exposing them only while the page is public', async () => {
       await resetIsrcState()
       const live = await prepareLiveRelease('PageOwner')
       const other = await prepareLiveRelease('PageIntruder')
@@ -1271,9 +1380,603 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       await expect(store.getAsset(cutout)).resolves.toMatchObject({mimeType: 'image/png'})
       await expect(store.getAsset(galleryA)).resolves.toMatchObject({mimeType: 'image/png'})
 
+      // Without Stripe payouts, the page (and its imagery) lasts only as long as the LIVE release.
+      await pool.query(`UPDATE provider_profiles SET stripe_payouts_enabled = FALSE, stripe_transfers_status = 'inactive' WHERE id = $1`, [live.provider.id])
       await adminService().commandRelease(adminUserId, live.release.id, {action: 'takedown', expectedVersion: live.version, note: 'Rights claim'})
       await expect(store.getAsset(cutout)).rejects.toMatchObject({code: 'not_found'})
       await expect(store.getAsset(galleryA)).rejects.toMatchObject({code: 'not_found'})
+    })
+  })
+
+  describe('release draft deletion', () => {
+    it('deletes an owned draft with its tracks and uploads, and records the deletion', async () => {
+      const fixture = await createProviderFixture('Deleter')
+      const storageKey = `marketplace/${fixture.provider.id}/audio/${crypto.randomUUID()}.wav`
+      await service.createAsset(fixture.userId, {trackId: fixture.track.id, kind: 'audio', storageKey, mimeType: 'audio/wav', byteSize: 1000, processingStatus: 'ready', metadata: {}})
+
+      // Another account cannot see it, and a viewer on the owning account cannot delete it.
+      const intruder = await createProviderFixture('DeleteIntruder')
+      await expect(service.deleteReleaseDraft(intruder.userId, fixture.release.id)).rejects.toMatchObject({code: 'not_found'})
+      await pool.query(`UPDATE provider_members SET role = 'viewer' WHERE user_id = $1`, [fixture.userId])
+      await expect(service.deleteReleaseDraft(fixture.userId, fixture.release.id)).rejects.toMatchObject({code: 'provider_write_forbidden'})
+      await pool.query(`UPDATE provider_members SET role = 'owner' WHERE user_id = $1`, [fixture.userId])
+
+      await expect(service.deleteReleaseDraft(fixture.userId, fixture.release.id)).resolves.toEqual({deleted: true, storageKeys: [storageKey]})
+      const remaining = await pool.query<{releases: number; tracks: number; assets: number; audits: number}>(
+        `SELECT
+          (SELECT COUNT(*)::integer FROM releases WHERE id = $1) AS releases,
+          (SELECT COUNT(*)::integer FROM tracks WHERE id = $2) AS tracks,
+          (SELECT COUNT(*)::integer FROM marketplace_assets WHERE storage_key = $3) AS assets,
+          (SELECT COUNT(*)::integer FROM marketplace_audit_events WHERE entity_id = $1 AND action = 'release.deleted') AS audits`,
+        [fixture.release.id, fixture.track.id, storageKey],
+      )
+      expect(remaining.rows[0]).toEqual({releases: 0, tracks: 0, assets: 0, audits: 1})
+      // The intruder's own draft is untouched.
+      expect((await pool.query('SELECT 1 FROM releases WHERE id = $1', [intruder.release.id])).rowCount).toBe(1)
+      await expect(service.deleteReleaseDraft(fixture.userId, fixture.release.id)).rejects.toMatchObject({code: 'not_found'})
+    })
+
+    it('keeps live releases, drafts with an ISRC, and drafts with checkout history', async () => {
+      await resetIsrcState()
+      const live = await prepareLiveRelease('DeleteLive')
+      await expect(service.deleteReleaseDraft(live.userId, live.release.id)).rejects.toMatchObject({status: 409, code: 'release_not_deletable'})
+
+      const withIsrc = await createProviderFixture('DeleteIsrc')
+      await service.assignGeneratedIsrc(withIsrc.userId, withIsrc.track.id, {controlsRecording: true, neverAssignedIsrc: true, authorizeAssignment: true}, {prefix: 'QTA3L', countryCode: 'QT', registrantCode: 'A3L'})
+      await expect(service.deleteReleaseDraft(withIsrc.userId, withIsrc.release.id)).rejects.toMatchObject({status: 409, code: 'release_has_isrc'})
+
+      const withCheckout = await prepareLiveRelease('DeleteCheckout', {skipIsrc: true, stage: 'pricing'})
+      const product = await pool.query<{id: string}>('SELECT id FROM products WHERE release_id = $1', [withCheckout.release.id])
+      await pool.query(
+        `INSERT INTO marketplace_checkout_attempts
+          (id, buyer_user_id, provider_profile_id, product_id, release_id, amount_minor, currency, platform_fee_bps,
+           stripe_idempotency_key, transfer_group, snapshot, expires_at)
+         VALUES ($1, NULL, $2, $3, $4, 999, 'USD', 1000, $5, $6, '{}'::jsonb, CURRENT_TIMESTAMP)`,
+        [crypto.randomUUID(), withCheckout.provider.id, product.rows[0].id, withCheckout.release.id, `idem-${crypto.randomUUID()}`, `tg-${crypto.randomUUID()}`],
+      )
+      await expect(service.deleteReleaseDraft(withCheckout.userId, withCheckout.release.id)).rejects.toMatchObject({status: 409, code: 'release_has_orders'})
+
+      const kept = await pool.query('SELECT 1 FROM releases WHERE id = ANY($1::text[])', [[live.release.id, withIsrc.release.id, withCheckout.release.id]])
+      expect(kept.rowCount).toBe(3)
+    })
+  })
+
+  describe('release scheduling, pre-orders and guest delivery', () => {
+    const DAY = 24 * 60 * 60 * 1000
+    const emailEnv = {RESEND_API_KEY: 're_test_key', RESEND_FROM: 'MeJay <orders@example.test>', FRONTEND_URL: 'https://app.test'}
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+    const db = () => new Database(connectionString!, pool)
+
+    /** Stripe + Resend stub. `resend` is the queue of Resend HTTP statuses (default 200). */
+    function stubServices(options: {resend?: number[]; refundFails?: boolean} = {}) {
+      const calls: Array<{url: string; body: URLSearchParams | null; idempotencyKey: string | null}> = []
+      const emails: Array<Record<string, unknown>> = []
+      const resend = options.resend ?? []
+      vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+        const url = String(input)
+        const headers = (init?.headers ?? {}) as Record<string, string>
+        if (url === 'https://api.resend.com/emails') {
+          emails.push(JSON.parse(String(init?.body)))
+          return new Response('{}', {status: resend.shift() ?? 200})
+        }
+        const body = init?.body instanceof URLSearchParams ? init.body : null
+        calls.push({url, body, idempotencyKey: headers['idempotency-key'] ?? null})
+        const reply = (data: unknown, status = 200) => new Response(JSON.stringify(data), {status})
+        if (url.includes('/v1/checkout/sessions')) return reply({id: `cs_${crypto.randomUUID().replaceAll('-', '')}`, url: 'https://checkout.stripe.test'})
+        if (url.includes('/v1/payment_intents/')) {
+          return reply({id: url.split('/v1/payment_intents/')[1].split('?')[0], status: 'succeeded', latest_charge: {id: `ch_${crypto.randomUUID()}`, balance_transaction: {id: 'txn_1', fee: 59}}})
+        }
+        if (url.endsWith('/v1/refunds')) return options.refundFails ? reply({error: {message: 'refund unavailable'}}, 500) : reply({id: `re_${crypto.randomUUID()}`})
+        if (url.endsWith('/v1/transfers')) return reply({id: `tr_${crypto.randomUUID()}`})
+        throw new Error(`Unexpected call ${url}`)
+      }))
+      return {calls, emails}
+    }
+
+    /** A priced release submitted with an artist-chosen date, then reviewed. */
+    async function submitWithDate(label: string, releaseInMs: number, options: {preorders?: boolean} = {}) {
+      await resetIsrcState()
+      const fixture = await prepareLiveRelease(label, {stage: 'pricing'})
+      await pool.query(
+        `UPDATE releases SET requested_release_at = $2, release_timezone = 'America/Detroit', preorders_enabled = $3 WHERE id = $1`,
+        [fixture.release.id, new Date(Date.now() + releaseInMs).toISOString(), options.preorders ?? true],
+      )
+      await certifyRelease(fixture.userId, fixture.release.id)
+      const submitted = await service.transitionRelease(fixture.userId, fixture.release.id, {targetStatus: 'SUBMITTED', expectedVersion: fixture.version}) as {version: number}
+      const reviewing = await adminService().commandRelease(reviewerUserId, fixture.release.id, {action: 'start_review', expectedVersion: submitted.version}) as {version: number}
+      return {...fixture, version: reviewing.version}
+    }
+
+    async function scheduledPreorder(label: string) {
+      const fixture = await submitWithDate(label, 8 * DAY)
+      const approved = await adminService().commandRelease(reviewerUserId, fixture.release.id, {action: 'approve', expectedVersion: fixture.version}) as {version: number; status: string}
+      expect(approved.status).toBe('SCHEDULED')
+      const product = await pool.query<{id: string}>('SELECT id FROM products WHERE release_id = $1', [fixture.release.id])
+      return {...fixture, version: approved.version, productId: product.rows[0].id}
+    }
+
+    /** Guest pre-order checkout and its paid webhook session. */
+    async function guestPreorder(label: string, email = `fan-${crypto.randomUUID().slice(0, 8)}@example.test`) {
+      const release = await scheduledPreorder(label)
+      const stubs = stubServices()
+      const commerce = new CommerceService(db() as never, 'sk_test', 1000)
+      const checkout = await commerce.createCheckout(null, release.productId, 'https://app.test')
+      const attempt = await pool.query<{id: string}>('SELECT id FROM marketplace_checkout_attempts WHERE stripe_checkout_session_id = $1', [checkout.sessionId])
+      const session = {
+        id: checkout.sessionId, payment_status: 'paid', payment_intent: `pi_${crypto.randomUUID()}`, amount_total: 999, currency: 'usd', livemode: false,
+        customer_details: {email: email.toUpperCase()},
+        metadata: {kind: 'marketplace_purchase', attemptId: attempt.rows[0].id, buyer: 'guest', productId: release.productId},
+      }
+      const fulfilled = await commerce.fulfillPaidSession(session)
+      const entitlement = await pool.query('SELECT * FROM download_entitlements WHERE order_id = $1', [fulfilled.orderId])
+      return {release, commerce, checkout, session, orderId: fulfilled.orderId, held: fulfilled.held, entitlement: entitlement.rows[0], email, ...stubs}
+    }
+
+    async function makeReleaseDue(releaseId: string) {
+      await pool.query(`UPDATE releases SET scheduled_release_at = CURRENT_TIMESTAMP - INTERVAL '1 minute' WHERE id = $1`, [releaseId])
+    }
+
+    it('requires a requested release date at least 7 days after submission, measured at submission time', async () => {
+      await expect(submitWithDate('LeadShort', 7 * DAY - 60_000)).rejects.toMatchObject({
+        code: 'release_prerequisites_unmet',
+        details: expect.arrayContaining(['Choose a release date at least 7 days from today to allow time for review and release preparation.']),
+      })
+      await expect(submitWithDate('LeadExact', 7 * DAY + 5_000)).resolves.toMatchObject({version: expect.any(Number)})
+    })
+
+    it('schedules on approval before the chosen date, and never silently publishes after it', async () => {
+      const early = await submitWithDate('ApproveEarly', 8 * DAY)
+      const requested = (await pool.query('SELECT requested_release_at FROM releases WHERE id = $1', [early.release.id])).rows[0].requested_release_at
+      const scheduled = await adminService().commandRelease(reviewerUserId, early.release.id, {action: 'approve', expectedVersion: early.version}) as {status: string; scheduled_release_at: Date; approved_at: Date | null}
+      expect(scheduled.status).toBe('SCHEDULED')
+      expect(new Date(scheduled.scheduled_release_at).toISOString()).toBe(new Date(requested).toISOString())
+      expect(scheduled.approved_at).not.toBeNull()
+
+      const late = await submitWithDate('ApproveLate', 8 * DAY)
+      // The chosen date passes while the release waits in review.
+      await pool.query(`UPDATE releases SET requested_release_at = CURRENT_TIMESTAMP - INTERVAL '1 hour' WHERE id = $1`, [late.release.id])
+      const approved = await adminService().commandRelease(reviewerUserId, late.release.id, {action: 'approve', expectedVersion: late.version}) as {status: string; release_date_needed: boolean; published_at: Date | null}
+      expect(approved).toMatchObject({status: 'APPROVED', release_date_needed: true, published_at: null})
+      const products = await pool.query<{active: boolean}>('SELECT active FROM products WHERE release_id = $1', [late.release.id])
+      expect((await pool.query('SELECT status FROM releases WHERE id = $1', [late.release.id])).rows[0].status).toBe('APPROVED')
+      expect(products.rows.length).toBeGreaterThan(0)
+    })
+
+    it('lists approved pre-orders with artwork but no audio, and only when the artist enabled them', async () => {
+      const release = await scheduledPreorder('Listed')
+      const store = new StoreService(db() as never)
+      const listed = (await store.listCatalog() as Array<{id: string; availability: string; preview_asset_id: string | null; release_at: Date; release_timezone: string; artwork_asset_id: string}>)
+        .find((row) => row.id === release.release.id)!
+      expect(listed).toMatchObject({availability: 'preorder', preview_asset_id: null, release_timezone: 'America/Detroit'})
+      expect(listed.release_at).not.toBeNull()
+      const detail = await store.getRelease(release.release.id) as {tracks: Array<{preview_asset_id: string | null}>}
+      expect(detail.tracks.every((track) => track.preview_asset_id === null)).toBe(true)
+      await pool.query(`UPDATE marketplace_assets SET storage_key = $2 WHERE id = $1`, [listed.artwork_asset_id, `marketplace/${release.provider.id}/artwork/${listed.artwork_asset_id}.jpg`])
+      await expect(store.getAsset(listed.artwork_asset_id)).resolves.toMatchObject({mimeType: 'image/jpeg'})
+      const audio = await pool.query<{id: string}>(`SELECT id FROM marketplace_assets WHERE track_id = $1 AND kind = 'audio'`, [release.track.id])
+      await expect(store.getAsset(audio.rows[0].id)).rejects.toMatchObject({code: 'not_found'})
+
+      await pool.query('UPDATE releases SET preorders_enabled = FALSE WHERE id = $1', [release.release.id])
+      expect((await store.listCatalog() as Array<{id: string}>).some((row) => row.id === release.release.id)).toBe(false)
+      stubServices()
+      await expect(new CommerceService(db() as never, 'sk_test', 1000).createCheckout(null, release.productId, 'https://app.test')).rejects.toMatchObject({code: 'product_not_found'})
+    })
+
+    it('charges a guest pre-order today, holds downloads and payout, and keeps payment separate from delivery', async () => {
+      const {calls, orderId, held, entitlement, email, commerce, session} = await guestPreorder('GuestHold')
+      const checkout = calls.find((call) => call.url.endsWith('/v1/checkout/sessions'))!.body!
+      expect(checkout.get('customer_email')).toBeNull()
+      expect(checkout.get('metadata[buyer]')).toBe('guest')
+      expect(checkout.get('metadata[userId]')).toBeNull()
+      expect(checkout.get('custom_text[submit][message]')).toContain("You'll be charged today. Downloads become available on release day.")
+      expect(checkout.get('custom_text[submit][message]')).toMatch(/Pre-order · releases .+ (EST|EDT)/)
+      expect(checkout.get('success_url')).toBe('https://app.test/purchase/complete?session_id={CHECKOUT_SESSION_ID}')
+
+      expect(held).toBe(true)
+      expect(entitlement).toMatchObject({buyer_user_id: null, buyer_email: email, status: 'active', delivery_status: 'held', delivery_available_at: null})
+      const order = (await pool.query('SELECT payment_status, purchase_type, transfer_status, buyer_user_id FROM marketplace_orders WHERE id = $1', [orderId])).rows[0]
+      expect(order).toEqual({payment_status: 'paid', purchase_type: 'preorder', transfer_status: 'pending', buyer_user_id: null})
+      expect(calls.filter((call) => call.url.endsWith('/v1/transfers'))).toHaveLength(0)
+      // The transfer retry job also leaves held pre-orders alone.
+      await commerce.retryPendingTransfers()
+      expect(calls.filter((call) => call.url.endsWith('/v1/transfers'))).toHaveLength(0)
+      // Snapshot pins the bought audio and formats.
+      const item = (await pool.query(`SELECT catalog_snapshot FROM marketplace_order_items WHERE order_id = $1`, [orderId])).rows[0].catalog_snapshot
+      expect(item).toMatchObject({purchase_type: 'preorder', formats: ['wav'], release_timezone: 'America/Detroit'})
+      const files = await pool.query('SELECT storage_key, mime_type FROM download_entitlement_files WHERE entitlement_id = $1', [entitlement.id])
+      expect(files.rows).toEqual([{storage_key: expect.stringContaining('GuestHold-track.wav'), mime_type: 'audio/wav'}])
+
+      // Guest status page: paid, held, masked email only.
+      await expect(commerce.getGuestOrderStatus(session.id)).resolves.toMatchObject({paid: true, purchaseType: 'preorder', deliveryStatus: 'held', maskedEmail: expect.stringMatching(/^f•••@example\.test$/)})
+
+      // Every download path is held: an emailed link returns only the release date.
+      const {token} = await issueEmailLink(db() as never, {entitlementId: entitlement.id, orderId, recipientEmail: email, purpose: 'purchase'})
+      await expect(exchangeEmailLink(db() as never, token)).resolves.toMatchObject({state: 'held', purchase: {deliveryStatus: 'held', releaseTimezone: 'America/Detroit'}})
+      const sessions = await pool.query(`SELECT 1 FROM marketplace_guest_access_tokens WHERE entitlement_id = $1 AND kind = 'download_session'`, [entitlement.id])
+      expect(sessions.rowCount).toBe(0)
+      // Claimed into an account it is still held there.
+      const userId = crypto.randomUUID()
+      await pool.query(`INSERT INTO users (id, email, account_intent) VALUES ($1, $2, 'consumer')`, [userId, email])
+      expect(await claimGuestPurchases(db() as never, userId, email)).toBe(1)
+      const fileId = (await pool.query('SELECT id FROM download_entitlement_files WHERE entitlement_id = $1', [entitlement.id])).rows[0].id
+      await expect(commerce.getDownload(userId, entitlement.id, fileId)).rejects.toMatchObject({code: 'download_not_found'})
+    })
+
+    it('unlocks pre-orders and queues one release-day email per purchase, however often the scheduler runs', async () => {
+      const {release, entitlement, orderId, email, commerce} = await guestPreorder('ReleaseDay')
+      await makeReleaseDue(release.release.id)
+      const admin = adminService()
+      expect((await admin.publishDueReleases()).published).toEqual([release.release.id])
+      await admin.publishDueReleases()
+      const state = await pool.query(
+        `SELECT entitlement.delivery_status, entitlement.delivery_available_at IS NOT NULL AS unlocked_at,
+           (SELECT COUNT(*)::integer FROM marketplace_email_jobs WHERE entitlement_id = entitlement.id AND kind = 'release_day') AS jobs
+         FROM download_entitlements entitlement WHERE entitlement.id = $1`,
+        [entitlement.id],
+      )
+      expect(state.rows[0]).toEqual({delivery_status: 'available', unlocked_at: true, jobs: 1})
+
+      // The email is sent once, to the purchase email, with a working download link.
+      const {emails} = stubServices()
+      expect(await processEmailJobs(db() as never, emailEnv)).toMatchObject({sent: 1})
+      expect(await processEmailJobs(db() as never, emailEnv)).toMatchObject({sent: 0})
+      expect(emails).toHaveLength(1)
+      expect(emails[0].to).toBe(email)
+      expect(String(emails[0].html)).toContain('Download your music')
+      const token = /download#token=([A-Za-z0-9_-]{43})/.exec(String(emails[0].text))![1]
+
+      // Downloading is an explicit, repeatable action within the link's validity.
+      const first = await exchangeEmailLink(db() as never, token)
+      const second = await exchangeEmailLink(db() as never, token)
+      if (first.state !== 'available' || second.state !== 'available') throw new Error('expected available')
+      expect(first.files).toHaveLength(1)
+      const fileId = first.files[0].id
+      await expect(resolveSessionDownload(db() as never, first.accessToken, fileId)).resolves.toMatchObject({fileName: expect.stringContaining('.wav')})
+      await expect(resolveSessionDownload(db() as never, second.accessToken, fileId)).resolves.toMatchObject({fileId})
+      const uses = await pool.query(`SELECT use_count FROM marketplace_guest_access_tokens WHERE entitlement_id = $1 AND kind = 'email_link'`, [entitlement.id])
+      expect(uses.rows[0].use_count).toBe(2)
+
+      // Interrupted downloads resume with a byte range through the guest route.
+      const ranges: Array<string | undefined> = []
+      const bucket = {getExact: vi.fn(async (_key: string, range?: string) => {
+        ranges.push(range)
+        return {body: new Response('abc').body!, contentLength: 3, contentRange: range ? 'bytes 100-102/2000' : undefined}
+      })}
+      const response = await downloadGuestFile({
+        request: new Request(`https://api.test/api/store/guest-downloads/files/${fileId}?access=${first.accessToken}`, {headers: {range: 'bytes=100-'}}),
+        env: {DB: db(), DOWNLOADS: bucket as never},
+        params: {fileId},
+      })
+      expect(response.status).toBe(206)
+      expect(response.headers.get('content-range')).toBe('bytes 100-102/2000')
+      expect(ranges).toEqual(['bytes=100-'])
+
+      // A session never reaches another purchase's file.
+      const other = await guestPreorder('ReleaseDayOther')
+      const otherFile = (await pool.query('SELECT id FROM download_entitlement_files WHERE entitlement_id = $1', [other.entitlement.id])).rows[0].id
+      await expect(resolveSessionDownload(db() as never, first.accessToken, otherFile)).rejects.toMatchObject({code: 'download_not_found'})
+
+      // Payout follows release day through the existing transfer retry job.
+      stubServices()
+      await commerce.retryPendingTransfers()
+      expect((await pool.query('SELECT transfer_status FROM marketplace_orders WHERE id = $1', [orderId])).rows[0].transfer_status).toBe('transferred')
+    })
+
+    it('expires email links after 7 days and recovers access only through the purchase email', async () => {
+      const {release, entitlement, orderId, email} = await guestPreorder('Recovery')
+      await makeReleaseDue(release.release.id)
+      await adminService().publishDueReleases()
+      const {token} = await issueEmailLink(db() as never, {entitlementId: entitlement.id, orderId, recipientEmail: email, purpose: 'purchase', now: Date.now() - 7 * DAY - 1000})
+      await expect(exchangeEmailLink(db() as never, token)).rejects.toMatchObject({status: 410, code: 'link_expired'})
+      await expect(exchangeEmailLink(db() as never, 'x'.repeat(43))).rejects.toMatchObject({code: 'link_invalid'})
+
+      const {emails} = stubServices()
+      const answer = async (address: string) => {
+        const response = await recoverGuestAccess({
+          request: new Request('https://api.test/api/store/guest-access/recover', {method: 'POST', headers: {'x-forwarded-for': `10.0.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`}, body: JSON.stringify({email: address})}),
+          env: {DB: db(), ...emailEnv},
+        })
+        return {status: response.status, body: await response.json()}
+      }
+      const unknown = await answer('nobody-here@example.test')
+      const known = await answer(` ${email.toUpperCase()} `)
+      // Same answer either way; mail goes only to the stored purchase email.
+      expect(unknown).toEqual(known)
+      expect(emails).toHaveLength(1)
+      expect(emails[0].to).toBe(email)
+      const fresh = /download#token=([A-Za-z0-9_-]{43})/.exec(String(emails[0].text))![1]
+      await expect(exchangeEmailLink(db() as never, fresh)).resolves.toMatchObject({state: 'available'})
+      await expect(sendAccessRecovery(db() as never, emailEnv, 'nobody-here@example.test')).resolves.toBe('none')
+    })
+
+    it('retries failed release-day emails with backoff and marks them failed after the last attempt', async () => {
+      const {release, entitlement} = await guestPreorder('EmailRetry')
+      // Drain jobs left by earlier tests so the counts below are this purchase's alone.
+      stubServices()
+      await processEmailJobs(db() as never, emailEnv, 500)
+      await makeReleaseDue(release.release.id)
+      await adminService().publishDueReleases()
+      stubServices({resend: [500]})
+      expect(await processEmailJobs(db() as never, emailEnv)).toMatchObject({sent: 0, retried: 1})
+      const job = await pool.query(`SELECT status, attempts, last_error, next_attempt_at > CURRENT_TIMESTAMP AS backed_off FROM marketplace_email_jobs WHERE entitlement_id = $1`, [entitlement.id])
+      expect(job.rows[0]).toEqual({status: 'pending', attempts: 1, last_error: 'http_500', backed_off: true})
+      // Not due yet: nothing is sent early.
+      expect(await processEmailJobs(db() as never, emailEnv)).toMatchObject({sent: 0, retried: 0})
+      await pool.query(`UPDATE marketplace_email_jobs SET next_attempt_at = CURRENT_TIMESTAMP, attempts = 5 WHERE entitlement_id = $1`, [entitlement.id])
+      stubServices({resend: [500]})
+      await processEmailJobs(db() as never, emailEnv)
+      expect((await pool.query(`SELECT status, attempts FROM marketplace_email_jobs WHERE entitlement_id = $1`, [entitlement.id])).rows[0]).toEqual({status: 'failed', attempts: 6})
+    })
+
+    it('tells buyers about a new release date once per change and keeps downloads held until then', async () => {
+      const {release, entitlement} = await guestPreorder('Reschedule')
+      const newDate = new Date(Date.now() + 20 * DAY).toISOString()
+      const moved = await adminService().commandRelease(adminUserId, release.release.id, {action: 'reschedule', expectedVersion: release.version, scheduledReleaseAt: newDate}) as {version: number; status: string}
+      expect(moved.status).toBe('SCHEDULED')
+      await expect(adminService().commandRelease(adminUserId, release.release.id, {action: 'reschedule', expectedVersion: moved.version, scheduledReleaseAt: new Date(Date.now() - 1000).toISOString()}))
+        .rejects.toMatchObject({code: 'schedule_must_be_future'})
+      const jobs = await pool.query(`SELECT payload FROM marketplace_email_jobs WHERE entitlement_id = $1 AND kind = 'release_date_changed'`, [entitlement.id])
+      expect(jobs.rows).toEqual([{payload: expect.objectContaining({releaseAt: newDate, releaseTimezone: 'America/Detroit'})}])
+      const {emails} = stubServices()
+      await processEmailJobs(db() as never, emailEnv)
+      expect(emails).toHaveLength(1)
+      expect(String(emails[0].text)).toMatch(/New release date: .+ (EST|EDT)/)
+      await adminService().publishDueReleases()
+      expect((await pool.query('SELECT delivery_status FROM download_entitlements WHERE id = $1', [entitlement.id])).rows[0].delivery_status).toBe('held')
+    })
+
+    it('cancels pre-orders with idempotent refunds and never deletes or quietly takes down a release with paid pre-orders', async () => {
+      const {release, orderId, entitlement, commerce} = await guestPreorder('Cancel')
+      await expect(adminService().commandRelease(adminUserId, release.release.id, {action: 'takedown', expectedVersion: release.version, note: 'Pulled'}))
+        .rejects.toMatchObject({code: 'release_has_preorders'})
+      await expect(service.deleteReleaseDraft(release.userId, release.release.id)).rejects.toMatchObject({code: 'release_not_deletable'})
+
+      const canceled = await adminService().commandRelease(adminUserId, release.release.id, {action: 'cancel_preorders', expectedVersion: release.version, note: 'Artist withdrew the release'}) as {status: string; preorders_canceled: number}
+      expect(canceled).toMatchObject({status: 'TAKEN_DOWN', preorders_canceled: 1})
+      const failing = stubServices({refundFails: true})
+      expect(await commerce.processPreorderRefunds()).toEqual({requested: 0, failed: 1})
+      expect(failing.calls.filter((call) => call.url.endsWith('/v1/refunds'))).toHaveLength(1)
+      await pool.query(`UPDATE marketplace_preorder_cancellations SET updated_at = CURRENT_TIMESTAMP - INTERVAL '1 hour' WHERE order_id = $1`, [orderId])
+      const {calls} = stubServices()
+      expect(await commerce.processPreorderRefunds()).toEqual({requested: 1, failed: 0})
+      expect(await commerce.processPreorderRefunds()).toEqual({requested: 0, failed: 0})
+      const refunds = [...failing.calls, ...calls].filter((call) => call.url.endsWith('/v1/refunds'))
+      // Every attempt reuses the same idempotency key, so Stripe never refunds twice.
+      expect(new Set(refunds.map((call) => call.idempotencyKey))).toEqual(new Set([`marketplace-preorder-refund-${orderId}`]))
+      expect(refunds[0].body?.get('metadata[kind]')).toBe('preorder_cancellation')
+
+      // The refund webhook revokes the download; nothing was paid out, so nothing is reversed.
+      const order = (await pool.query('SELECT stripe_charge_id FROM marketplace_orders WHERE id = $1', [orderId])).rows[0]
+      await commerce.handleRefund({id: order.stripe_charge_id, amount: 999, amount_refunded: 999})
+      const after = await pool.query(`SELECT purchase_order.payment_status, entitlement.status FROM marketplace_orders purchase_order JOIN download_entitlements entitlement ON entitlement.order_id = purchase_order.id WHERE purchase_order.id = $1`, [orderId])
+      expect(after.rows[0]).toEqual({payment_status: 'refunded', status: 'revoked'})
+      expect(calls.filter((call) => call.url.includes('/reversals'))).toHaveLength(0)
+      const {emails} = stubServices()
+      await processEmailJobs(db() as never, emailEnv)
+      expect(emails.map((mail) => mail.subject)).toEqual([expect.stringContaining('Pre-order cancelled')])
+      void entitlement
+    })
+
+    it('claims guest purchases only for a verified email that matches the signed-in account', async () => {
+      const email = `claim-${crypto.randomUUID().slice(0, 8)}@example.test`
+      const {entitlement} = await guestPreorder('Claim', email)
+      const userId = crypto.randomUUID()
+      await pool.query(`INSERT INTO users (id, email, account_intent) VALUES ($1, $2, 'consumer')`, [userId, email])
+      const sessionToken = crypto.randomUUID()
+      await pool.query(`INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, CURRENT_TIMESTAMP + INTERVAL '1 hour')`, [
+        createHash('sha256').update(`session:${sessionToken}:dev-session-pepper`).digest('hex'), userId,
+      ])
+      const claim = async (verifiedToken: string) => {
+        const response = await claimStorePurchases({
+          request: new Request('https://api.test/api/store/purchases/claim', {method: 'POST', headers: {cookie: `mejay_session=${sessionToken}`}, body: JSON.stringify({verifiedToken})}),
+          env: {DB: db()},
+        })
+        return {status: response.status, body: await response.json()}
+      }
+      const exp = Date.now() + 60_000
+      expect(await claim('not-a-token')).toMatchObject({status: 401})
+      expect(await claim(await signVerifiedToken({env: {}, email: 'someone-else@example.test', purpose: 'signup_verify', expMs: exp}))).toMatchObject({status: 403})
+      expect((await pool.query('SELECT buyer_user_id FROM download_entitlements WHERE id = $1', [entitlement.id])).rows[0].buyer_user_id).toBeNull()
+      expect(await claim(await signVerifiedToken({env: {}, email, purpose: 'signup_verify', expMs: exp}))).toMatchObject({status: 200, body: {data: {claimed: 1}}})
+      expect((await pool.query('SELECT buyer_user_id FROM download_entitlements WHERE id = $1', [entitlement.id])).rows[0].buyer_user_id).toBe(userId)
+    })
+
+    it('keeps live purchases delivered immediately with a download link and an immediate payout', async () => {
+      await resetIsrcState()
+      const live = await prepareLiveRelease('LiveStill')
+      const product = await pool.query<{id: string}>('SELECT id FROM products WHERE release_id = $1', [live.release.id])
+      const {calls, emails} = stubServices()
+      const commerce = new CommerceService(db() as never, 'sk_test', 1000)
+      const checkout = await commerce.createCheckout(null, product.rows[0].id, 'https://app.test')
+      expect(calls.find((call) => call.url.endsWith('/v1/checkout/sessions'))!.body!.get('custom_text[submit][message]')).toBeNull()
+      const attempt = await pool.query<{id: string}>('SELECT id FROM marketplace_checkout_attempts WHERE stripe_checkout_session_id = $1', [checkout.sessionId])
+      const {orderId, held} = await commerce.fulfillPaidSession({
+        id: checkout.sessionId, payment_status: 'paid', payment_intent: `pi_${crypto.randomUUID()}`, amount_total: 999, currency: 'usd', livemode: false,
+        customer_details: {email: 'livefan@example.test'},
+        metadata: {kind: 'marketplace_purchase', attemptId: attempt.rows[0].id, buyer: 'guest', productId: product.rows[0].id},
+      })
+      expect(held).toBe(false)
+      expect((await pool.query('SELECT delivery_status FROM download_entitlements WHERE order_id = $1', [orderId])).rows[0].delivery_status).toBe('available')
+      expect(calls.filter((call) => call.url.endsWith('/v1/transfers'))).toHaveLength(1)
+      await expect(sendOrderConfirmation(db() as never, emailEnv, orderId)).resolves.toBe('sent')
+      expect(emails[0].to).toBe('livefan@example.test')
+      expect(String(emails[0].text)).toMatch(/Download your music: https:\/\/app\.test\/download#token=/)
+      expect(String(emails[0].text)).toContain('Create a free account')
+      await expect(retryFailedConfirmations(db() as never, emailEnv)).resolves.toBe(0)
+    })
+
+    /** A finished clip for a track, as the converter would store it. */
+    async function addClip(owner: {provider: {id: string}; track: {id: string}}, setting: number | null) {
+      const source = await pool.query<{id: string}>(`SELECT id FROM marketplace_assets WHERE track_id = $1 AND kind = 'audio' ORDER BY created_at DESC LIMIT 1`, [owner.track.id])
+      const clipId = crypto.randomUUID()
+      await pool.query(
+        `INSERT INTO marketplace_assets (id, provider_profile_id, track_id, kind, storage_key, mime_type, byte_size, processing_status, metadata)
+         VALUES ($1, $2, $3, 'audio_preview', $4, 'audio/mpeg', 160000, 'ready', $5)`,
+        [clipId, owner.provider.id, owner.track.id, `mejay-artist/${owner.provider.id}/audio_preview/${owner.track.id}/${clipId}.mp3`, JSON.stringify({sourceAssetId: source.rows[0].id, previewSetting: setting})],
+      )
+      await pool.query(`UPDATE audio_processing_jobs SET status = 'succeeded' WHERE track_id = $1 AND status IN ('queued', 'processing')`, [owner.track.id])
+      return clipId
+    }
+
+    it('keeps exactly one preview clip job per track setting, never retrying a failed file for the same setting', async () => {
+      await pool.query(`UPDATE audio_processing_jobs SET status = 'succeeded' WHERE status IN ('queued', 'processing')`)
+      const owner = await scheduledPreorder('ClipJobs')
+      const jobsFor = async () => (await pool.query(`SELECT status, preview_start_ms FROM audio_processing_jobs WHERE track_id = $1 ORDER BY created_at`, [owner.track.id])).rows
+      await ensurePreviewJobs(db() as never, 500)
+      await ensurePreviewJobs(db() as never, 500)
+      expect(await jobsFor()).toEqual([{status: 'queued', preview_start_ms: null}])
+      await addClip(owner, null)
+      await ensurePreviewJobs(db() as never, 500)
+      expect(await jobsFor()).toHaveLength(1)
+
+      // A new start time queues one fresh job carrying that setting.
+      await pool.query('UPDATE tracks SET preview_start_ms = 45000 WHERE id = $1', [owner.track.id])
+      await ensurePreviewJobs(db() as never, 500)
+      await ensurePreviewJobs(db() as never, 500)
+      expect((await jobsFor()).map((job) => job.preview_start_ms)).toEqual([null, 45000])
+      const detail = await service.getRelease(owner.userId, owner.release.id) as {tracks: Array<{preview_status: string}>}
+      expect(detail.tracks[0].preview_status).toBe('processing')
+
+      // A failed conversion is not retried for the same setting.
+      await pool.query(`UPDATE audio_processing_jobs SET status = 'failed' WHERE track_id = $1 AND preview_start_ms = 45000`, [owner.track.id])
+      await ensurePreviewJobs(db() as never, 500)
+      expect(await jobsFor()).toHaveLength(2)
+      expect((await service.getRelease(owner.userId, owner.release.id) as {tracks: Array<{preview_status: string}>}).tracks[0].preview_status).toBe('waiting')
+
+      // Wake-up: only when configured and something is queued.
+      const fetchSpy = vi.fn(async () => new Response('{}', {status: 202}))
+      expect(await wakeConverterIfQueued(db() as never, {}, fetchSpy as never)).toBe(false)
+      await pool.query('UPDATE tracks SET preview_start_ms = 50000 WHERE id = $1', [owner.track.id])
+      await ensurePreviewJobs(db() as never, 500)
+      expect(await wakeConverterIfQueued(db() as never, {CONVERTER_URL: 'https://converter.test/', CONVERTER_TRIGGER_SECRET: 'secret'}, fetchSpy as never)).toBe(true)
+      expect(fetchSpy).toHaveBeenCalledWith('https://converter.test/jobs/run', expect.objectContaining({method: 'POST', headers: {authorization: 'Bearer secret'}}))
+      await addClip(owner, 50000)
+      expect((await service.getRelease(owner.userId, owner.release.id) as {tracks: Array<{preview_status: string}>}).tracks[0].preview_status).toBe('ready')
+    })
+
+    it('serves only preview clips, never masters, and plays pre-order previews only when the artist allows', async () => {
+      const owner = await scheduledPreorder('ClipStore')
+      const clipId = await addClip(owner, null)
+      const master = (await pool.query<{id: string}>(`SELECT id FROM marketplace_assets WHERE track_id = $1 AND kind = 'audio'`, [owner.track.id])).rows[0].id
+      const store = new StoreService(db() as never)
+      const listedPreview = async () => {
+        const row = (await store.listCatalog() as Array<{id: string; preview_asset_id: string | null}>).find((release) => release.id === owner.release.id)!
+        const detail = await store.getRelease(owner.release.id) as {tracks: Array<{preview_asset_id: string | null}>}
+        return {card: row.preview_asset_id, track: detail.tracks[0].preview_asset_id}
+      }
+      // Default "after release": no preview while it is a pre-order.
+      expect(await listedPreview()).toEqual({card: null, track: null})
+      await expect(store.getAsset(clipId)).rejects.toMatchObject({code: 'not_found'})
+
+      await pool.query(`UPDATE releases SET preview_timing = 'before_release' WHERE id = $1`, [owner.release.id])
+      expect(await listedPreview()).toEqual({card: clipId, track: clipId})
+      await expect(store.getAsset(clipId)).resolves.toMatchObject({kind: 'audio_preview', mimeType: 'audio/mpeg'})
+      await expect(store.recordPreview(clipId, null)).resolves.toBeUndefined()
+      await expect(store.getAsset(master)).rejects.toMatchObject({code: 'not_found'})
+
+      // The public route streams the whole clip (with ranges) and refuses the master.
+      const bucket = {getExact: vi.fn(async (_key: string, range?: string) => ({body: new Response('mp3').body!, contentLength: 3, contentRange: range ? 'bytes 0-2/160000' : undefined}))}
+      const asset = (id: string, range?: string) => getCatalogAsset({request: new Request(`https://api.test/api/store/assets/${id}`, {headers: range ? {range} : {}}), env: {DB: db() as never, DOWNLOADS: bucket as never}, params: {assetId: id}})
+      expect((await asset(clipId)).status).toBe(200)
+      expect((await asset(clipId, 'bytes=0-2')).status).toBe(206)
+      expect((await asset(master)).status).toBe(404)
+
+      // After release, previews play whatever the setting.
+      await pool.query(`UPDATE releases SET preview_timing = 'after_release' WHERE id = $1`, [owner.release.id])
+      await makeReleaseDue(owner.release.id)
+      await adminService().publishDueReleases()
+      expect(await listedPreview()).toEqual({card: clipId, track: clipId})
+    })
+
+    it('saves preview settings on drafts, keeps them on step saves, and rejects a start too close to the end', async () => {
+      await resetIsrcState()
+      const fixture = await createProviderFixture('ClipSettings')
+      const trackInput = {title: 'ClipSettings Track', primaryArtistId: fixture.artist.id, discNumber: 1, trackNumber: 1, durationMs: 180_000, explicit: false, instrumental: false}
+      await service.updateTrack(fixture.userId, fixture.track.id, {...trackInput, previewStartMs: 95_000})
+      await service.updateTrack(fixture.userId, fixture.track.id, trackInput)
+      expect((await pool.query('SELECT preview_start_ms FROM tracks WHERE id = $1', [fixture.track.id])).rows[0].preview_start_ms).toBe(95_000)
+      await expect(service.updateTrack(fixture.userId, fixture.track.id, {...trackInput, previewStartMs: 175_000}))
+        .rejects.toMatchObject({code: 'preview_start_too_late', message: expect.stringContaining('2:50')})
+      await service.updateTrack(fixture.userId, fixture.track.id, {...trackInput, previewStartMs: null})
+      expect((await pool.query('SELECT preview_start_ms FROM tracks WHERE id = $1', [fixture.track.id])).rows[0].preview_start_ms).toBeNull()
+
+      const base = {draftStep: 'release-information' as const, title: 'ClipSettings Release', releaseType: 'single' as const, primaryArtistId: fixture.artist.id}
+      const saved = await service.updateReleaseDraft(fixture.userId, fixture.release.id, {...base, expectedVersion: fixture.release.version, previewTiming: 'before_release'}) as {version: number; preview_timing: string}
+      expect(saved.preview_timing).toBe('before_release')
+      const kept = await service.updateReleaseDraft(fixture.userId, fixture.release.id, {...base, expectedVersion: saved.version}) as {preview_timing: string}
+      expect(kept.preview_timing).toBe('before_release')
+    })
+
+    it('returns the original release date as a plain date so "Save and continue" can send it back', async () => {
+      await resetIsrcState()
+      const fixture = await createProviderFixture('SaveContinue')
+      const base = {title: 'SaveContinue Release', releaseType: 'single' as const, primaryArtistId: fixture.artist.id}
+      const saved = await service.updateReleaseDraft(fixture.userId, fixture.release.id, releaseDraftSchema.parse({...base, draftStep: 'release-information', expectedVersion: fixture.release.version, originalReleaseDate: '2026-11-06'})) as {version: number; original_release_date: string}
+      expect(saved.original_release_date).toBe('2026-11-06')
+      const detail = await service.getRelease(fixture.userId, fixture.release.id) as {release: {original_release_date: string; version: number}}
+      expect(detail.release.original_release_date).toBe('2026-11-06')
+      const listed = await service.listReleases(fixture.userId) as Array<{id: string; original_release_date: string}>
+      expect(listed.find((row) => row.id === fixture.release.id)?.original_release_date).toBe('2026-11-06')
+      // What the wizard's "Save and continue" sends: the stored values echoed back with the next step.
+      const advanced = await service.updateReleaseDraft(fixture.userId, fixture.release.id, releaseDraftSchema.parse({
+        ...base, draftStep: 'artwork', expectedVersion: detail.release.version, originalReleaseDate: detail.release.original_release_date,
+      })) as {draft_step: string; original_release_date: string}
+      expect(advanced).toMatchObject({draft_step: 'artwork', original_release_date: '2026-11-06'})
+    })
+
+    it('credits extra primary and featured artists, including people not on MeJay, everywhere the artist shows', async () => {
+      await resetIsrcState()
+      const live = await prepareLiveRelease('Credits')
+      const partner = await service.createArtist(live.userId, {name: 'Kay Partner', countryCode: 'US', metadata: {}}) as {id: string}
+      const intruder = await createProviderFixture('CreditsIntruder')
+      const draft = await service.createRelease(live.userId, {title: 'Draft With Guests', releaseType: 'single', primaryArtistId: live.artist.id}) as {id: string; version: number}
+      const base = {draftStep: 'release-information' as const, title: 'Draft With Guests', releaseType: 'single' as const, primaryArtistId: live.artist.id}
+      const credits = [{role: 'featured' as const, name: '  Boldy   James '}, {role: 'primary' as const, artistId: partner.id, name: 'ignored for account artists'}]
+      const saved = await service.updateReleaseDraft(live.userId, draft.id, releaseDraftSchema.parse({...base, expectedVersion: draft.version, additionalArtists: credits})) as {version: number}
+      let detail = await service.getRelease(live.userId, draft.id) as {release: {additional_artists: Array<{role: string; artist_id: string | null; name: string}>; artist_credit: string; version: number}}
+      expect(detail.release.additional_artists).toEqual([
+        {role: 'primary', artist_id: partner.id, name: 'Kay Partner'},
+        {role: 'featured', artist_id: null, name: 'Boldy James'},
+      ])
+      expect(detail.release.artist_credit).toBe('Credits Artist & Kay Partner feat. Boldy James')
+
+      // A step save (no additionalArtists) keeps them; an empty list clears them.
+      await service.updateReleaseDraft(live.userId, draft.id, releaseDraftSchema.parse({...base, draftStep: 'artwork', expectedVersion: saved.version}))
+      detail = await service.getRelease(live.userId, draft.id) as typeof detail
+      expect(detail.release.additional_artists).toHaveLength(2)
+
+      // Refused: the lead again, a repeat, another account's artist.
+      const save = (additionalArtists: unknown[]) => service.updateReleaseDraft(live.userId, draft.id, releaseDraftSchema.parse({...base, expectedVersion: detail.release.version, additionalArtists}))
+      await expect(save([{role: 'featured', artistId: live.artist.id, name: 'x'}])).rejects.toMatchObject({code: 'duplicate_artist_credit'})
+      await expect(save([{role: 'featured', name: 'Boldy James'}, {role: 'primary', name: 'boldy james'}])).rejects.toMatchObject({code: 'duplicate_artist_credit'})
+      await expect(save([{role: 'featured', artistId: intruder.artist.id, name: 'x'}])).rejects.toMatchObject({code: 'not_found'})
+      const cleared = await save([]) as {version: number}
+      expect((await pool.query('SELECT COUNT(*)::integer AS count FROM release_artist_credits WHERE release_id = $1', [draft.id])).rows[0].count).toBe(0)
+
+      // Deleting the draft removes its credits with it.
+      await service.updateReleaseDraft(live.userId, draft.id, releaseDraftSchema.parse({...base, expectedVersion: cleared.version, additionalArtists: [{role: 'featured', name: 'Temp Guest'}]}))
+      await service.deleteReleaseDraft(live.userId, draft.id)
+      expect((await pool.query('SELECT COUNT(*)::integer AS count FROM release_artist_credits WHERE release_id = $1', [draft.id])).rows[0].count).toBe(0)
+
+      // A LIVE release with a guest: the store shows the full credit once, links stay on the lead,
+      // and checkout records the full credit on the order.
+      await pool.query(
+        `INSERT INTO release_artist_credits (id, provider_profile_id, release_id, role, artist_id, display_name, position) VALUES ($1, $2, $3, 'featured', NULL, 'Boldy James', 0)`,
+        [crypto.randomUUID(), live.provider.id, live.release.id],
+      )
+      const store = new StoreService(db() as never)
+      const listed = (await store.listCatalog() as Array<{id: string; artist_name: string; artist_credit: string}>).filter((row) => row.id === live.release.id)
+      expect(listed).toHaveLength(1)
+      expect(listed[0]).toMatchObject({artist_name: 'Credits Artist', artist_credit: 'Credits Artist feat. Boldy James'})
+      await expect(store.getRelease(live.release.id)).resolves.toMatchObject({release: {artist_credit: 'Credits Artist feat. Boldy James', artist_name: 'Credits Artist'}})
+      const {calls} = stubServices()
+      const product = await pool.query<{id: string}>('SELECT id FROM products WHERE release_id = $1', [live.release.id])
+      const checkout = await new CommerceService(db() as never, 'sk_test', 1000).createCheckout(null, product.rows[0].id, 'https://app.test')
+      expect(calls.find((call) => call.url.endsWith('/v1/checkout/sessions'))!.body!.get('line_items[0][price_data][product_data][description]')).toBe('Credits Artist feat. Boldy James - single')
+      const attempt = await pool.query(`SELECT snapshot->'product'->>'artist_name' AS artist FROM marketplace_checkout_attempts WHERE stripe_checkout_session_id = $1`, [checkout.sessionId])
+      expect(attempt.rows[0].artist).toBe('Credits Artist feat. Boldy James')
     })
   })
 })

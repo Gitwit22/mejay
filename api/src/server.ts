@@ -8,6 +8,8 @@ import {loadConfig} from './config/env'
 import {apiOriginGuard} from './middleware/origin-guard'
 import {CommerceService} from './marketplace/commerce-service'
 import {MarketplaceAdminService} from './marketplace/admin-service'
+import {processEmailJobs, retryFailedConfirmations} from './marketplace/email-jobs'
+import {ensurePreviewJobs, wakeConverterIfQueued} from './marketplace/preview-jobs'
 
 const config = loadConfig()
 const port = Number(config.PORT)
@@ -61,22 +63,37 @@ if (config.STRIPE_SECRET_KEY && Number.isFinite(transferRetryMinutes) && transfe
       })
   }, transferRetryMinutes * 60_000).unref()
 }
-// Publish SCHEDULED marketplace releases whose release time has passed.
+// Publish SCHEDULED marketplace releases whose release time has passed, then deliver what that
+// unlocked: release-day emails for pre-orders, retries of failed emails, and pre-order refunds.
+// Release times therefore take effect within one interval, not to the second.
 // Set MARKETPLACE_PUBLISH_DUE_MINUTES=0 to disable (e.g. when a separate worker runs it).
 const publishDueMinutes = Number(config.MARKETPLACE_PUBLISH_DUE_MINUTES ?? 5)
 if (Number.isFinite(publishDueMinutes) && publishDueMinutes > 0) {
   const admin = new MarketplaceAdminService(database as never)
+  const refunds = config.STRIPE_SECRET_KEY ? new CommerceService(database as never, config.STRIPE_SECRET_KEY, Number(config.MARKETPLACE_PLATFORM_FEE_BPS)) : null
   let publishing = false
+  const step = async <T>(label: string, run: () => Promise<T>, report: (result: T) => boolean) => {
+    try {
+      const result = await run()
+      if (report(result)) console.log(`[marketplace] ${label}`, result)
+    } catch (error) {
+      // Each step is independent: a failing email provider never blocks publishing or refunds.
+      console.error(`[marketplace] ${label} failed`, error)
+    }
+  }
   setInterval(() => {
     if (publishing) return
     publishing = true
-    admin.publishDueReleases()
-      .then((result) => {
-        if (result.published.length > 0 || result.notReady.length > 0) console.log('[marketplace] scheduled publish', result)
-      })
-      .catch((error) => console.error('[marketplace] scheduled publish failed', error))
-      .finally(() => {
-        publishing = false
-      })
+    void (async () => {
+      await step('scheduled publish', () => admin.publishDueReleases(), (result) => result.published.length > 0 || result.notReady.length > 0)
+      await step('email jobs', () => processEmailJobs(database as never, env), (result) => result.sent + result.retried + result.skipped > 0)
+      await step('confirmation retries', () => retryFailedConfirmations(database as never, env), (sent) => sent > 0)
+      if (refunds) await step('pre-order refunds', () => refunds.processPreorderRefunds(), (result) => result.requested + result.failed > 0)
+      // Store previews: queue clips for new uploads or changed start times, then wake the converter.
+      await step('preview clips', () => ensurePreviewJobs(database as never), (result) => result.queued > 0)
+      await step('converter wake-up', () => wakeConverterIfQueued(database as never, {CONVERTER_URL: config.CONVERTER_URL, CONVERTER_TRIGGER_SECRET: config.CONVERTER_TRIGGER_SECRET}), (woke) => woke)
+    })().finally(() => {
+      publishing = false
+    })
   }, publishDueMinutes * 60_000).unref()
 }

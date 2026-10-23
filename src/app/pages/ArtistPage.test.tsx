@@ -58,6 +58,8 @@ describe('public artist page', () => {
 
     fireEvent.click(screen.getByRole('button', {name: 'Purchase'}))
     await waitFor(() => expect(startStoreCheckout).toHaveBeenCalledWith('release-new-product'))
+    // Signed-in visitors get a way back into the app.
+    expect(screen.getByRole('link', {name: /Back to MeJay/})).toHaveAttribute('href', '/app')
   })
 
   it('builds the release-website layout from the artist page fields', async () => {
@@ -112,6 +114,55 @@ describe('public artist page', () => {
     expect(accentForeground('#ffffff')).toBe('#0a0a0b')
     expect(accentForeground('#facc15')).toBe('#0a0a0b')
     expect(accentForeground('#1e3a8a')).toBe('#ffffff')
+  })
+
+  it('shows signed-out visitors (link in bio) the page with no Back to MeJay bar', async () => {
+    usePlanStore.setState({authStatus: 'anonymous'})
+    vi.mocked(getPublicArtist).mockResolvedValue({
+      artist: {
+        id: 'artist-1', name: 'John Blaze', slug: 'john-blaze', tagline: null, bio: null, location: null, genres: [], links: {},
+        spotify_artist_id: null, apple_music_artist_id: null, profile_photo_asset_id: null, banner_asset_id: null, verified: false,
+      },
+      releases: [],
+    })
+    renderPage()
+    expect(await screen.findByRole('heading', {level: 1, name: /John Blaze/})).toBeInTheDocument()
+    expect(screen.queryByRole('link', {name: /Back to MeJay/})).not.toBeInTheDocument()
+  })
+
+  it('shows the first three gallery photos and reveals the rest on request', async () => {
+    vi.mocked(getPublicArtist).mockResolvedValue({
+      artist: {
+        id: 'artist-1', name: 'John Blaze', slug: 'john-blaze', tagline: null, bio: null, location: null, genres: [], links: {},
+        spotify_artist_id: null, apple_music_artist_id: null, profile_photo_asset_id: null, banner_asset_id: null, verified: false,
+        gallery: [1, 2, 3, 4, 5].map((n) => ({asset_id: `g${n}`, caption: `Photo ${n}`, position: n - 1})),
+      },
+      releases: [],
+    })
+    renderPage()
+    expect(await screen.findByAltText('Photo 1')).toBeInTheDocument()
+    expect(screen.getByAltText('Photo 3')).toBeInTheDocument()
+    expect(screen.queryByAltText('Photo 4')).not.toBeInTheDocument()
+    const toggle = screen.getByRole('button', {name: 'See more photos (2)'})
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(toggle)
+    expect(screen.getByAltText('Photo 5')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Show fewer photos'}))
+    expect(screen.queryByAltText('Photo 4')).not.toBeInTheDocument()
+  })
+
+  it('shows no See more button with three or fewer photos', async () => {
+    vi.mocked(getPublicArtist).mockResolvedValue({
+      artist: {
+        id: 'artist-1', name: 'John Blaze', slug: 'john-blaze', tagline: null, bio: null, location: null, genres: [], links: {},
+        spotify_artist_id: null, apple_music_artist_id: null, profile_photo_asset_id: null, banner_asset_id: null, verified: false,
+        gallery: [1, 2, 3].map((n) => ({asset_id: `g${n}`, caption: `Photo ${n}`, position: n - 1})),
+      },
+      releases: [],
+    })
+    renderPage()
+    expect(await screen.findByAltText('Photo 3')).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: /See more photos/})).not.toBeInTheDocument()
   })
 
   it('shows a not-available message for unknown or non-public artists', async () => {

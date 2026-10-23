@@ -11,6 +11,10 @@ export const releaseAdminCommandSchema = z.discriminatedUnion('action', [
   z.object({action: z.literal('publish_now'), expectedVersion}),
   z.object({action: z.literal('schedule'), expectedVersion, scheduledReleaseAt: z.string().datetime({offset: true})}),
   z.object({action: z.literal('publish_due'), expectedVersion}),
+  // Move an already scheduled release to a new future time; pre-order buyers are told by email.
+  z.object({action: z.literal('reschedule'), expectedVersion, scheduledReleaseAt: z.string().datetime({offset: true}), note: note.optional()}),
+  // Cancel a scheduled release that has pre-orders: takes it down and refunds every paid pre-order.
+  z.object({action: z.literal('cancel_preorders'), expectedVersion, note}),
   z.object({action: z.literal('unpublish'), expectedVersion}),
   z.object({action: z.literal('takedown'), expectedVersion, note}),
   z.object({action: z.literal('restore'), expectedVersion, note}),

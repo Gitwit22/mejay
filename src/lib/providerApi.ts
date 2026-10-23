@@ -1,9 +1,15 @@
-import {apiFetch} from './api'
+import {apiFetch, apiUrl} from './api'
 
 export type ProviderDashboard = {
   provider: {
     id: string
     display_name: string | null
+    legal_name?: string | null
+    slug?: string | null
+    contact_email?: string | null
+    country_code?: string | null
+    bio?: string | null
+    created_at?: string
     status: string
     role: string
   }
@@ -128,6 +134,8 @@ export type ProviderRelease = {
   draft_step?: ReleaseDraftStep
 }
 
+export type ReleaseArtistCredit = {role: 'primary' | 'featured'; artist_id: string | null; name: string}
+
 export type ProviderTrack = {
   id: string
   title: string
@@ -146,6 +154,10 @@ export type ProviderTrack = {
   recording_location?: string | null
   contributors?: TrackContributor[]
   featured_artist_ids?: string[]
+  /** Where the 10-second store preview starts (ms); null = automatic. */
+  preview_start_ms?: number | null
+  /** Whether MeJay has made the preview clip for the current setting. */
+  preview_status?: 'ready' | 'processing' | 'waiting'
 }
 
 export type ContributorRole = 'writer' | 'composer' | 'producer' | 'featured_artist' | 'remixer' | 'other'
@@ -195,6 +207,11 @@ export function addRightsMaterial(releaseId: string, input: {materialType: Right
   return request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}/rights-materials`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
 }
 
+/** Deletes a release that is still a draft. The API refuses submitted/live releases and drafts with an ISRC or checkout history. */
+export function deleteProviderRelease(releaseId: string): Promise<unknown> {
+  return request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}`, {method: 'DELETE'})
+}
+
 export function deleteRightsMaterial(materialId: string): Promise<unknown> {
   return request(`/api/marketplace/rights-materials/${encodeURIComponent(materialId)}`, {method: 'DELETE'})
 }
@@ -210,6 +227,15 @@ export type ProviderReleaseDetail = {
     upc: string | null
     original_release_date: string | null
     scheduled_release_at: string | null
+    /** The artist's chosen public release time (UTC) and the timezone it is shown in. */
+    requested_release_at?: string | null
+    release_timezone?: string | null
+    preorders_enabled?: boolean
+    preview_timing?: 'before_release' | 'after_release'
+    /** Extra primary/featured artists beyond the lead (artist_id null = someone not on MeJay). */
+    additional_artists?: ReleaseArtistCredit[]
+    /** Full credit line, e.g. "John Blaze & Kay feat. Boldy James". */
+    artist_credit?: string
     copyright_year: number | null
     copyright_holder: string | null
     phonographic_copyright_year: number | null
@@ -258,6 +284,41 @@ export function submitProviderProfile(input: ProviderProfileInput): Promise<{id:
 
 export function getProviderDashboard(): Promise<ProviderDashboard> {
   return request('/api/marketplace/dashboard')
+}
+
+/** One ISRC recorded against the account's tracks; `isrc` is already formatted (QT-A3L-26-00001). */
+export type ProviderIsrc = {
+  id: string
+  isrc: string
+  track_title: string | null
+  artist_name: string | null
+  release_id: string | null
+  release_title: string | null
+  assignment_type: 'MEJAY_ASSIGNED' | 'EXTERNAL' | null
+  status: 'RESERVED' | 'ASSIGNED' | 'REGISTERED' | 'VOIDED' | null
+  assigned_at: string | null
+}
+
+export function listProviderIsrcs(): Promise<ProviderIsrc[]> {
+  return request('/api/marketplace/isrcs')
+}
+
+/** CSV of the account's ISRCs; opened as a normal download so the session cookie applies. */
+export function providerIsrcExportUrl(): string {
+  return apiUrl('/api/marketplace/isrcs/export')
+}
+
+/** Business details editable from portal Settings; the page address and review status are not. */
+export type ProviderSettingsInput = {
+  displayName: string
+  legalName: string | null
+  contactEmail: string
+  countryCode: string
+  bio: string | null
+}
+
+export function updateProviderSettings(input: ProviderSettingsInput): Promise<ProviderDashboard['provider']> {
+  return request('/api/marketplace/provider/settings', {method: 'PATCH', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
 }
 
 export function getProviderReporting(range: ReportingRange): Promise<ProviderSalesReport> {
@@ -314,6 +375,11 @@ export function updateProviderRelease(releaseId: string, input: {
   upc?: string | null
   originalReleaseDate?: string | null
   scheduledReleaseAt?: string | null
+  requestedReleaseAt?: string | null
+  releaseTimezone?: string | null
+  preordersEnabled?: boolean
+  previewTiming?: 'before_release' | 'after_release'
+  additionalArtists?: Array<{role: 'primary' | 'featured'; artistId?: string | null; name: string}>
   copyrightYear?: number | null
   copyrightHolder?: string | null
   phonographicCopyrightYear?: number | null
@@ -386,6 +452,7 @@ export function updateProviderTrack(trackId: string, input: {
   instrumental: boolean
   recordingYear?: number | null
   recordingLocation?: string | null
+  previewStartMs?: number | null
 }): Promise<ProviderTrack> {
   return request(`/api/marketplace/tracks/${encodeURIComponent(trackId)}`, {
     method: 'PATCH', headers: {'content-type': 'application/json'}, body: JSON.stringify(input),

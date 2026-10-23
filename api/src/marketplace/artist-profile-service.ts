@@ -1,6 +1,8 @@
 import {compactLinks, type ArtistGalleryInput, type ArtistProfileInput} from './artist-profile'
 import {audit, MarketplaceError, providerContext, uniqueArtistSlug, type Database} from './service'
 import {StoreService} from './store-service'
+import {artistPubliclyVisibleSql} from './artist-visibility'
+import {isMarketplaceStorageKey} from './storage-keys'
 
 type ArtistRow = {
   id: string
@@ -25,6 +27,11 @@ type ArtistRow = {
 }
 
 export type ArtistGalleryImage = {asset_id: string; caption: string | null; position: number}
+
+export type PublicArtistProfile = Omit<ArtistRow, 'provider_profile_id' | 'profile_updated_at'> & {verified: boolean; gallery: ArtistGalleryImage[]}
+
+/** Why an artist page is or is not public, shown to its owner. */
+export type ArtistPageVisibility = {public: boolean; suspended: boolean; payoutsReady: boolean; hasLiveRelease: boolean}
 
 const PROFILE_FIELDS = `id, provider_profile_id, name, slug, tagline, bio, location, genres, links,
   spotify_artist_id, apple_music_artist_id, profile_photo_asset_id, banner_asset_id, cutout_asset_id,
@@ -177,19 +184,63 @@ export class ArtistProfileService {
   }
 
   /**
-   * Public artist page. Only artists of an approved, unsuspended account with at least one LIVE
-   * release are public; releases come from the same LIVE catalog query as the marketplace.
+   * Public artist page. Visibility follows artistPubliclyVisibleSql: an unsuspended account whose
+   * artist has a LIVE release or whose Stripe payouts are set up. Releases come from the same LIVE
+   * catalog query as the marketplace, so a page can be public before it has any music.
    */
-  async getPublicArtist(slug: string): Promise<{artist: Omit<ArtistRow, 'provider_profile_id' | 'profile_updated_at'> & {verified: boolean; gallery: ArtistGalleryImage[]}; releases: unknown[]}> {
+  async getPublicArtist(slug: string): Promise<{artist: PublicArtistProfile; releases: unknown[]}> {
     const artist = await this.database.prepare(
       `SELECT ${PROFILE_COLUMNS}, provider.status = 'approved' AS verified
        FROM artists a JOIN provider_profiles provider ON provider.id = a.provider_profile_id
-       WHERE a.slug = ?1 AND provider.suspended_at IS NULL AND EXISTS (
-         SELECT 1 FROM release_artists credit JOIN releases r ON r.id = credit.release_id
-         WHERE credit.artist_id = a.id AND credit.is_primary = TRUE AND r.status = 'LIVE'
-       )`,
+       WHERE a.slug = ?1 AND ${artistPubliclyVisibleSql('a', 'provider')}`,
     ).bind(slug.toLowerCase()).first<ArtistRow & {verified: boolean}>()
     if (!artist) throw new MarketplaceError(404, 'not_found', 'Artist was not found')
+    return this.publicPage(artist)
+  }
+
+  /**
+   * The owner's view of their own artist page: the same content the public sees, whether or not the
+   * page is public yet, plus why it is or is not public. Read-only, so any member of the owning
+   * provider may preview.
+   */
+  async getOwnerPreview(userId: string, artistId: string): Promise<{artist: PublicArtistProfile; releases: unknown[]; visibility: ArtistPageVisibility}> {
+    const context = await providerContext(this.database, userId, false)
+    const artist = await this.database.prepare(
+      `SELECT ${PROFILE_COLUMNS}, provider.status = 'approved' AS verified,
+        provider.suspended_at IS NOT NULL AS suspended,
+        (provider.stripe_details_submitted AND provider.stripe_payouts_enabled AND provider.stripe_transfers_status = 'active') AS payouts_ready,
+        EXISTS (SELECT 1 FROM release_artists credit JOIN releases r ON r.id = credit.release_id
+          WHERE credit.artist_id = a.id AND credit.is_primary = TRUE AND r.status = 'LIVE') AS has_live_release,
+        ${artistPubliclyVisibleSql('a', 'provider')} AS is_public
+       FROM artists a JOIN provider_profiles provider ON provider.id = a.provider_profile_id
+       WHERE a.id = ?1 AND a.provider_profile_id = ?2`,
+    ).bind(artistId, context.providerId).first<ArtistRow & {verified: boolean; suspended: boolean; payouts_ready: boolean; has_live_release: boolean; is_public: boolean}>()
+    if (!artist) throw new MarketplaceError(404, 'not_found', 'Artist was not found')
+    const {suspended, payouts_ready: payoutsReady, has_live_release: hasLiveRelease, is_public: isPublic, ...row} = artist
+    return {
+      ...(await this.publicPage(row)),
+      visibility: {public: Boolean(isPublic), suspended: Boolean(suspended), payoutsReady: Boolean(payoutsReady), hasLiveRelease: Boolean(hasLiveRelease)},
+    }
+  }
+
+  /**
+   * A ready profile image (photo, banner, cutout, gallery) of an artist the user's provider owns, so
+   * the owner preview can show imagery before the page is public. Never audio or documents.
+   */
+  async getOwnedProfileImage(userId: string, artistId: string, assetId: string): Promise<{storageKey: string; mimeType: string}> {
+    const context = await providerContext(this.database, userId, false)
+    const asset = await this.database.prepare(
+      `SELECT storage_key, mime_type FROM marketplace_assets
+       WHERE id = ?1 AND artist_id = ?2 AND provider_profile_id = ?3 AND processing_status = 'ready'
+         AND kind IN ('artist_photo', 'artist_banner', 'artist_cutout', 'artist_gallery')`,
+    ).bind(assetId, artistId, context.providerId).first<{storage_key: string; mime_type: string}>()
+    if (!asset || !isMarketplaceStorageKey(asset.storage_key) || !asset.mime_type.startsWith('image/')) {
+      throw new MarketplaceError(404, 'not_found', 'Artist image was not found')
+    }
+    return {storageKey: asset.storage_key, mimeType: asset.mime_type}
+  }
+
+  private async publicPage(artist: ArtistRow & {verified: boolean}): Promise<{artist: PublicArtistProfile; releases: unknown[]}> {
     const releases = await new StoreService(this.database).listCatalog(artist.id)
     const {provider_profile_id: _provider, profile_updated_at: _updated, ...publicProfile} = artist
     return {artist: {...publicProfile, verified: Boolean(artist.verified), gallery: await listGallery(this.database, artist.id)}, releases}

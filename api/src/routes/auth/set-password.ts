@@ -14,6 +14,7 @@ import {
 } from '../_auth'
 import {parseAccountIntent} from '../../marketplace/onboarding'
 import {claimMarketplaceAccess} from '../../marketplace/staff-access'
+import {claimGuestPurchases} from '../../marketplace/commerce-service'
 import {isDevEnvironment} from '../_security'
 
 type PreparedQuery = {
@@ -133,6 +134,9 @@ export const onRequest = async (ctx: {request: Request; env: Env}): Promise<Resp
       }
 
       await claimMarketplaceAccess(database, currentUser.id, currentUser.email)
+      // This request carries a verified emailed code for this address, so guest purchases made with it
+      // can safely move into the account's library.
+      await claimGuestPurchases(database as never, currentUser.id, currentUser.email)
 
       await database.prepare('DELETE FROM sessions WHERE expires_at < ?1').bind(nowIso()).run()
       await database

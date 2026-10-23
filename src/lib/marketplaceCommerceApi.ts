@@ -75,6 +75,11 @@ export type Purchase = {
   artwork_asset_id: string | null
   unit_amount_minor: number
   files: PurchaseFile[]
+  /** 'held' until a pre-order's release day (absent from older API responses = available). */
+  delivery_status?: 'held' | 'available'
+  purchase_type?: 'standard' | 'preorder'
+  release_at?: string | null
+  release_timezone?: string | null
 }
 
 export type StoreOrderStatus = {
@@ -124,4 +129,53 @@ export async function fetchPurchaseFiles(purchase: Purchase): Promise<File[]> {
     files.push(new File([blob], file.fileName, {type: file.mimeType || blob.type, lastModified}))
   }
   return files
+}
+
+/** Guest checkout return page: paid/held state for a Checkout Session (no download access). */
+export type GuestOrderStatus = {
+  status: string
+  paid: boolean
+  purchaseType: 'standard' | 'preorder'
+  deliveryStatus: 'held' | 'available' | null
+  releaseAt: string | null
+  releaseTimezone: string | null
+  itemTitle: string
+  artistName: string
+  maskedEmail: string | null
+}
+
+export function getGuestOrderStatus(sessionId: string): Promise<GuestOrderStatus> {
+  return request(`/api/store/orders/guest/${encodeURIComponent(sessionId)}`)
+}
+
+export type GuestPurchase = {
+  itemTitle: string
+  artistName: string
+  releaseTitle: string
+  deliveryStatus: 'held' | 'available'
+  releaseAt: string | null
+  releaseTimezone: string | null
+}
+
+export type GuestAccess =
+  | {state: 'held'; purchase: GuestPurchase}
+  | {state: 'available'; purchase: GuestPurchase; accessToken: string; expiresAt: string; files: Array<{id: string; title: string; trackNumber: number; discNumber: number; fileName: string; mimeType: string; byteSize: number}>}
+
+/** The explicit "Download your music" action: trade an emailed link for a short download session. */
+export function exchangeGuestAccess(token: string): Promise<GuestAccess> {
+  return request('/api/store/guest-access/exchange', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({token})})
+}
+
+export function guestDownloadUrl(fileId: string, accessToken: string): string {
+  return apiUrl(`/api/store/guest-downloads/files/${encodeURIComponent(fileId)}?access=${encodeURIComponent(accessToken)}`)
+}
+
+/** Emails fresh links to the purchase email. The answer is the same whether or not purchases exist. */
+export function recoverGuestAccess(email: string): Promise<{message: string}> {
+  return request('/api/store/guest-access/recover', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({email})})
+}
+
+/** Moves guest purchases made with the account's (just verified) email into the account. */
+export function claimStorePurchases(verifiedToken: string): Promise<{claimed: number}> {
+  return request('/api/store/purchases/claim', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({verifiedToken})})
 }

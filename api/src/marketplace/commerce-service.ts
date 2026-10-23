@@ -2,6 +2,8 @@ import {allocateProviderProceeds, calculateSaleAmounts, DEFAULT_PLATFORM_FEE_BPS
 import {allocateCumulativeRefunds, buildReportingEvents, buildReportingEventsForTrackAmounts, insertReportingEvents} from './industry-reporting'
 import {MarketplaceError} from './service'
 import {stripeRequest, StripeRequestError} from '../services/stripe'
+import {formatReleaseTime} from './release-schedule'
+import {formatArtistCredit, parseCredits, releaseCreditsJsonSql} from './artist-credit'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -33,6 +35,23 @@ type ProductRow = {
   provider_profile_id: string
   stripe_account_id: string | null
   purchase_ready: boolean
+  release_status: string
+  scheduled_release_at: string | Date | null
+  release_timezone: string | null
+  /** Added to the snapshot at checkout: what kind of purchase this is and when it is delivered. */
+  purchase_type?: PurchaseType
+  release_at?: string | null
+  formats?: string[]
+}
+
+export type PurchaseType = 'standard' | 'preorder'
+
+/** Shown at checkout and in confirmations for every pre-order. */
+export const PREORDER_CHARGE_NOTICE = "You'll be charged today. Downloads become available on release day."
+
+function normalizeBuyerEmail(value: string | null | undefined): string | null {
+  const email = value?.trim().toLowerCase() ?? ''
+  return email.includes('@') ? email : null
 }
 
 type TrackRow = {
@@ -81,6 +100,8 @@ type AttemptRow = {
   stripe_destination_account_id: string | null
   status: string
   snapshot: CheckoutSnapshot
+  purchase_type?: PurchaseType
+  guest_checkout?: boolean
 }
 
 type StripeCheckoutSession = {
@@ -189,14 +210,30 @@ export class CommerceService {
     private readonly platformFeeBps = DEFAULT_PLATFORM_FEE_BPS,
   ) {}
 
-  async createCheckout(userId: string, productId: string, frontendOrigin: string): Promise<{url: string; sessionId: string}> {
+  /**
+   * Creates a Stripe Checkout Session for a LIVE release, or a pre-order for a SCHEDULED release with
+   * pre-orders enabled. `userId` is null for a guest: Stripe collects the email, and the purchase is
+   * delivered by emailed download links (and can be claimed later by a verified account).
+   */
+  async createCheckout(userId: string | null, productId: string, frontendOrigin: string): Promise<{url: string; sessionId: string}> {
+    if (userId) await this.assertNotOwned(userId, productId)
+    if (userId) {
+      const reused = await this.reuseOpenCheckout(userId, productId)
+      if (reused) return reused
+    }
+    return this.createCheckoutSession(userId, productId, frontendOrigin)
+  }
+
+  private async assertNotOwned(userId: string, productId: string): Promise<void> {
     const existing = await this.database.prepare(
       `SELECT entitlement.id FROM download_entitlements entitlement
        JOIN marketplace_order_items item ON item.id = entitlement.order_item_id
        WHERE entitlement.buyer_user_id = ?1 AND item.product_id = ?2 AND entitlement.status <> 'revoked' LIMIT 1`,
     ).bind(userId, productId).first()
     if (existing) throw new MarketplaceError(409, 'already_owned', 'This release is already in Purchased Music')
+  }
 
+  private async reuseOpenCheckout(userId: string, productId: string): Promise<{url: string; sessionId: string} | null> {
     // Reuse a still-open Checkout Session for the same buyer+product (double clicks, second tab)
     // instead of creating a second session that could be paid twice.
     const openAttempt = await this.database.prepare(
@@ -214,19 +251,25 @@ export class CommerceService {
         return {url: session.url, sessionId: session.id}
       }
     }
+    return null
+  }
 
+  private async createCheckoutSession(userId: string | null, productId: string, frontendOrigin: string): Promise<{url: string; sessionId: string}> {
     const product = await this.database.prepare(
       `SELECT product.id AS product_id, product.name AS product_name, price.id AS price_id,
         product.track_id, sold_track.title AS track_title,
         price.amount_minor, price.currency, release.id AS release_id, release.title AS release_title,
-        release.release_type, release.upc, artist.name AS artist_name, artwork.id AS artwork_asset_id,
+        release.release_type, release.upc, artist.name AS artist_name, ${releaseCreditsJsonSql('release')} AS artist_credits, artwork.id AS artwork_asset_id,
         release.provider_profile_id, provider.stripe_account_id,
+        release.status AS release_status, release.scheduled_release_at, release.release_timezone,
         (provider.suspended_at IS NULL AND provider.stripe_details_submitted AND provider.stripe_payouts_enabled
           AND provider.stripe_transfers_status = 'active') AS purchase_ready
        FROM products product
-       -- A song product resolves to its release; the release must be LIVE either way.
+       -- A song product resolves to its release; the release must be LIVE, or approved and scheduled
+       -- with pre-orders enabled.
        LEFT JOIN tracks sold_track ON sold_track.id = product.track_id
-       JOIN releases release ON release.id = COALESCE(product.release_id, sold_track.release_id) AND release.status = 'LIVE'
+       JOIN releases release ON release.id = COALESCE(product.release_id, sold_track.release_id)
+         AND (release.status = 'LIVE' OR (release.status = 'SCHEDULED' AND release.preorders_enabled AND release.scheduled_release_at IS NOT NULL))
        JOIN provider_profiles provider ON provider.id = release.provider_profile_id
        JOIN release_artists credit ON credit.release_id = release.id AND credit.is_primary = TRUE
        JOIN artists artist ON artist.id = credit.artist_id
@@ -243,13 +286,18 @@ export class CommerceService {
          ORDER BY asset.created_at DESC LIMIT 1
        ) artwork ON TRUE
        WHERE product.id = ?1 AND product.active = TRUE LIMIT 1`,
-    ).bind(productId).first<ProductRow>()
+    ).bind(productId).first<ProductRow & {artist_credits?: unknown}>().then((row) => {
+      if (!row) return null
+      // The order records the full credit ("A & B feat. C"), which Stripe, receipts and emails show.
+      const {artist_credits: credits, ...rest} = row
+      return {...rest, artist_name: formatArtistCredit(row.artist_name, parseCredits(credits))} as ProductRow
+    })
     if (!product) throw new MarketplaceError(404, 'product_not_found', 'This product is not available')
     if (!product.purchase_ready || !product.stripe_account_id) {
       throw new MarketplaceError(409, 'provider_payout_not_ready', 'This provider is still completing Stripe payout setup')
     }
     if (product.currency !== 'USD') throw new MarketplaceError(422, 'currency_not_supported', 'Only USD marketplace checkout is available')
-    if (product.track_id) {
+    if (product.track_id && userId) {
       // Owning the song through any purchase (the song itself or its release) means it is already owned.
       const ownedTrack = await this.database.prepare(
         `SELECT entitlement.id FROM download_entitlements entitlement
@@ -314,21 +362,33 @@ export class CommerceService {
         throw new MarketplaceError(422, 'splits_incomplete', `Revenue splits are incomplete for ${track.title}`)
       }
     }
-    const user = await this.database.prepare('SELECT email FROM users WHERE id = ?1').bind(userId).first<{email: string}>()
-    if (!user) throw new MarketplaceError(401, 'unauthorized', 'Account session is no longer valid')
+    const user = userId
+      ? await this.database.prepare('SELECT email FROM users WHERE id = ?1').bind(userId).first<{email: string}>()
+      : null
+    if (userId && !user) throw new MarketplaceError(401, 'unauthorized', 'Account session is no longer valid')
 
+    const purchaseType: PurchaseType = product.release_status === 'LIVE' ? 'standard' : 'preorder'
+    const releaseAt = product.scheduled_release_at ? new Date(product.scheduled_release_at).toISOString() : null
+    const releaseLabel = purchaseType === 'preorder' && releaseAt ? formatReleaseTime(releaseAt, product.release_timezone) : null
     const attemptId = crypto.randomUUID()
     const idempotencyKey = `marketplace-checkout-${attemptId}`
     const transferGroup = `MEJAY_ORDER_${attemptId.replace(/-/g, '')}`
-    const snapshot: CheckoutSnapshot = {product, tracks}
+    // The snapshot pins exactly which audio files and formats were bought; release day delivers these.
+    const formats = [...new Set(tracks.map((track) => extensionForMime(track.asset.mimeType)))]
+    const snapshot: CheckoutSnapshot = {
+      product: {...product, purchase_type: purchaseType, release_at: purchaseType === 'preorder' ? releaseAt : null, formats},
+      tracks,
+    }
     await this.database.prepare(
       `INSERT INTO marketplace_checkout_attempts
         (id, buyer_user_id, provider_profile_id, product_id, release_id, price_id, amount_minor, currency,
-          platform_fee_bps, stripe_idempotency_key, transfer_group, snapshot, stripe_destination_account_id, expires_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, CURRENT_TIMESTAMP + INTERVAL '30 minutes')`,
+          platform_fee_bps, stripe_idempotency_key, transfer_group, snapshot, stripe_destination_account_id, expires_at,
+          purchase_type, guest_checkout)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, CURRENT_TIMESTAMP + INTERVAL '30 minutes', ?14, ?15)`,
     ).bind(
       attemptId, userId, product.provider_profile_id, product.product_id, product.release_id, product.price_id,
       product.amount_minor, product.currency, this.platformFeeBps, idempotencyKey, transferGroup, JSON.stringify(snapshot), product.stripe_account_id,
+      purchaseType, !userId,
     ).run()
 
     const params = new URLSearchParams()
@@ -336,19 +396,24 @@ export class CommerceService {
     params.set('line_items[0][price_data][currency]', product.currency.toLowerCase())
     params.set('line_items[0][price_data][unit_amount]', String(product.amount_minor))
     params.set('line_items[0][price_data][product_data][name]', product.track_id ? product.track_title ?? product.product_name : product.release_title)
-    params.set('line_items[0][price_data][product_data][description]', product.track_id
+    const lineDescription = product.track_id
       ? `${product.artist_name} - song from ${product.release_title}`
-      : `${product.artist_name} - ${product.release_type}`)
+      : `${product.artist_name} - ${product.release_type}`
+    params.set('line_items[0][price_data][product_data][description]', releaseLabel ? `Pre-order · releases ${releaseLabel}. ${lineDescription}` : lineDescription)
     params.set('line_items[0][quantity]', '1')
     params.set('customer_creation', 'always')
-    params.set('customer_email', user.email)
-    params.set('client_reference_id', userId)
+    // Guests: Stripe collects the email; it becomes the purchase email for download links.
+    if (user) params.set('customer_email', user.email)
+    if (userId) params.set('client_reference_id', userId)
+    if (releaseLabel) params.set('custom_text[submit][message]', `Pre-order · releases ${releaseLabel}. ${PREORDER_CHARGE_NOTICE}`)
     // Reconciliation identifiers only; no buyer PII goes into metadata.
     const reconciliation: Record<string, string> = {
       marketplace: 'mejay',
       kind: 'marketplace_purchase',
       attemptId,
-      userId,
+      ...(userId ? {userId} : {}),
+      buyer: userId ? 'account' : 'guest',
+      purchaseType,
       productId: product.product_id,
       releaseId: product.release_id,
       providerId: product.provider_profile_id,
@@ -359,11 +424,14 @@ export class CommerceService {
       params.set(`payment_intent_data[metadata][${key}]`, value)
     }
     params.set('payment_intent_data[transfer_group]', transferGroup)
-    // Stripe emails the buyer a receipt for the amount paid; downloads live in Purchased Music.
-    params.set('payment_intent_data[receipt_email]', user.email)
+    // Stripe emails the buyer a receipt for the amount paid; MeJay emails the download link.
+    if (user) params.set('payment_intent_data[receipt_email]', user.email)
     const itemTitle = product.track_id ? product.track_title ?? product.product_name : product.release_title
-    params.set('payment_intent_data[description]', `MEJay: ${itemTitle} by ${product.artist_name}. Download it from Purchased Music in MEJay.`.slice(0, 1000))
-    params.set('success_url', `${frontendOrigin}/app/purchased?checkout=success&session_id={CHECKOUT_SESSION_ID}`)
+    const delivery = releaseLabel ? `Pre-order: downloads become available on release day (${releaseLabel}).` : 'MeJay emails your download link.'
+    params.set('payment_intent_data[description]', `MEJay: ${itemTitle} by ${product.artist_name}. ${delivery}`.slice(0, 1000))
+    params.set('success_url', userId
+      ? `${frontendOrigin}/app/purchased?checkout=success&session_id={CHECKOUT_SESSION_ID}`
+      : `${frontendOrigin}/purchase/complete?session_id={CHECKOUT_SESSION_ID}`)
     params.set('cancel_url', `${frontendOrigin}/app/store/${encodeURIComponent(product.release_id)}?checkout=cancel`)
     try {
       const session = await stripeRequest<{id?: string; url?: string}>({
@@ -387,12 +455,14 @@ export class CommerceService {
     }
   }
 
-  async fulfillPaidSession(session: StripeCheckoutSession): Promise<{orderId: string}> {
+  async fulfillPaidSession(session: StripeCheckoutSession): Promise<{orderId: string; held: boolean}> {
     if (session.payment_status !== 'paid') throw new MarketplaceError(409, 'payment_not_paid', 'Checkout payment is not complete')
     const attemptId = session.metadata?.attemptId
-    const userId = session.metadata?.userId
+    // Guest sessions carry no userId; sessions created before guest checkout always carry one.
+    const userId = session.metadata?.userId || null
+    const guest = !userId && session.metadata?.buyer === 'guest'
     const productId = session.metadata?.productId
-    if (!attemptId || !userId || !productId || session.metadata?.kind !== 'marketplace_purchase') {
+    if (!attemptId || (!userId && !guest) || !productId || session.metadata?.kind !== 'marketplace_purchase') {
       throw new MarketplaceError(400, 'checkout_metadata_invalid', 'Marketplace Checkout metadata is incomplete')
     }
     const intentId = paymentIntentId(session)
@@ -406,24 +476,39 @@ export class CommerceService {
     const charge = chargeDetails(intent)
     if (!charge.chargeId) throw new MarketplaceError(409, 'charge_missing', 'Stripe charge is unavailable')
 
-    const order = await this.database.transaction(async (db) => {
+    const order = await this.database.transaction(async (db): Promise<OrderRow & {held: boolean}> => {
       const attempt = await db.prepare(
         'SELECT * FROM marketplace_checkout_attempts WHERE id = ?1 FOR UPDATE',
       ).bind(attemptId).first<AttemptRow>()
       if (!attempt || attempt.stripe_checkout_session_id !== session.id) {
         throw new MarketplaceError(409, 'checkout_attempt_mismatch', 'Checkout attempt does not match the Stripe Session')
       }
-      if (attempt.buyer_user_id !== userId || attempt.product_id !== productId) {
+      if ((attempt.buyer_user_id ?? null) !== userId || attempt.product_id !== productId) {
         throw new MarketplaceError(409, 'checkout_identity_mismatch', 'Checkout ownership metadata does not match')
       }
       const existing = await db.prepare(
         'SELECT * FROM marketplace_orders WHERE stripe_checkout_session_id = ?1',
       ).bind(session.id).first<OrderRow>()
-      if (existing) return existing
+      if (existing) {
+        const held = await db.prepare(
+          `SELECT 1 FROM download_entitlements WHERE order_id = ?1 AND delivery_status = 'held' LIMIT 1`,
+        ).bind(existing.id).first()
+        return {...existing, held: Boolean(held)}
+      }
       if (session.amount_total !== attempt.amount_minor || session.currency?.toUpperCase() !== attempt.currency) {
         throw new MarketplaceError(409, 'checkout_amount_mismatch', 'Stripe amount does not match the authoritative checkout snapshot')
       }
       const snapshot = parseSnapshot(attempt.snapshot)
+      const purchaseType: PurchaseType = attempt.purchase_type === 'preorder' ? 'preorder' : 'standard'
+      // A pre-order stays held until its release is LIVE; one confirmed after release is delivered now.
+      const releaseNow = await db.prepare('SELECT status FROM releases WHERE id = ?1').bind(attempt.release_id).first<{status: string}>()
+      const held = purchaseType === 'preorder' && releaseNow?.status !== 'LIVE'
+      const accountEmail = userId
+        ? (await db.prepare('SELECT email FROM users WHERE id = ?1').bind(userId).first<{email: string}>())?.email ?? null
+        : null
+      const stripeEmail = session.customer_details?.email ?? session.customer_email ?? null
+      const buyerEmail = normalizeBuyerEmail(accountEmail) ?? normalizeBuyerEmail(stripeEmail)
+      if (!userId && !buyerEmail) console.warn('[marketplace] guest order has no purchase email', {attemptId: attempt.id})
       // The provider bears Stripe's processing fee; use the actual fee from the balance
       // transaction, falling back to the standard-rate estimate when Stripe hasn't settled it yet.
       const processingFeeMinor = charge.stripeFeeMinor ?? estimateStripeFeeMinor(attempt.amount_minor)
@@ -435,8 +520,8 @@ export class CommerceService {
           (id, buyer_user_id, provider_profile_id, checkout_attempt_id, buyer_email, buyer_country_code, currency,
             gross_amount_minor, platform_fee_minor, provider_proceeds_minor, stripe_fee_minor,
             stripe_checkout_session_id, stripe_payment_intent_id, stripe_charge_id, stripe_balance_transaction_id,
-            stripe_destination_account_id, payment_status, paid_at, platform_fee_bps, livemode)
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 'paid', ?17, ?18, ?19)
+            stripe_destination_account_id, payment_status, paid_at, platform_fee_bps, livemode, purchase_type)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 'paid', ?17, ?18, ?19, ?20)
          RETURNING *`,
       ).bind(
         orderId, userId, attempt.provider_profile_id, attempt.id,
@@ -445,7 +530,7 @@ export class CommerceService {
         attempt.currency, amounts.grossAmountMinor, amounts.platformFeeMinor, amounts.providerProceedsMinor,
         charge.stripeFeeMinor, session.id, intentId, charge.chargeId, charge.balanceTransactionId,
         attempt.stripe_destination_account_id, paidAt, attempt.platform_fee_bps,
-        typeof session.livemode === 'boolean' ? session.livemode : null,
+        typeof session.livemode === 'boolean' ? session.livemode : null, purchaseType,
       ).first<OrderRow>()
       if (!insertedOrder) throw new Error('Order insert failed')
 
@@ -514,9 +599,10 @@ export class CommerceService {
 
       const entitlementId = crypto.randomUUID()
       await db.prepare(
-        `INSERT INTO download_entitlements (id, buyer_user_id, order_id, order_item_id, product_id)
-         VALUES (?1, ?2, ?3, ?4, ?5)`,
-      ).bind(entitlementId, userId, orderId, itemId, snapshot.product.product_id).run()
+        `INSERT INTO download_entitlements
+          (id, buyer_user_id, order_id, order_item_id, product_id, buyer_email, delivery_status, delivery_available_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+      ).bind(entitlementId, userId, orderId, itemId, snapshot.product.product_id, buyerEmail, held ? 'held' : 'available', held ? null : paidAt).run()
       for (const track of snapshot.tracks) {
         await db.prepare(
           `INSERT INTO download_entitlement_files
@@ -532,9 +618,12 @@ export class CommerceService {
         `UPDATE marketplace_checkout_attempts SET status = 'paid', stripe_payment_intent_id = ?1,
           updated_at = CURRENT_TIMESTAMP WHERE id = ?2`,
       ).bind(intentId, attempt.id).run()
-      return insertedOrder
+      return {...insertedOrder, held}
     })
 
+    // Pre-order proceeds are held by MeJay until release day, so a cancelled pre-order is refunded
+    // from funds never paid out. The transfer retry job pays the provider once the download unlocks.
+    if (order.held) return {orderId: order.id, held: true}
     // The buyer's purchase is already committed. A transfer error must not fail the webhook (Stripe
     // would retry fulfillment for days); record it and let the transfer retry job pay it out.
     try {
@@ -542,7 +631,7 @@ export class CommerceService {
     } catch (error) {
       await this.recordTransferFailure(order, error)
     }
-    return {orderId: order.id}
+    return {orderId: order.id, held: false}
   }
 
   /**
@@ -597,6 +686,7 @@ export class CommerceService {
        JOIN provider_profiles p ON p.id = o.provider_profile_id
        WHERE o.transfer_status IN ('pending', 'failed') AND p.suspended_at IS NULL
          AND o.payment_status IN ('paid', 'partially_refunded') AND o.dispute_status IN ('none', 'won')
+         AND NOT EXISTS (SELECT 1 FROM download_entitlements held WHERE held.order_id = o.id AND held.delivery_status = 'held')
          AND (?1 = '' OR o.provider_profile_id = ?1)
        ORDER BY o.created_at LIMIT ?2`,
     ).bind(options.providerId ?? '', options.limit ?? 100).all<OrderRow>()
@@ -941,6 +1031,10 @@ export class CommerceService {
   async listPurchases(userId: string): Promise<unknown[]> {
     const {results} = await this.database.prepare(
       `SELECT entitlement.id AS entitlement_id, entitlement.status AS entitlement_status,
+        entitlement.delivery_status, purchase_order.purchase_type,
+        -- A held pre-order shows the release's current approved time, which an admin may have moved.
+        CASE WHEN entitlement.delivery_status = 'held' THEN held_release.scheduled_release_at END AS release_at,
+        held_release.release_timezone,
         purchase_order.id AS order_id, purchase_order.paid_at, purchase_order.payment_status, purchase_order.currency,
         item.product_id, item.product_name, item.release_title, item.artist_name, item.artwork_asset_id, item.unit_amount_minor,
         item.catalog_snapshot->>'track_id' AS track_id,
@@ -953,11 +1047,109 @@ export class CommerceService {
        JOIN marketplace_orders purchase_order ON purchase_order.id = entitlement.order_id
        JOIN marketplace_order_items item ON item.id = entitlement.order_item_id
        LEFT JOIN download_entitlement_files file ON file.entitlement_id = entitlement.id
+       LEFT JOIN releases held_release ON held_release.id = item.release_id
        WHERE entitlement.buyer_user_id = ?1
-       GROUP BY entitlement.id, purchase_order.id, item.id
+       GROUP BY entitlement.id, purchase_order.id, item.id, held_release.id
        ORDER BY purchase_order.paid_at DESC`,
     ).bind(userId).all()
     return results
+  }
+
+  /**
+   * Public status for the guest checkout return page, looked up by the unguessable Checkout Session
+   * id from Stripe's redirect. Grants no download access and shows only a masked email.
+   */
+  async getGuestOrderStatus(sessionId: string): Promise<{
+    status: string
+    paid: boolean
+    purchaseType: PurchaseType
+    deliveryStatus: 'held' | 'available' | null
+    releaseAt: string | null
+    releaseTimezone: string | null
+    itemTitle: string
+    artistName: string
+    maskedEmail: string | null
+  }> {
+    const row = await this.database.prepare(
+      `SELECT attempt.status, attempt.purchase_type, attempt.snapshot, purchase_order.id AS order_id,
+        entitlement.delivery_status, entitlement.buyer_email, release.scheduled_release_at, release.release_timezone
+       FROM marketplace_checkout_attempts attempt
+       LEFT JOIN marketplace_orders purchase_order ON purchase_order.checkout_attempt_id = attempt.id
+       LEFT JOIN download_entitlements entitlement ON entitlement.order_id = purchase_order.id
+       LEFT JOIN releases release ON release.id = attempt.release_id
+       WHERE attempt.stripe_checkout_session_id = ?1 AND attempt.guest_checkout = TRUE`,
+    ).bind(sessionId).first<{
+      status: string; purchase_type: PurchaseType; snapshot: CheckoutSnapshot | string; order_id: string | null
+      delivery_status: 'held' | 'available' | null; buyer_email: string | null
+      scheduled_release_at: string | Date | null; release_timezone: string | null
+    }>()
+    if (!row) throw new MarketplaceError(404, 'checkout_not_found', 'Checkout was not found')
+    const snapshot = parseSnapshot(row.snapshot)
+    return {
+      status: row.status,
+      paid: Boolean(row.order_id),
+      purchaseType: row.purchase_type,
+      deliveryStatus: row.delivery_status,
+      releaseAt: row.purchase_type === 'preorder' && row.scheduled_release_at ? new Date(row.scheduled_release_at).toISOString() : null,
+      releaseTimezone: row.release_timezone,
+      itemTitle: snapshot.product.track_id ? snapshot.product.track_title ?? snapshot.product.product_name : snapshot.product.release_title,
+      artistName: snapshot.product.artist_name,
+      maskedEmail: maskEmail(row.buyer_email),
+    }
+  }
+
+  /**
+   * Cancelled pre-orders: create the Stripe refund for each pending cancellation. Idempotent per order
+   * (Stripe idempotency key), so a retry after a timeout never refunds twice. The charge.refunded
+   * webhook then posts the refund to the ledger and revokes the download through handleRefund.
+   */
+  async processPreorderRefunds(limit = 25): Promise<{requested: number; failed: number}> {
+    const {results} = await this.database.prepare(
+      `SELECT cancellation.order_id, cancellation.attempts, purchase_order.stripe_payment_intent_id, purchase_order.payment_status
+       FROM marketplace_preorder_cancellations cancellation
+       JOIN marketplace_orders purchase_order ON purchase_order.id = cancellation.order_id
+       WHERE cancellation.status IN ('pending', 'failed') AND cancellation.attempts < 8
+         AND cancellation.updated_at <= CURRENT_TIMESTAMP - (cancellation.attempts * INTERVAL '5 minutes')
+       ORDER BY cancellation.created_at LIMIT ?1`,
+    ).bind(limit).all<{order_id: string; attempts: number; stripe_payment_intent_id: string; payment_status: string}>()
+    let requested = 0
+    let failed = 0
+    for (const cancellation of results) {
+      if (cancellation.payment_status === 'refunded') {
+        await this.database.prepare(
+          `UPDATE marketplace_preorder_cancellations SET status = 'refund_requested', updated_at = CURRENT_TIMESTAMP WHERE order_id = ?1`,
+        ).bind(cancellation.order_id).run()
+        continue
+      }
+      try {
+        const params = new URLSearchParams()
+        params.set('payment_intent', cancellation.stripe_payment_intent_id)
+        params.set('reason', 'requested_by_customer')
+        params.set('metadata[orderId]', cancellation.order_id)
+        params.set('metadata[kind]', 'preorder_cancellation')
+        const refund = await stripeRequest<{id?: string}>({
+          secretKey: this.secretKey,
+          method: 'POST',
+          path: '/v1/refunds',
+          params,
+          idempotencyKey: `marketplace-preorder-refund-${cancellation.order_id}`,
+        })
+        await this.database.prepare(
+          `UPDATE marketplace_preorder_cancellations SET status = 'refund_requested', stripe_refund_id = ?1,
+            attempts = attempts + 1, last_error = NULL, updated_at = CURRENT_TIMESTAMP WHERE order_id = ?2`,
+        ).bind(refund.id ?? null, cancellation.order_id).run()
+        requested += 1
+      } catch (error) {
+        failed += 1
+        const message = error instanceof Error ? error.message.slice(0, 500) : 'refund_failed'
+        console.error('[marketplace] pre-order refund failed', {orderId: cancellation.order_id, error: message})
+        await this.database.prepare(
+          `UPDATE marketplace_preorder_cancellations SET status = 'failed', attempts = attempts + 1, last_error = ?1,
+            updated_at = CURRENT_TIMESTAMP WHERE order_id = ?2`,
+        ).bind(message, cancellation.order_id).run()
+      }
+    }
+    return {requested, failed}
   }
 
   /** Artwork for a purchase the buyer owns; works after the release is unpublished or taken down. */
@@ -985,7 +1177,7 @@ export class CommerceService {
        FROM download_entitlement_files file
        JOIN download_entitlements entitlement ON entitlement.id = file.entitlement_id
        WHERE file.id = ?1 AND entitlement.id = ?2 AND entitlement.buyer_user_id = ?3
-         AND entitlement.status = 'active'`,
+         AND entitlement.status = 'active' AND entitlement.delivery_status = 'available'`,
     ).bind(fileId, entitlementId, userId).first<{
       storage_key: string
       file_name: string
@@ -995,6 +1187,32 @@ export class CommerceService {
     if (!file) throw new MarketplaceError(404, 'download_not_found', 'Download is unavailable')
     return {storageKey: file.storage_key, fileName: file.file_name, mimeType: file.mime_type, byteSize: Number(file.byte_size)}
   }
+}
+
+/** "j•••@example.com": enough for the buyer to recognise their address without exposing it. */
+export function maskEmail(email: string | null | undefined): string | null {
+  if (!email || !email.includes('@')) return null
+  const [local, domain] = email.split('@')
+  return `${local.slice(0, 1)}•••@${domain}`
+}
+
+/**
+ * Attach guest purchases made with `verifiedEmail` to an account. Only call this after the caller has
+ * proven control of that address (an emailed code); an unverified email must never claim purchases.
+ */
+export async function claimGuestPurchases(db: Pick<Database, 'prepare'>, userId: string, verifiedEmail: string): Promise<number> {
+  const email = normalizeBuyerEmail(verifiedEmail)
+  if (!email) return 0
+  const {results} = await db.prepare(
+    `UPDATE download_entitlements SET buyer_user_id = ?1, updated_at = CURRENT_TIMESTAMP
+     WHERE buyer_user_id IS NULL AND buyer_email = ?2 RETURNING order_id`,
+  ).bind(userId, email).all<{order_id: string}>()
+  for (const row of results) {
+    await db.prepare(
+      `UPDATE marketplace_orders SET buyer_user_id = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2 AND buyer_user_id IS NULL`,
+    ).bind(userId, row.order_id).run()
+  }
+  return results.length
 }
 
 export function stripeRefundReference(charge: StripeChargeRefund): string | null {

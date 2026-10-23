@@ -1,4 +1,7 @@
 import {sendResendEmail, type ResendEnv} from '../services/email'
+import {downloadPageUrl, issueEmailLink} from './guest-access'
+import {formatReleaseTime} from './release-schedule'
+import {PREORDER_CHARGE_NOTICE} from './commerce-service'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -20,6 +23,11 @@ const MAX_ATTEMPTS = 5
 
 type OrderEmailRow = {
   order_id: string
+  entitlement_id: string | null
+  delivery_status: 'held' | 'available' | null
+  purchase_type: string | null
+  scheduled_release_at: string | Date | null
+  release_timezone: string | null
   account_email: string | null
   buyer_email: string | null
   currency: string
@@ -29,9 +37,10 @@ type OrderEmailRow = {
   release_title: string
   artist_name: string
   track_id: string | null
+  buyer_user_id: string | null
 }
 
-function escapeHtml(value: string): string {
+export function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[character]!)
 }
 
@@ -40,7 +49,7 @@ function formatAmount(amountMinor: number, currency: string): string {
 }
 
 /** The app's public origin. FRONTEND_URL may list several allowed origins; the first is canonical. */
-function appOrigin(env: OrderEmailEnv): string | null {
+export function appOrigin(env: OrderEmailEnv): string | null {
   const first = (env.FRONTEND_URL ?? '').split(',')[0]?.trim()
   if (!first) return null
   try {
@@ -50,57 +59,88 @@ function appOrigin(env: OrderEmailEnv): string | null {
   }
 }
 
+export const ACCOUNT_INVITE = 'Want your music saved in one place? Create a free account to keep your purchases in your library.'
+
+/** Shared MeJay email frame: heading, body paragraphs (already escaped HTML), optional button, footer. */
+export function renderEmail(args: {eyebrow: string; paragraphs: string[]; details?: Array<[string, string]>; button?: {label: string; url: string}; footer: string[]}): string {
+  const details = args.details?.length
+    ? `<table style="border-collapse:collapse; margin:0 0 16px 0; font-size:14px;">${args.details.map(([label, value]) => `<tr><td style="padding:2px 12px 2px 0; color:#555;">${escapeHtml(label)}</td><td>${escapeHtml(value)}</td></tr>`).join('')}</table>`
+    : ''
+  const button = args.button
+    ? `<p style="margin:0 0 18px 0;"><a href="${escapeHtml(args.button.url)}" style="display:inline-block;padding:10px 14px;border-radius:10px;background:#10b981;color:#fff;text-decoration:none;font-weight:700;">${escapeHtml(args.button.label)}</a></p>`
+    : ''
+  return `
+    <div style="font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; line-height: 1.5; color: #111">
+      <h2 style="margin:0 0 4px 0;">MeJay</h2>
+      <p style="margin:0 0 16px 0; font-size: 14px; color:#555;">${escapeHtml(args.eyebrow)}</p>
+      ${args.paragraphs.map((paragraph) => `<p style="margin:0 0 12px 0;">${paragraph}</p>`).join('')}
+      ${details}
+      ${button}
+      ${args.footer.map((line) => `<p style="margin:0 0 8px 0; font-size: 12px; color:#555;">${escapeHtml(line)}</p>`).join('')}
+    </div>
+  `.trim()
+}
+
+export function supportLine(env: OrderEmailEnv): string {
+  const support = (env.SUPPORT_EMAIL ?? '').trim()
+  return support ? `Questions? Contact ${support}.` : 'Questions? Just reply to this email.'
+}
+
 /**
- * Builds the confirmation. It deliberately carries no download links, storage URLs, or tokens:
- * files are only reachable from the signed-in buyer's Purchases page, which checks the session and
- * an active entitlement, so the order reference alone grants nothing.
+ * Builds the confirmation. A delivered purchase carries one "Download your music" link: a 7-day,
+ * purchase-scoped token page (never a storage URL), so guests are never forced to sign in. A pre-order
+ * explains the charge and that the download link arrives on release day.
  */
-export function buildOrderConfirmationEmail(order: OrderEmailRow, env: OrderEmailEnv): {subject: string; text: string; html: string} {
+export function buildOrderConfirmationEmail(order: OrderEmailRow, env: OrderEmailEnv, downloadUrl: string | null = null): {subject: string; text: string; html: string} {
   const origin = appOrigin(env)
-  const purchasesUrl = origin ? `${origin}/app/purchased` : null
+  const purchasesUrl = origin && order.buyer_user_id ? `${origin}/app/purchased` : null
   const item = order.track_id ? `${order.product_name} (from ${order.release_title})` : order.release_title
   const amount = formatAmount(Number(order.gross_amount_minor), order.currency)
-  const support = (env.SUPPORT_EMAIL ?? '').trim()
-  const supportLine = support ? `Questions? Contact ${support}.` : 'Questions? Just reply to this email.'
-  const access = purchasesUrl
-    ? `To download, sign in to MeJay with this email address and open Purchases: ${purchasesUrl}`
-    : 'To download, sign in to MeJay with this email address and open Purchases.'
+  const preorder = order.delivery_status === 'held'
+  const releaseLabel = preorder && order.scheduled_release_at ? formatReleaseTime(order.scheduled_release_at, order.release_timezone) : null
+  const help = supportLine(env)
 
-  const subject = `Your MeJay order: ${item}`
+  const delivery = preorder
+    ? [
+        `Pre-order · releases ${releaseLabel ?? 'on release day'}.`,
+        PREORDER_CHARGE_NOTICE,
+        "We'll email your download link on release day. Releases go live within a few minutes of the scheduled time.",
+      ]
+    : downloadUrl
+      ? ['Your music is ready. Use the button below to download it; the link works for 7 days without signing in.']
+      : purchasesUrl ? [`Sign in to MeJay and open Purchases to download: ${purchasesUrl}`] : []
+  const accountLines = order.buyer_user_id
+    ? (purchasesUrl ? [`Your purchase is also saved in Purchases: ${purchasesUrl}`] : [])
+    : [ACCOUNT_INVITE]
+
+  const subject = preorder ? `Your MeJay pre-order: ${item}` : `Your MeJay order: ${item}`
   const text = [
-    'Thanks for your purchase on MeJay.',
+    preorder ? 'Thanks for your pre-order on MeJay.' : 'Thanks for your purchase on MeJay.',
     '',
     `Item: ${item}`,
     `Artist: ${order.artist_name}`,
     `Amount paid: ${amount}`,
     `Order reference: ${order.order_id}`,
     '',
-    access,
-    'Your download is tied to your MeJay account and is not shared through this email.',
+    ...delivery,
+    ...(downloadUrl && !preorder ? [`Download your music: ${downloadUrl}`] : []),
     '',
-    supportLine,
+    ...accountLines,
+    'Keep this link private. Lost it or it expired? Request a new link from the download page with this email address.',
+    '',
+    help,
   ].join('\n')
 
-  const button = purchasesUrl
-    ? `<p style="margin:0 0 18px 0;"><a href="${escapeHtml(purchasesUrl)}" style="display:inline-block;padding:10px 14px;border-radius:10px;background:#10b981;color:#fff;text-decoration:none;font-weight:700;">Sign in to download</a></p>`
-    : ''
-  const html = `
-    <div style="font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; line-height: 1.5; color: #111">
-      <h2 style="margin:0 0 4px 0;">MeJay</h2>
-      <p style="margin:0 0 16px 0; font-size: 14px; color:#555;">Order confirmation</p>
-      <p style="margin:0 0 12px 0;">Thanks for your purchase.</p>
-      <table style="border-collapse:collapse; margin:0 0 16px 0; font-size:14px;">
-        <tr><td style="padding:2px 12px 2px 0; color:#555;">Item</td><td>${escapeHtml(item)}</td></tr>
-        <tr><td style="padding:2px 12px 2px 0; color:#555;">Artist</td><td>${escapeHtml(order.artist_name)}</td></tr>
-        <tr><td style="padding:2px 12px 2px 0; color:#555;">Amount paid</td><td>${escapeHtml(amount)}</td></tr>
-        <tr><td style="padding:2px 12px 2px 0; color:#555;">Order reference</td><td>${escapeHtml(order.order_id)}</td></tr>
-      </table>
-      <p style="margin:0 0 12px 0;">Sign in to MeJay with this email address and open <strong>Purchases</strong> to download.</p>
-      ${button}
-      <p style="margin:0 0 12px 0; font-size: 12px; color:#555;">Your download is tied to your MeJay account and is not shared through this email.</p>
-      <p style="margin:0; font-size: 12px; color:#555;">${escapeHtml(supportLine)}</p>
-    </div>
-  `.trim()
+  const html = renderEmail({
+    eyebrow: preorder ? 'Pre-order confirmation' : 'Order confirmation',
+    paragraphs: [
+      preorder ? 'Thanks for your pre-order.' : 'Thanks for your purchase.',
+      ...delivery.map(escapeHtml),
+    ],
+    details: [['Item', item], ['Artist', order.artist_name], ['Amount paid', amount], ['Order reference', order.order_id]],
+    button: downloadUrl && !preorder ? {label: 'Download your music', url: downloadUrl} : purchasesUrl && !preorder ? {label: 'Open Purchases', url: purchasesUrl} : undefined,
+    footer: [...accountLines, 'Keep this link private. Lost it or it expired? Request a new link from the download page with this email address.', help],
+  })
   return {subject, text, html}
 }
 
@@ -139,14 +179,19 @@ export async function sendOrderConfirmation(database: Database, env: OrderEmailE
     if (!(await claim(database, orderId))) return 'already_handled'
     const order = await database.prepare(
       `SELECT purchase_order.id AS order_id, buyer.email AS account_email, purchase_order.buyer_email,
+        purchase_order.buyer_user_id, purchase_order.purchase_type,
         purchase_order.currency, purchase_order.gross_amount_minor, purchase_order.paid_at,
-        item.product_name, item.release_title, item.artist_name, item.catalog_snapshot->>'track_id' AS track_id
+        item.product_name, item.release_title, item.artist_name, item.catalog_snapshot->>'track_id' AS track_id,
+        entitlement.id AS entitlement_id, entitlement.delivery_status, entitlement.status AS entitlement_status,
+        release.scheduled_release_at, release.release_timezone
        FROM marketplace_orders purchase_order
        JOIN marketplace_order_items item ON item.order_id = purchase_order.id
+       LEFT JOIN download_entitlements entitlement ON entitlement.order_item_id = item.id
+       LEFT JOIN releases release ON release.id = item.release_id
        LEFT JOIN users buyer ON buyer.id = purchase_order.buyer_user_id
        WHERE purchase_order.id = ?1
        ORDER BY item.created_at LIMIT 1`,
-    ).bind(orderId).first<OrderEmailRow>()
+    ).bind(orderId).first<OrderEmailRow & {entitlement_status: string | null}>()
     // The account email is where the buyer signs in to reach the download; prefer it over Stripe's.
     const to = order?.account_email?.trim() || order?.buyer_email?.trim() || ''
     if (!order || !to) {
@@ -154,7 +199,12 @@ export async function sendOrderConfirmation(database: Database, env: OrderEmailE
       console.warn('[order-email] Confirmation skipped', {orderId, reason: order ? 'no_recipient' : 'order_not_found'})
       return 'skipped'
     }
-    const message = buildOrderConfirmationEmail(order, env)
+    // A fresh 7-day link per send attempt; links from failed attempts were never delivered.
+    const origin = appOrigin(env)
+    const downloadUrl = origin && order.entitlement_id && order.delivery_status === 'available' && order.entitlement_status === 'active'
+      ? downloadPageUrl(origin, (await issueEmailLink(database as never, {entitlementId: order.entitlement_id, orderId, recipientEmail: to, purpose: 'purchase'})).token)
+      : null
+    const message = buildOrderConfirmationEmail(order, env, downloadUrl)
     const support = (env.SUPPORT_EMAIL ?? '').trim()
     const result = await sendResendEmail({
       env, to, ...message,

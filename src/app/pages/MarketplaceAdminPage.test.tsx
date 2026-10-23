@@ -153,4 +153,36 @@ describe('MarketplaceAdminPage industry reporting', () => {
     fireEvent.change(screen.getByLabelText('Artist account'), {target: {value: 'provider-1'}})
     expect(getMarketplaceFinance).toHaveBeenLastCalledWith({providerId: 'provider-1'})
   })
+
+  it('points staff at provider applications that are holding draft releases out of the pending queue', async () => {
+    vi.mocked(getMarketplaceAdminOverview).mockResolvedValue({
+      role: 'admin', counts: {}, pending: [], catalog: [], artists: [], isrcs: [], rights: [], pricing: [], splits: [], takedowns: [],
+      providers: [
+        {id: 'provider-1', display_name: 'Awaiting Artist', status: 'pending_review', release_count: 1},
+        {id: 'provider-2', display_name: 'Empty Applicant', status: 'pending_review', release_count: 0},
+        {id: 'provider-3', display_name: 'Approved Artist', status: 'approved', release_count: 3},
+      ],
+      discovery: {featuredReleases: [], featuredArtists: [], eligibleReleases: [], eligibleArtists: []},
+    })
+    const queryClient = new QueryClient({defaultOptions: {queries: {retry: false}}})
+    render(<QueryClientProvider client={queryClient}><MemoryRouter><MarketplaceAdminPage /></MemoryRouter></QueryClientProvider>)
+
+    expect(await screen.findByText(/1 artist account is awaiting approval with draft releases/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Review providers'}))
+    expect(await screen.findByRole('heading', {name: 'Providers'})).toBeInTheDocument()
+    expect(screen.getByText('Awaiting Artist')).toBeInTheDocument()
+  })
+
+  it('shows no approval notice when every account with releases is approved', async () => {
+    vi.mocked(getMarketplaceAdminOverview).mockResolvedValue({
+      role: 'admin', counts: {}, pending: [], catalog: [], artists: [], isrcs: [], rights: [], pricing: [], splits: [], takedowns: [],
+      providers: [{id: 'provider-3', display_name: 'Approved Artist', status: 'approved', release_count: 3}],
+      discovery: {featuredReleases: [], featuredArtists: [], eligibleReleases: [], eligibleArtists: []},
+    })
+    const queryClient = new QueryClient({defaultOptions: {queries: {retry: false}}})
+    render(<QueryClientProvider client={queryClient}><MemoryRouter><MarketplaceAdminPage /></MemoryRouter></QueryClientProvider>)
+
+    expect(await screen.findByRole('heading', {name: 'Pending Releases'})).toBeInTheDocument()
+    expect(screen.queryByText(/awaiting approval with draft releases/)).not.toBeInTheDocument()
+  })
 })
