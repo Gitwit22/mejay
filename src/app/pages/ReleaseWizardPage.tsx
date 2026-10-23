@@ -478,6 +478,26 @@ function TrackSplitForm({track, detail}: {track: ProviderTrack; detail: Provider
   return <div className="rounded-md border border-white/10 bg-[#141417] p-5"><p className="mb-4 font-medium">{track.track_number}. {track.title}</p><div className="flex flex-wrap gap-3"><Input className="min-w-52 flex-1" value={payee} onChange={(event) => setPayee(event.target.value)} placeholder="Payee name" /><Input className="w-28" value="100%" disabled /><Button disabled={!payee.trim() || save.isPending} onClick={() => save.mutate()}>{existing.length ? 'Replace split' : 'Save split'}</Button></div>{existing.length > 0 && <p className="mt-2 text-xs text-emerald-400">Active split totals {existing.reduce((sum, entry) => sum + Number(entry.share_bps), 0) / 100}%.</p>}</div>
 }
 
+/**
+ * The wizard step that fixes a submission requirement. Requirements are worded by the API, so this
+ * matches on keywords; an unrecognized requirement is still listed, just without a link.
+ */
+function prerequisiteStep(requirement: string): {id: ReleaseDraftStep; label: string} | null {
+  const text = requirement.toLowerCase()
+  // Stripe payouts and account approval are handled outside the wizard.
+  if (text.includes('stripe') || text.includes('artist account')) return null
+  const id: ReleaseDraftStep | null =
+    text.includes('certification') || text.includes('third-party material') ? 'certification'
+      : text.includes('priced') ? 'pricing'
+        : text.includes('split') ? 'splits'
+          : text.includes('master and composition') || text.includes('distribution rights') ? 'rights'
+            : text.includes('artwork') ? 'artwork'
+              : text.includes('audio') || text.includes('track') ? 'tracks'
+                : text.includes('release date') || text.includes('metadata') || text.includes('primary release artist') ? 'release-information'
+                  : null
+  return id ? steps.find((step) => step.id === id) ?? null : null
+}
+
 function ReviewStep({detail}: {detail: ProviderReleaseDetail}) {
   const navigate = useNavigate()
   const submit = useMutation({mutationFn: () => submitProviderRelease(detail.release.id, detail.release.version), onSuccess: () => {toast({title: 'Submitted for MeJay Review', description: 'We will let you know when the review is complete.'}); navigate('/app/artist')}})
@@ -490,7 +510,11 @@ function ReviewStep({detail}: {detail: ProviderReleaseDetail}) {
     <p className="mt-1 text-xs text-zinc-500">{RELEASE_LEAD_MESSAGE}</p>
     {requested && !meetsReleaseLead(requested) && editable && <p className="mt-2 text-xs text-amber-300">Your release date is less than 7 days away. Choose a later date in Release Information before submitting.</p>}
   </div>
-  return <><StepHeading title="Review & Submit" detail="Confirm the release package before sending it to MEJay Publishing." />{schedule}{latestFeedback && <div className="mb-5 border border-amber-400/30 bg-amber-400/5 p-4 text-sm text-amber-200"><p className="font-medium">Review feedback</p><p className="mt-1">{latestFeedback}</p></div>}<div className="divide-y divide-white/10 border-y border-white/10">{detail.prerequisites.length === 0 ? <div className="flex items-center gap-3 py-4 text-emerald-400"><Check className="h-4 w-4" />All submission requirements are complete</div> : detail.prerequisites.map((item) => <div key={item} className="py-3 text-sm text-zinc-400">Required: {item}</div>)}</div><Button className="mt-6 bg-emerald-400 text-zinc-950 hover:bg-emerald-300" disabled={!editable || detail.prerequisites.length > 0 || submit.isPending} onClick={() => submit.mutate()}>{submit.isPending ? 'Submitting...' : editable ? 'Submit to MEJay Review' : `Release is ${detail.release.status.replace(/_/g, ' ')}`}</Button>{submit.isError && <p className="mt-3 text-sm text-red-400">{submit.error.message}</p>}</>
+  return <><StepHeading title="Review & Submit" detail="Confirm the release package before sending it to MEJay Publishing." />{schedule}{latestFeedback && <div className="mb-5 border border-amber-400/30 bg-amber-400/5 p-4 text-sm text-amber-200"><p className="font-medium">Review feedback</p><p className="mt-1">{latestFeedback}</p></div>}{detail.prerequisites.length === 0 && <div className="flex items-center gap-3 border-y border-white/10 py-4 text-emerald-400"><Check className="h-4 w-4" />All submission requirements are complete</div>}<Button className="mt-6 bg-emerald-400 text-zinc-950 hover:bg-emerald-300" disabled={!editable || detail.prerequisites.length > 0 || submit.isPending} onClick={() => submit.mutate()}>{submit.isPending ? 'Submitting...' : editable ? 'Submit to MEJay Review' : `Release is ${detail.release.status.replace(/_/g, ' ')}`}</Button>{submit.isError && <p className="mt-3 text-sm text-red-400">{submit.error.message}</p>}
+    {editable && detail.prerequisites.length > 0 && <section aria-label="Remaining requirements" className="mt-4 border border-amber-400/30 bg-amber-400/5 p-4 text-sm"><p className="font-medium text-amber-200">Finish these before you can submit:</p><ul className="mt-2 space-y-2">{detail.prerequisites.map((item) => {
+      const step = prerequisiteStep(item)
+      return <li key={item} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-zinc-300"><span>{item}</span>{step && <Link to={`/app/artist/releases/${detail.release.id}/edit/${step.id}`} className="shrink-0 text-emerald-400 hover:underline">Go to {step.label}</Link>}</li>
+    })}</ul></section>}</>
 }
 /** Per-sale estimate computed by the API with the same calculator used when a sale is fulfilled. */
 function PayoutEstimate({amountMinor}: {amountMinor: number}) {

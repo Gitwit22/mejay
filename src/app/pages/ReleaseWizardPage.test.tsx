@@ -267,3 +267,31 @@ describe('release wizard: locked while in review', () => {
     expect(screen.getByLabelText('Release title')).toBeDisabled()
   })
 })
+
+describe('release wizard: remaining submission requirements', () => {
+  beforeEach(() => {
+    vi.mocked(listProviderArtists).mockResolvedValue([{id: 'artist-1', name: 'John Blaze'} as never])
+  })
+
+  it('lists what is left under the disabled Submit button, linking to the step that fixes it', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail({prerequisites: ['active release product priced at least $0.99 USD', 'completed Stripe payout setup']}))
+    renderStep('review')
+    const submit = await screen.findByRole('button', {name: 'Submit to MEJay Review'})
+    expect(submit).toBeDisabled()
+    const remaining = screen.getByRole('region', {name: 'Remaining requirements'})
+    // The list sits below the button so it is where the artist looks when Submit is greyed out.
+    expect(submit.compareDocumentPosition(remaining) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(remaining).toHaveTextContent('active release product priced at least $0.99 USD')
+    expect(screen.getByRole('link', {name: 'Go to Pricing'})).toHaveAttribute('href', '/app/artist/releases/release-1/edit/pricing')
+    // Stripe setup happens outside the wizard, so it is listed without a misleading step link.
+    expect(remaining).toHaveTextContent('completed Stripe payout setup')
+    expect(screen.getAllByRole('link', {name: /^Go to /})).toHaveLength(1)
+  })
+
+  it('shows the ready message and no requirements list once everything is complete', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail({prerequisites: []}))
+    renderStep('review')
+    expect(await screen.findByText('All submission requirements are complete')).toBeInTheDocument()
+    expect(screen.queryByRole('region', {name: 'Remaining requirements'})).not.toBeInTheDocument()
+  })
+})
