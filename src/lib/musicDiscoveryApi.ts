@@ -4,6 +4,8 @@ import type {StoreRelease} from './musicStoreApi'
 export type DiscoveryArtist = {
   id: string
   name: string
+  /** Public artist page slug (absent from older API responses). */
+  slug?: string
   artwork_asset_id: string | null
   release_count: number
 }

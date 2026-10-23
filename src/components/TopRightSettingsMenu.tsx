@@ -429,8 +429,8 @@ export function TopRightSettingsMenu({className}: TopRightSettingsMenuProps) {
                 </CollapsibleTrigger>
                 <CollapsibleContent>
                   <div className="rounded-xl border border-border bg-background/60 backdrop-blur-sm p-4 space-y-2">
-                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/app/store')}>
-                      Music Store
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/app?tab=music')}>
+                      Discover Music
                     </Button>
                     <Button type="button" variant="outline" className="w-full justify-start" onClick={() => closeAndNavigate('/app/purchased')}>
                       Purchased Music

@@ -24,7 +24,6 @@ import TermsPage from "./app/pages/TermsPage";
 import ContactPage from "./app/pages/ContactPage";
 import PrivacyPage from "./app/pages/PrivacyPage";
 import DevAdminPage from "./app/pages/DevAdminPage";
-import MusicStorePage from "./app/pages/MusicStorePage";
 import ArtistPage from "./app/pages/ArtistPage";
 import {StoreReleasePage} from "./app/pages/MusicStorePage";
 import ProviderOnboardingPage from "./app/pages/ProviderOnboardingPage";
@@ -33,6 +32,7 @@ import ReleaseWizardPage from "./app/pages/ReleaseWizardPage";
 import ArtistPortalGate from "./app/components/ArtistPortalGate";
 import MarketplaceAdminGate from "./app/components/MarketplaceAdminGate";
 import MarketplaceAdminPage from "./app/pages/MarketplaceAdminPage";
+import LegacyStoreRedirect from "./app/components/LegacyStoreRedirect";
 import PurchasedMusicPage from "./app/pages/PurchasedMusicPage";
 import RecipientEarningsPage from "./app/pages/RecipientEarningsPage";
 import PlaylistEditorPage from "./pages/PlaylistEditorPage";
@@ -531,7 +531,7 @@ const AnimatedRoutes = () => {
             <Route path="privacy" element={<PrivacyPage mode="app" />} />
             <Route path="contact" element={<ContactPage mode="app" />} />
           </Route>
-          <Route path="store" element={<MusicStorePage />} />
+          <Route path="store" element={<LegacyStoreRedirect />} />
           <Route path="store/:releaseId" element={<StoreReleasePage />} />
           <Route path="purchased" element={<PurchasedMusicPage />} />
           <Route path="earnings" element={<RecipientEarningsPage />} />
