@@ -21,6 +21,7 @@ import {
   transitionSchema,
   uploadFinalizeSchema,
   uploadInitSchema,
+  withdrawReleaseSchema,
 } from '../../marketplace/schemas'
 import {getSessionUserId, readJson, sha256Hex} from '../_auth'
 import {getClientIp} from '../_security'
@@ -30,6 +31,7 @@ import {artistGallerySchema, artistProfileSchema} from '../../marketplace/artist
 import {ArtistProfileService} from '../../marketplace/artist-profile-service'
 import {ProviderIsrcService} from '../../marketplace/provider-isrc-service'
 import {isMarketplaceStorageKey} from '../../marketplace/storage-keys'
+import {changeRequestDraftSchema, ReleaseChangeRequestService} from '../../marketplace/change-request-service'
 
 type Context = {
   request: Request
@@ -150,6 +152,8 @@ export const deleteReleaseDraft = async (context: Context): Promise<Response> =>
 export const updateReleaseDraft = handler(releaseDraftSchema, (service, userId, input, params) =>
   service.updateReleaseDraft(userId, requiredParam(params, 'releaseId'), input),
 200)
+export const withdrawRelease = handler(withdrawReleaseSchema, (service, userId, input, params) =>
+  service.withdrawSubmission(userId, requiredParam(params, 'releaseId'), input.expectedVersion), 200)
 export const createTrack = handler(trackSchema, (service, userId, input, params) =>
   service.createTrack(userId, requiredParam(params, 'releaseId'), input),
 )
@@ -248,6 +252,45 @@ export const addRightsMaterial = submissionHandler(rightsMaterialSchema, (servic
   service.addRightsMaterial(userId, requiredParam(params, 'releaseId'), input), 201)
 export const deleteRightsMaterial = submissionHandler(null, (service, userId, _input, params) =>
   service.deleteRightsMaterial(userId, requiredParam(params, 'materialId')))
+
+/** Removes discarded change-request uploads after commit. Best effort: the rows are already marked failed. */
+export async function deleteDiscardedUploads(env: unknown, storageKeys: string[], label: string): Promise<void> {
+  const bucket = (env as {DOWNLOADS?: {delete: (key: string) => Promise<void>}} | null)?.DOWNLOADS
+  const keys = storageKeys.filter(isMarketplaceStorageKey)
+  if (!bucket || keys.length === 0) return
+  const outcomes = await Promise.allSettled(keys.map((key) => bucket.delete(key)))
+  const failed = outcomes.filter((outcome) => outcome.status === 'rejected').length
+  if (failed > 0) console.warn(`[${label}] some uploads could not be removed from storage`, {failed, total: keys.length})
+}
+
+function changeRequestHandler<Schema extends z.ZodTypeAny>(
+  schema: Schema | null,
+  operation: (service: ReleaseChangeRequestService, userId: string, input: z.output<Schema>, releaseId: string) => Promise<unknown>,
+) {
+  return async (context: Context): Promise<Response> => {
+    if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+    const userId = await getSessionUserId(context.request, context.env)
+    if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+    try {
+      const input = schema ? schema.parse(await readJson(context.request)) : undefined
+      const result = await operation(new ReleaseChangeRequestService(context.env.DB), userId, input as z.output<Schema>, requiredParam(context.params ?? {}, 'releaseId'))
+      if (result && typeof result === 'object' && 'discardedStorageKeys' in result) {
+        const {discardedStorageKeys, request} = result as {discardedStorageKeys: string[]; request: unknown}
+        await deleteDiscardedUploads(context.env, discardedStorageKeys, 'change-request')
+        return json({ok: true, data: request})
+      }
+      return json({ok: true, data: result})
+    } catch (error) {
+      if (error instanceof ZodError) return json({ok: false, error: 'invalid_request', issues: error.issues}, {status: 400})
+      return errorResponse(error)
+    }
+  }
+}
+
+export const getChangeRequest = changeRequestHandler(null, (service, userId, _input, releaseId) => service.getCurrent(userId, releaseId))
+export const saveChangeRequest = changeRequestHandler(changeRequestDraftSchema, (service, userId, input, releaseId) => service.saveDraft(userId, releaseId, input))
+export const submitChangeRequest = changeRequestHandler(null, (service, userId, _input, releaseId) => service.submit(userId, releaseId))
+export const withdrawChangeRequest = changeRequestHandler(null, (service, userId, _input, releaseId) => service.withdraw(userId, releaseId))
 
 export const getArtistProfile = async (context: Context): Promise<Response> => {
   if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})

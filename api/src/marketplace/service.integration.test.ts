@@ -26,6 +26,7 @@ import {claimStorePurchases, downloadGuestFile, recoverGuestAccess} from '../rou
 import {signVerifiedToken} from '../routes/_auth'
 import {ensurePreviewJobs, wakeConverterIfQueued} from './preview-jobs'
 import {getCatalogAsset} from '../routes/store'
+import {ReleaseChangeRequestService} from './change-request-service'
 
 const connectionString = process.env.TEST_DATABASE_URL
 const describeWithDatabase = connectionString ? describe : describe.skip
@@ -1972,6 +1973,185 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       expect(calls.find((call) => call.url.endsWith('/v1/checkout/sessions'))!.body!.get('line_items[0][price_data][product_data][description]')).toBe('Credits Artist feat. Boldy James - single')
       const attempt = await pool.query(`SELECT snapshot->'product'->>'artist_name' AS artist FROM marketplace_checkout_attempts WHERE stripe_checkout_session_id = $1`, [checkout.sessionId])
       expect(attempt.rows[0].artist).toBe('Credits Artist feat. Boldy James')
+    })
+
+    describe('locked submissions and post-approval change requests', () => {
+      const changes = () => new ReleaseChangeRequestService(db() as never)
+      const wavBucket = () => ({
+        createUploadUrl: async () => 'https://upload.test',
+        head: async () => ({byteSize: 4_000_000, contentType: 'audio/wav'}),
+        getExact: async () => ({body: new Blob([new Uint8Array([...Buffer.from('RIFF'), 0, 0, 0, 0, ...Buffer.from('WAVE'), ...new Array(52).fill(0)])]).stream()}),
+      })
+
+      async function submitted(label: string) {
+        await resetIsrcState()
+        const fixture = await prepareLiveRelease(label, {stage: 'pricing'})
+        await certifyRelease(fixture.userId, fixture.release.id)
+        const release = await service.transitionRelease(fixture.userId, fixture.release.id, {targetStatus: 'SUBMITTED', expectedVersion: fixture.version}) as {version: number}
+        return {...fixture, version: release.version}
+      }
+
+      async function stagedAudio(owner: {userId: string; track: {id: string}}, changeRequestId: string) {
+        const started = await service.initiateUpload(owner.userId, {kind: 'audio', trackId: owner.track.id, fileName: 'remaster.wav', byteSize: 4_000_000, mimeType: 'audio/wav', changeRequestId}, wavBucket() as never) as {asset: {id: string}}
+        const finalized = await service.finalizeUpload(owner.userId, started.asset.id, wavBucket() as never) as {id: string; processing_status: string}
+        expect(finalized.processing_status).toBe('staged')
+        return finalized.id
+      }
+
+      it('lets the artist withdraw a waiting submission to edit it, but not once review starts', async () => {
+        const fixture = await submitted('Withdraw')
+        await expect(service.updateTrack(fixture.userId, fixture.track.id, {title: 'Edited', primaryArtistId: fixture.artist.id, discNumber: 1, trackNumber: 1, explicit: false, instrumental: false}))
+          .rejects.toMatchObject({code: 'release_locked'})
+        await expect(service.withdrawSubmission(fixture.userId, fixture.release.id, fixture.version - 1)).rejects.toMatchObject({code: 'stale_release_version'})
+        const draft = await service.withdrawSubmission(fixture.userId, fixture.release.id, fixture.version) as {status: string; version: number}
+        expect(draft.status).toBe('DRAFT')
+        await expect(service.updateTrack(fixture.userId, fixture.track.id, {title: 'Edited', primaryArtistId: fixture.artist.id, discNumber: 1, trackNumber: 1, explicit: false, instrumental: false}))
+          .resolves.toMatchObject({title: 'Edited'})
+        let version = draft.version
+        for (const targetStatus of ['METADATA_COMPLETE', 'RIGHTS_COMPLETE', 'ISRC_COMPLETE', 'PRICING_COMPLETE'] as const) {
+          version = (await service.transitionRelease(fixture.userId, fixture.release.id, {targetStatus, expectedVersion: version}) as {version: number}).version
+        }
+        // Edited releases are certified again before they go back to review.
+        await expect(service.transitionRelease(fixture.userId, fixture.release.id, {targetStatus: 'SUBMITTED', expectedVersion: version})).rejects.toMatchObject({code: 'release_prerequisites_unmet'})
+        await certifyRelease(fixture.userId, fixture.release.id)
+        version = (await service.transitionRelease(fixture.userId, fixture.release.id, {targetStatus: 'SUBMITTED', expectedVersion: version}) as {version: number}).version
+        const reviewing = await adminService().commandRelease(reviewerUserId, fixture.release.id, {action: 'start_review', expectedVersion: version}) as {version: number}
+        await expect(service.withdrawSubmission(fixture.userId, fixture.release.id, reviewing.version)).rejects.toMatchObject({code: 'release_in_review'})
+        await expect(service.updateTrack(fixture.userId, fixture.track.id, {title: 'Again', primaryArtistId: fixture.artist.id, discNumber: 1, trackNumber: 1, explicit: false, instrumental: false}))
+          .rejects.toMatchObject({code: 'release_locked'})
+      })
+
+      it('lets exactly one of a withdraw and a review start win', async () => {
+        const fixture = await submitted('WithdrawRace')
+        const outcomes = await Promise.allSettled([
+          service.withdrawSubmission(fixture.userId, fixture.release.id, fixture.version),
+          adminService().commandRelease(reviewerUserId, fixture.release.id, {action: 'start_review', expectedVersion: fixture.version}),
+        ])
+        expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+        const status = (await pool.query('SELECT status FROM releases WHERE id = $1', [fixture.release.id])).rows[0].status
+        expect(['DRAFT', 'UNDER_REVIEW']).toContain(status)
+      })
+
+      it('applies approved changes to a scheduled release only after review, keeping one open request', async () => {
+        const fixture = await guestPreorder('ChangeScheduled')
+        const releaseId = fixture.release.release.id
+        const owner = fixture.release
+        await expect(service.updateTrack(owner.userId, owner.track.id, {title: 'Direct', primaryArtistId: owner.artist.id, discNumber: 1, trackNumber: 1, explicit: false, instrumental: false}))
+          .rejects.toMatchObject({code: 'release_locked'})
+        const newDate = new Date(Date.now() + 20 * DAY).toISOString()
+        const saved = await changes().saveDraft(owner.userId, releaseId, {
+          release: {title: 'ChangeScheduled Deluxe', requestedReleaseAt: newDate, additionalArtists: [{role: 'featured', name: 'Guest Singer'}]},
+          tracks: [{trackId: owner.track.id, title: 'Renamed Track', credits: {featuredArtistIds: [], contributors: [{name: 'Writer One', role: 'writer', publisherName: null}]}}],
+          audioReplacements: [],
+        }) as {request: {id: string; status: string; diff: Array<{key: string}>}}
+        expect(saved.request.status).toBe('draft')
+        expect(saved.request.diff.map((item) => item.key)).toEqual(expect.arrayContaining(['release.title', 'release.requestedReleaseAt', 'release.additionalArtists', `track.${owner.track.id}.title`, `track.${owner.track.id}.credits`]))
+        // Nothing changes on the release while the request is open.
+        expect((await pool.query('SELECT title FROM releases WHERE id = $1', [releaseId])).rows[0].title).toBe('ChangeScheduled Release')
+        await expect(pool.query(`INSERT INTO release_change_requests (id, provider_profile_id, release_id, base_release_version) VALUES ($1, $2, $3, 1)`, [crypto.randomUUID(), owner.provider.id, releaseId]))
+          .rejects.toMatchObject({code: '23505'})
+
+        const audioId = await stagedAudio(owner, saved.request.id)
+        // Staged audio is invisible: the preview sweep and the store ignore it.
+        await ensurePreviewJobs(db() as never)
+        expect((await pool.query('SELECT 1 FROM audio_processing_jobs WHERE source_asset_id = $1', [audioId])).rowCount).toBe(0)
+        await changes().saveDraft(owner.userId, releaseId, {
+          release: {title: 'ChangeScheduled Deluxe', requestedReleaseAt: newDate, additionalArtists: [{role: 'featured', name: 'Guest Singer'}]},
+          tracks: [{trackId: owner.track.id, title: 'Renamed Track', credits: {featuredArtistIds: [], contributors: [{name: 'Writer One', role: 'writer', publisherName: null}]}}],
+          audioReplacements: [{trackId: owner.track.id, assetId: audioId}],
+        })
+        const sent = await changes().submit(owner.userId, releaseId) as {status: string; same_recording_required: boolean}
+        expect(sent).toMatchObject({status: 'submitted', same_recording_required: false})
+        await expect(changes().saveDraft(owner.userId, releaseId, {release: {title: 'Other'}, tracks: [], audioReplacements: []})).rejects.toMatchObject({code: 'change_request_submitted'})
+        await expect(changes().command(owner.userId, saved.request.id, {action: 'approve', confirmSameRecording: false})).rejects.toMatchObject({code: 'marketplace_staff_required'})
+
+        await changes().command(reviewerUserId, saved.request.id, {action: 'start_review'})
+        await expect(changes().withdraw(owner.userId, releaseId)).rejects.toMatchObject({code: 'change_request_in_review'})
+        const filesBefore = (await pool.query('SELECT storage_key FROM download_entitlement_files WHERE entitlement_id = $1', [fixture.entitlement.id])).rows
+        const approved = await changes().command(reviewerUserId, saved.request.id, {action: 'approve', confirmSameRecording: false})
+        expect(approved.request).toMatchObject({status: 'approved'})
+
+        const release = (await pool.query('SELECT title, version, scheduled_release_at, requested_release_at FROM releases WHERE id = $1', [releaseId])).rows[0]
+        expect(release.title).toBe('ChangeScheduled Deluxe')
+        expect(new Date(release.scheduled_release_at).toISOString()).toBe(newDate)
+        expect(new Date(release.requested_release_at).toISOString()).toBe(newDate)
+        expect((await pool.query('SELECT title FROM tracks WHERE id = $1', [owner.track.id])).rows[0].title).toBe('Renamed Track')
+        expect((await pool.query('SELECT display_name FROM release_artist_credits WHERE release_id = $1', [releaseId])).rows).toEqual([{display_name: 'Guest Singer'}])
+        expect((await pool.query('SELECT name FROM track_contributors WHERE track_id = $1', [owner.track.id])).rows).toEqual([{name: 'Writer One'}])
+        expect((await pool.query('SELECT processing_status FROM marketplace_assets WHERE id = $1', [audioId])).rows[0].processing_status).toBe('ready')
+        // The approved audio is now the source the preview sweep uses.
+        await ensurePreviewJobs(db() as never)
+        expect((await pool.query('SELECT 1 FROM audio_processing_jobs WHERE source_asset_id = $1', [audioId])).rowCount).toBe(1)
+        // Pre-order buyers are told about the new date and keep the files they paid for.
+        const jobs = await pool.query(`SELECT payload FROM marketplace_email_jobs WHERE entitlement_id = $1 AND kind = 'release_date_changed'`, [fixture.entitlement.id])
+        expect(jobs.rows).toHaveLength(1)
+        expect((await pool.query('SELECT storage_key FROM download_entitlement_files WHERE entitlement_id = $1', [fixture.entitlement.id])).rows).toEqual(filesBefore)
+      })
+
+      it('requires a same-song confirmation for audio on a live release, and rejection changes nothing', async () => {
+        await resetIsrcState()
+        const live = await prepareLiveRelease('ChangeLive')
+        const draft = await changes().saveDraft(live.userId, live.release.id, {release: {}, tracks: [], audioReplacements: []}) as {request: {id: string}}
+        const audioId = await stagedAudio(live, draft.request.id)
+        await changes().saveDraft(live.userId, live.release.id, {release: {genre: 'House'}, tracks: [], audioReplacements: [{trackId: live.track.id, assetId: audioId}]})
+        await expect(changes().saveDraft(live.userId, live.release.id, {release: {requestedReleaseAt: new Date(Date.now() + 30 * DAY).toISOString()}, tracks: [], audioReplacements: []}))
+          .rejects.toMatchObject({code: 'release_already_live'})
+        const sent = await changes().submit(live.userId, live.release.id) as {same_recording_required: boolean}
+        expect(sent.same_recording_required).toBe(true)
+        const review = await changes().getForReview(reviewerUserId, draft.request.id) as {sameRecordingRequired: boolean; request: {diff: Array<{key: string}>}}
+        expect(review.sameRecordingRequired).toBe(true)
+        expect(review.request.diff.map((item) => item.key)).toEqual(['release.genre', `track.${live.track.id}.audio`])
+        await expect(changes().command(reviewerUserId, draft.request.id, {action: 'approve', confirmSameRecording: false})).rejects.toMatchObject({code: 'same_recording_confirmation_required'})
+
+        const rejected = await changes().command(reviewerUserId, draft.request.id, {action: 'reject', note: 'This sounds like a different song.'})
+        expect(rejected.request).toMatchObject({status: 'rejected', review_note: 'This sounds like a different song.'})
+        expect(rejected.discardedStorageKeys).toHaveLength(1)
+        expect((await pool.query('SELECT processing_status FROM marketplace_assets WHERE id = $1', [audioId])).rows[0].processing_status).toBe('failed')
+        expect((await pool.query('SELECT genre, version FROM releases WHERE id = $1', [live.release.id])).rows[0]).toMatchObject({genre: null, version: live.version})
+
+        // A new request after rejection; this time confirmed as the same recording.
+        const again = await changes().saveDraft(live.userId, live.release.id, {release: {}, tracks: [], audioReplacements: []}) as {request: {id: string}}
+        const second = await stagedAudio(live, again.request.id)
+        await changes().saveDraft(live.userId, live.release.id, {release: {}, tracks: [], audioReplacements: [{trackId: live.track.id, assetId: second}]})
+        await changes().submit(live.userId, live.release.id)
+        const approved = await changes().command(reviewerUserId, again.request.id, {action: 'approve', confirmSameRecording: true})
+        expect(approved.request).toMatchObject({status: 'approved', same_recording_confirmed: true})
+      })
+
+      it('refuses an empty or stale request, and lets the artist withdraw a submitted one', async () => {
+        await resetIsrcState()
+        const live = await prepareLiveRelease('ChangeStale')
+        await changes().saveDraft(live.userId, live.release.id, {release: {title: 'ChangeStale Release'}, tracks: [], audioReplacements: []})
+        await expect(changes().submit(live.userId, live.release.id)).rejects.toMatchObject({code: 'change_request_empty'})
+        const draft = await changes().saveDraft(live.userId, live.release.id, {release: {title: 'Stale Title'}, tracks: [], audioReplacements: []}) as {request: {id: string}}
+        await changes().submit(live.userId, live.release.id)
+        const withdrawn = await changes().withdraw(live.userId, live.release.id)
+        expect(withdrawn.request).toMatchObject({status: 'withdrawn'})
+
+        const next = await changes().saveDraft(live.userId, live.release.id, {release: {title: 'Stale Title'}, tracks: [], audioReplacements: []}) as {request: {id: string}}
+        expect(next.request.id).not.toBe(draft.request.id)
+        await changes().submit(live.userId, live.release.id)
+        await pool.query(`UPDATE releases SET title = 'Changed Elsewhere' WHERE id = $1`, [live.release.id])
+        await expect(changes().command(reviewerUserId, next.request.id, {action: 'approve', confirmSameRecording: false})).rejects.toMatchObject({code: 'change_request_stale'})
+        // An admin action that bumps the version without touching the requested fields is not a conflict.
+        await pool.query(`UPDATE releases SET title = 'ChangeStale Release', version = version + 5 WHERE id = $1`, [live.release.id])
+        await expect(changes().command(reviewerUserId, next.request.id, {action: 'approve', confirmSameRecording: false})).resolves.toMatchObject({request: {status: 'approved'}})
+      })
+
+      it('only accepts change-request uploads for a draft request on the same release', async () => {
+        await resetIsrcState()
+        const live = await prepareLiveRelease('ChangeUpload')
+        const other = await createProviderFixture('ChangeUploadOther')
+        const draft = await changes().saveDraft(live.userId, live.release.id, {release: {}, tracks: [], audioReplacements: []}) as {request: {id: string}}
+        await expect(service.initiateUpload(live.userId, {kind: 'audio', trackId: live.track.id, fileName: 'x.wav', byteSize: 1000, mimeType: 'audio/wav'}, wavBucket() as never))
+          .rejects.toMatchObject({code: 'release_locked'})
+        await expect(service.initiateUpload(other.userId, {kind: 'audio', trackId: other.track.id, fileName: 'x.wav', byteSize: 1000, mimeType: 'audio/wav', changeRequestId: draft.request.id}, wavBucket() as never))
+          .rejects.toMatchObject({code: 'change_request_not_found'})
+        await expect(changes().saveDraft(live.userId, live.release.id, {release: {}, tracks: [], audioReplacements: [{trackId: live.track.id, assetId: crypto.randomUUID()}]}))
+          .rejects.toMatchObject({code: 'change_request_asset_invalid'})
+        await expect(changes().saveDraft(other.userId, other.release.id, {release: {title: 'Nope'}, tracks: [], audioReplacements: []}))
+          .rejects.toMatchObject({code: 'release_not_changeable'})
+      })
     })
   })
 })

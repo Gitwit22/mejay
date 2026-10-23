@@ -3,7 +3,7 @@ import {fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {MemoryRouter, Route, Routes} from 'react-router-dom'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {generateProviderIsrc, getProviderRelease, listProviderArtists, updateProviderRelease, updateProviderTrack, type ProviderReleaseDetail} from '@/lib/providerApi'
+import {generateProviderIsrc, getProviderRelease, listProviderArtists, updateProviderRelease, updateProviderTrack, withdrawProviderRelease, type ProviderReleaseDetail} from '@/lib/providerApi'
 import ReleaseWizardPage from './ReleaseWizardPage'
 
 // Radix checkboxes measure themselves; jsdom has no ResizeObserver.
@@ -21,6 +21,7 @@ vi.mock('@/lib/providerApi', async (importOriginal) => ({
   updateProviderRelease: vi.fn(),
   generateProviderIsrc: vi.fn(),
   updateProviderTrack: vi.fn(),
+  withdrawProviderRelease: vi.fn(),
 }))
 
 const track = {id: 'track-1', title: 'Night Drive', version_title: null, disc_number: 1, track_number: 1, duration_ms: 180000, explicit: false, language_code: 'en', primary_artist_name: 'John Blaze', isrc: null}
@@ -223,5 +224,46 @@ describe('release wizard: additional artists', () => {
     await waitFor(() => expect(updateProviderRelease).toHaveBeenCalledWith('release-1', expect.objectContaining({
       additionalArtists: [{role: 'primary', artistId: 'artist-2', name: 'Kay'}],
     })))
+  })
+})
+
+describe('release wizard: locked while in review', () => {
+  beforeEach(() => {
+    vi.mocked(listProviderArtists).mockResolvedValue([{id: 'artist-1', name: 'John Blaze'} as never])
+    vi.mocked(updateProviderRelease).mockReset()
+    vi.mocked(withdrawProviderRelease).mockReset().mockResolvedValue({} as never)
+  })
+
+  const locked = (status: string) => vi.mocked(getProviderRelease).mockResolvedValue(detail({release: {...detail().release, status}}))
+
+  it('locks every field of a submitted release and unlocks it only through Edit → confirm', async () => {
+    locked('SUBMITTED')
+    renderStep('release-information')
+    expect(await screen.findByText('Waiting for MeJay review')).toBeInTheDocument()
+    expect(screen.getByLabelText('Release title')).toBeDisabled()
+    expect(screen.getByLabelText('UPC (optional)')).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', {name: 'Edit'}))
+    expect(await screen.findByText(/takes your release out of the review queue/)).toBeInTheDocument()
+    expect(withdrawProviderRelease).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', {name: 'Unlock and edit'}))
+    await waitFor(() => expect(withdrawProviderRelease).toHaveBeenCalledWith('release-1', 3))
+    expect(updateProviderRelease).not.toHaveBeenCalled()
+  })
+
+  it('offers no way to edit while MeJay is reviewing', async () => {
+    locked('UNDER_REVIEW')
+    renderStep('track-metadata')
+    expect(await screen.findByText('MeJay is reviewing this release')).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: 'Edit'})).not.toBeInTheDocument()
+    for (const input of screen.getAllByDisplayValue('Night Drive')) expect(input).toBeDisabled()
+    expect(screen.getByRole('button', {name: 'Save track metadata'})).toBeDisabled()
+  })
+
+  it('sends approved releases to a change request instead of editing in place', async () => {
+    locked('LIVE')
+    renderStep('release-information')
+    expect(await screen.findByText('Approved: changes need MeJay approval')).toBeInTheDocument()
+    expect(screen.getByRole('link', {name: 'Request changes'})).toHaveAttribute('href', '/app/artist/releases/release-1/changes')
+    expect(screen.getByLabelText('Release title')).toBeDisabled()
   })
 })

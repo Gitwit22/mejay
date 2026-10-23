@@ -390,6 +390,13 @@ export function updateProviderRelease(releaseId: string, input: {
   })
 }
 
+/** "Edit" on a submitted release: takes it back out of the review queue to draft. */
+export function withdrawProviderRelease(releaseId: string, expectedVersion: number): Promise<ProviderReleaseDetail['release']> {
+  return request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}/withdraw`, {
+    method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({expectedVersion}),
+  })
+}
+
 export function createProviderTrack(releaseId: string, input: {
   title: string
   primaryArtistId: string
@@ -404,9 +411,10 @@ export function createProviderTrack(releaseId: string, input: {
 }
 
 type ImageMime = 'image/jpeg' | 'image/png' | 'image/webp'
+/** `changeRequestId`: a replacement for an approved release, held until MeJay approves the change request. */
 type UploadInput =
-  | {kind: 'artwork'; releaseId: string; fileName: string; mimeType: ImageMime; byteSize: number; width: number; height: number}
-  | {kind: 'audio'; trackId: string; fileName: string; mimeType: 'audio/wav' | 'audio/x-wav' | 'audio/flac' | 'audio/x-flac'; byteSize: number}
+  | {kind: 'artwork'; releaseId: string; fileName: string; mimeType: ImageMime; byteSize: number; width: number; height: number; changeRequestId?: string}
+  | {kind: 'audio'; trackId: string; fileName: string; mimeType: 'audio/wav' | 'audio/x-wav' | 'audio/flac' | 'audio/x-flac'; byteSize: number; changeRequestId?: string}
   | {kind: 'artist_photo' | 'artist_banner' | 'artist_cutout' | 'artist_gallery'; artistId: string; fileName: string; mimeType: ImageMime; byteSize: number; width: number; height: number}
   | {kind: 'rights_document'; releaseId: string; fileName: string; mimeType: 'application/pdf' | 'image/jpeg' | 'image/png'; byteSize: number}
 
@@ -505,4 +513,79 @@ export function replaceProviderSplits(trackId: string, entries: Array<{payeeName
 
 export function submitProviderRelease(releaseId: string, expectedVersion: number): Promise<ProviderRelease> {
   return request(`/api/marketplace/releases/${encodeURIComponent(releaseId)}/submit`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({expectedVersion})})
+}
+export type ChangeRequestStatus = 'draft' | 'submitted' | 'in_review' | 'approved' | 'rejected' | 'withdrawn'
+
+export type ReleaseFieldChanges = Partial<{
+  title: string
+  versionTitle: string | null
+  genre: string | null
+  subgenre: string | null
+  labelName: string | null
+  catalogNumber: string | null
+  upc: string | null
+  originalReleaseDate: string | null
+  copyrightYear: number | null
+  copyrightHolder: string | null
+  phonographicCopyrightYear: number | null
+  phonographicCopyrightHolder: string | null
+  requestedReleaseAt: string
+  releaseTimezone: string | null
+  additionalArtists: Array<{role: 'primary' | 'featured'; artistId?: string | null; name: string}>
+}>
+
+export type TrackFieldChanges = {
+  trackId: string
+  title?: string
+  versionTitle?: string | null
+  explicit?: boolean
+  languageCode?: string | null
+  genre?: string | null
+  previewStartMs?: number | null
+  credits?: {featuredArtistIds: string[]; contributors: TrackContributor[]}
+}
+
+export type ChangeRequestInput = {
+  release: ReleaseFieldChanges
+  tracks: TrackFieldChanges[]
+  artworkAssetId?: string | null
+  audioReplacements: Array<{trackId: string; assetId: string}>
+}
+
+/** One old → new line of a change request; 'asset' items carry asset ids. */
+export type ChangeDiffItem = {key: string; label: string; trackId?: string; trackTitle?: string; kind: 'value' | 'credits' | 'asset'; before: unknown; after: unknown}
+
+export type ReleaseChangeRequest = {
+  id: string
+  release_id: string
+  status: ChangeRequestStatus
+  changes: {release: ReleaseFieldChanges; tracks: TrackFieldChanges[]}
+  artwork_asset_id: string | null
+  audio_replacements: Array<{trackId: string; assetId: string}>
+  same_recording_required: boolean
+  same_recording_confirmed: boolean
+  review_note: string | null
+  submitted_at: string | null
+  reviewed_at: string | null
+  diff: ChangeDiffItem[]
+}
+
+export type ReleaseChangeRequestState = {request: ReleaseChangeRequest | null; sameRecordingRequired: boolean}
+
+const changeRequestPath = (releaseId: string) => `/api/marketplace/releases/${encodeURIComponent(releaseId)}/change-request`
+
+export function getReleaseChangeRequest(releaseId: string): Promise<ReleaseChangeRequestState> {
+  return request(changeRequestPath(releaseId))
+}
+
+export function saveReleaseChangeRequest(releaseId: string, input: ChangeRequestInput): Promise<ReleaseChangeRequest> {
+  return request(changeRequestPath(releaseId), {method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
+}
+
+export function submitReleaseChangeRequest(releaseId: string): Promise<ReleaseChangeRequest> {
+  return request(`${changeRequestPath(releaseId)}/submit`, {method: 'POST', headers: {'content-type': 'application/json'}, body: '{}'})
+}
+
+export function withdrawReleaseChangeRequest(releaseId: string): Promise<ReleaseChangeRequest> {
+  return request(`${changeRequestPath(releaseId)}/withdraw`, {method: 'POST', headers: {'content-type': 'application/json'}, body: '{}'})
 }

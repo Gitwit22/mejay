@@ -162,12 +162,16 @@ export class MarketplaceAdminService {
     return {role: staff.role, release: releaseRow, tracks, certifications, materials, reviewEvents, readiness: sale, warnings}
   }
 
-  /** Staff-only access to private submission files (artwork, rights documents) for review. */
+  /**
+   * Staff-only access to private submission files for review: artwork, rights documents, artist
+   * imagery, and source audio. Includes 'staged' replacements waiting in a change request.
+   */
   async getReviewAsset(userId: string, assetId: string): Promise<{storageKey: string; mimeType: string; fileName: string}> {
     await requireStaff(this.database, userId)
     const asset = await this.database.prepare(
       `SELECT storage_key, mime_type, kind, metadata->>'fileName' AS file_name FROM marketplace_assets
-       WHERE id = ?1 AND processing_status = 'ready' AND kind IN ('artwork', 'rights_document', 'artist_photo', 'artist_banner', 'artist_cutout', 'artist_gallery')`,
+       WHERE id = ?1 AND processing_status IN ('ready', 'staged')
+         AND kind IN ('artwork', 'audio', 'rights_document', 'artist_photo', 'artist_banner', 'artist_cutout', 'artist_gallery')`,
     ).bind(assetId).first<{storage_key: string; mime_type: string; kind: string; file_name: string | null}>()
     if (!asset || !isMarketplaceStorageKey(asset.storage_key)) throw new MarketplaceError(404, 'not_found', 'Asset was not found')
     return {storageKey: asset.storage_key, mimeType: asset.mime_type, fileName: (asset.file_name || `${asset.kind}-${assetId}`).replace(/["\r\n]/g, '_')}

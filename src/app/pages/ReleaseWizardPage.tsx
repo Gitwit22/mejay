@@ -5,6 +5,8 @@ import {Link, useNavigate, useParams} from 'react-router-dom'
 
 import {CertificationStep, CreditsStep} from '@/app/components/provider/ReleaseSubmissionSteps'
 import {ReleaseDateTimePicker} from '@/app/components/provider/ReleaseDateTimePicker'
+import {ReleaseLockBanner} from '@/app/components/provider/ReleaseLockBanner'
+import {releaseEditState} from '@/lib/releaseEditState'
 import {AdditionalArtistsField} from '@/app/components/provider/AdditionalArtistsField'
 import {creditName, creditsInput, formatArtistCredit, rowsFromCredits, titleHasFeature, type AdditionalArtistRow} from '@/lib/artistCredit'
 
@@ -82,6 +84,8 @@ export default function ReleaseWizardPage() {
   if (detail.isError || !detail.data) return <div className="grid min-h-screen place-items-center bg-[#09090b] text-red-300">{detail.error?.message || 'Release not found'}</div>
   const index = steps.findIndex((item) => item.id === activeStep)
   const next = steps[index + 1]?.id
+  // Submitted, in review, approved or closed releases are shown read-only; the banner explains why.
+  const readOnly = releaseEditState(detail.data.release.status) !== 'editable'
 
   return <div className="min-h-screen bg-[#09090b] text-zinc-100">
     <header className="border-b border-white/10 px-4 py-4 sm:px-8"><div className="mx-auto flex max-w-7xl items-center gap-4">
@@ -96,6 +100,8 @@ export default function ReleaseWizardPage() {
         </Link>)}
       </nav>
       <main className="min-w-0 max-w-3xl">
+        <ReleaseLockBanner release={detail.data.release} />
+        <fieldset disabled={readOnly} aria-disabled={readOnly} className="min-w-0">
         {activeStep === 'release-information' && <ReleaseInformation detail={detail.data} />}
         {activeStep === 'artwork' && <ArtworkStep releaseId={releaseId} detail={detail.data} />}
         {activeStep === 'tracks' && <TracksStep releaseId={releaseId} detail={detail.data} />}
@@ -107,8 +113,9 @@ export default function ReleaseWizardPage() {
         {activeStep === 'splits' && <SplitsStep detail={detail.data} />}
         {activeStep === 'certification' && <CertificationStep detail={detail.data} onBack={() => navigate(`/app/artist/releases/${releaseId}/edit/splits`)} onContinue={() => advance.mutate('review')} />}
         {activeStep === 'review' && <ReviewStep detail={detail.data} />}
+        </fieldset>
         {advance.isError && <p className="mt-5 text-sm text-red-400">{advance.error.message}</p>}
-        {next && activeStep !== 'certification' && <div className="mt-8 flex justify-end border-t border-white/10 pt-5"><Button onClick={() => advance.mutate(next)} disabled={advance.isPending} className="gap-2 bg-emerald-400 text-zinc-950 hover:bg-emerald-300">Save and continue <ChevronRight className="h-4 w-4" /></Button></div>}
+        {next && activeStep !== 'certification' && <div className="mt-8 flex justify-end border-t border-white/10 pt-5"><Button onClick={() => readOnly ? navigate(`/app/artist/releases/${releaseId}/edit/${next}`) : advance.mutate(next)} disabled={advance.isPending} className="gap-2 bg-emerald-400 text-zinc-950 hover:bg-emerald-300">{readOnly ? 'Next' : 'Save and continue'} <ChevronRight className="h-4 w-4" /></Button></div>}
       </main>
     </div>
   </div>
@@ -243,7 +250,8 @@ export function ReleaseScheduleFields({value, onChange, problem}: {value: Releas
 
 function ArtworkStep({releaseId, detail}: {releaseId: string; detail: ProviderReleaseDetail}) {
   const queryClient = useQueryClient()
-  const ready = detail.assets.find((asset) => asset.kind === 'artwork' && asset.processing_status === 'ready')
+  // Newest ready artwork: an approved change request's replacement comes last.
+  const ready = detail.assets.filter((asset) => asset.kind === 'artwork' && asset.processing_status === 'ready').at(-1)
   const upload = useMutation({mutationFn: async (file: File) => {const image = await createImageBitmap(file); try {await uploadProviderAsset({kind: 'artwork', releaseId, fileName: file.name, mimeType: file.type as 'image/jpeg' | 'image/png' | 'image/webp', byteSize: file.size, width: image.width, height: image.height}, file)} finally {image.close()}}, onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', releaseId]}); toast({title: 'Artwork uploaded'})}})
   return <><StepHeading title="Upload Artwork" detail="JPEG, PNG, or WebP. Exactly square, at least 3000 x 3000, up to 20 MB." /><label className="grid min-h-64 cursor-pointer place-items-center rounded-md border border-dashed border-white/20 bg-white/[0.02] p-8 text-center hover:border-emerald-400/50"><div><Upload className="mx-auto h-8 w-8 text-emerald-400" /><p className="mt-3 font-medium">{upload.isPending ? 'Uploading...' : ready ? 'Replace artwork' : 'Choose artwork'}</p>{ready && <p className="mt-1 text-sm text-emerald-400">Current artwork is ready</p>}</div><input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" disabled={upload.isPending} onChange={(event) => {const file = event.target.files?.[0]; if (file) upload.mutate(file)}} /></label>{upload.isError && <p className="mt-4 text-sm text-red-400">{upload.error.message}</p>}</>
 }

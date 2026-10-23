@@ -35,13 +35,18 @@ import {
   listReleases,
   replaceRevenueSplits,
   submitRelease,
+  withdrawRelease,
+  getChangeRequest,
+  saveChangeRequest,
+  submitChangeRequest,
+  withdrawChangeRequest,
   transitionRelease,
   updateReleaseDraft,
   deleteReleaseDraft,
   updateTrack,
   finalizeUpload,
 } from './marketplace'
-import {commandProvider as marketplaceAdminCommandProvider, commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview, recordSplitDispute, replaceDiscoveryFeatures, retryProviderPayouts, getFinanceSummary as marketplaceAdminFinance, getReleaseReview as marketplaceAdminReleaseReview, getReviewAsset as marketplaceAdminReviewAsset} from './marketplace-admin'
+import {commandProvider as marketplaceAdminCommandProvider, commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview, recordSplitDispute, replaceDiscoveryFeatures, retryProviderPayouts, getFinanceSummary as marketplaceAdminFinance, getReleaseReview as marketplaceAdminReleaseReview, getReviewAsset as marketplaceAdminReviewAsset, listChangeRequests, getChangeRequestReview, commandChangeRequest} from './marketplace-admin'
 import {createIndustryReportingBatch, createIndustryReportingCorrection, exportIndustryReportingBatch, getIndustryReporting, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting} from './marketplace-admin/reporting'
 import {onRequest as stripeWebhook} from './stripe-webhook'
 import {getCatalogAsset, getCatalogRelease, getPublicArtist, listCatalog, recordCatalogPreview} from './store'
@@ -131,6 +136,11 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'delete', path: '/api/marketplace/tracks/:trackId/price', handler: clearTrackPrice},
   {method: 'put', path: '/api/marketplace/tracks/:trackId/revenue-splits', handler: replaceRevenueSplits},
   {method: 'post', path: '/api/marketplace/releases/:releaseId/submit', handler: submitRelease},
+  {method: 'post', path: '/api/marketplace/releases/:releaseId/withdraw', handler: withdrawRelease},
+  {method: 'get', path: '/api/marketplace/releases/:releaseId/change-request', handler: getChangeRequest},
+  {method: 'put', path: '/api/marketplace/releases/:releaseId/change-request', handler: saveChangeRequest},
+  {method: 'post', path: '/api/marketplace/releases/:releaseId/change-request/submit', handler: submitChangeRequest},
+  {method: 'post', path: '/api/marketplace/releases/:releaseId/change-request/withdraw', handler: withdrawChangeRequest},
   {method: 'post', path: '/api/marketplace/releases/:releaseId/transitions', handler: transitionRelease},
   {method: 'get', path: '/api/isrc/sequence', handler: getIsrcSequence},
   {method: 'get', path: '/api/isrc/export', handler: exportIsrcRecords},
@@ -146,6 +156,9 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'get', path: '/api/marketplace-admin/finance', handler: marketplaceAdminFinance},
   {method: 'get', path: '/api/marketplace-admin/releases/:releaseId/review', handler: marketplaceAdminReleaseReview},
   {method: 'get', path: '/api/marketplace-admin/assets/:assetId', handler: marketplaceAdminReviewAsset},
+  {method: 'get', path: '/api/marketplace-admin/change-requests', handler: listChangeRequests},
+  {method: 'get', path: '/api/marketplace-admin/change-requests/:changeRequestId', handler: getChangeRequestReview},
+  {method: 'post', path: '/api/marketplace-admin/change-requests/:changeRequestId/commands', handler: commandChangeRequest},
   {method: 'put', path: '/api/marketplace-admin/discovery/features', handler: replaceDiscoveryFeatures},
   {method: 'get', path: '/api/marketplace-admin/reporting', handler: getIndustryReporting},
   {method: 'post', path: '/api/marketplace-admin/reporting/validate', handler: validateIndustryReporting},

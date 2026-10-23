@@ -185,6 +185,8 @@ export const UPLOAD_MAX_BYTES = {
 const uploadBase = z.object({
   fileName: z.string().trim().min(1).max(255),
   byteSize: z.number().int().positive(),
+  /** Replacement cover art or audio for an approved release, staged until MeJay approves it. */
+  changeRequestId: z.string().trim().min(1).max(128).optional(),
 })
 
 export const uploadInitSchema = z.discriminatedUnion('kind', [
@@ -246,6 +248,9 @@ export const uploadInitSchema = z.discriminatedUnion('kind', [
 })
 
 export const uploadFinalizeSchema = z.object({assetId: id})
+
+/** Take a submitted release back out of the review queue so the artist can edit it. */
+export const withdrawReleaseSchema = z.object({expectedVersion: z.number().int().positive()}).strict()
 
 export const productSchema = z.object({
   releaseId: id.optional(),

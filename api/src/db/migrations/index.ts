@@ -21,6 +21,7 @@ import {audioProcessingMigration} from './0018-audio-processing'
 import {preordersMigration} from './0019-preorders'
 import {previewSettingsMigration} from './0020-preview-settings'
 import {releaseArtistCreditsMigration} from './0021-release-artist-credits'
+import {releaseChangeRequestsMigration} from './0022-release-change-requests'
 import type {Migration} from './types'
 
 export const migrations: readonly Migration[] = [
@@ -45,6 +46,7 @@ export const migrations: readonly Migration[] = [
   preordersMigration,
   previewSettingsMigration,
   releaseArtistCreditsMigration,
+  releaseChangeRequestsMigration,
 ]
 
 const MIGRATION_LOCK_ID = 764_329_101
