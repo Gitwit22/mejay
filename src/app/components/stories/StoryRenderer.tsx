@@ -47,7 +47,7 @@ export function StoryRenderer({story}: {story: StoryView}) {
 }
 
 function Headliner({story, palette}: {story: StoryView; palette: Palette}) {
-  return <div className="mx-auto max-w-3xl px-4 py-10 sm:px-8 sm:py-14">
+  return <div className="mx-auto max-w-3xl lg:max-w-5xl px-4 py-10 sm:px-8 sm:py-14">
     <Kicker story={story} palette={palette} />
     <h1 className="mt-4 font-serif text-4xl font-black leading-[1.05] sm:text-6xl">{story.title}</h1>
     {story.teaser && <p className={`mt-5 font-serif text-lg leading-relaxed sm:text-xl ${palette.muted}`}>{story.teaser}</p>}
@@ -79,7 +79,7 @@ function Spotlight({story, palette}: {story: StoryView; palette: Palette}) {
         </dl>}
       </div>
     </section>
-    <div className="mx-auto max-w-3xl px-4 py-10 sm:px-8">
+    <div className="mx-auto max-w-3xl lg:max-w-5xl px-4 py-10 sm:px-8">
       <Byline story={story} palette={palette} />
       <Body story={story} palette={palette} />
     </div>
@@ -118,7 +118,7 @@ function ReleaseDrop({story, palette}: {story: StoryView; palette: Palette}) {
         </div>}
       </div>
     </div>
-    <div className="mx-auto mt-12 max-w-3xl">
+    <div className="mx-auto mt-12 max-w-3xl lg:max-w-5xl">
       <SectionRule label="The story behind the music" palette={palette} />
       <Byline story={story} palette={palette} />
       <Body story={story} palette={palette} />
@@ -145,7 +145,7 @@ function Byline({story, palette}: {story: StoryView; palette: Palette}) {
 
 function Body({story, palette, dropCap = false}: {story: StoryView; palette: Palette; dropCap?: boolean}) {
   let firstParagraph = dropCap
-  return <div className="mt-6 space-y-5 font-serif text-[1.075rem] leading-[1.8]">
+  return <div className="mt-6 space-y-5 font-serif text-[1.075rem] leading-[1.8] lg:text-[1.2rem]">
     {story.content.map((block, index) => {
       const capped = block.type === 'paragraph' && firstParagraph
       if (capped) firstParagraph = false

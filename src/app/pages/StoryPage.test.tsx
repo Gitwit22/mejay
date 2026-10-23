@@ -1,6 +1,6 @@
 import {QueryClient, QueryClientProvider} from '@tanstack/react-query'
-import {render, screen, waitFor} from '@testing-library/react'
-import {MemoryRouter, Route, Routes} from 'react-router-dom'
+import {fireEvent, render, screen, waitFor} from '@testing-library/react'
+import {MemoryRouter, Route, Routes, useLocation} from 'react-router-dom'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 
 import {getStory, StoryNotFoundError, type StoryView} from '@/lib/storiesApi'
@@ -40,4 +40,23 @@ describe('public story page', () => {
     expect(await screen.findByRole('heading', {name: "This story isn't available"})).toBeInTheDocument()
     expect(screen.getByRole('link', {name: 'See all stories'})).toHaveAttribute('href', '/stories')
   })
+
+  it('goes back to the previous page, or to Discover when opened from a shared link', async () => {
+    vi.mocked(getStory).mockResolvedValue(view)
+    function Where() { const location = useLocation(); return <p data-testid="where">{location.pathname}{location.search}</p> }
+    const client = new QueryClient({defaultOptions: {queries: {retry: false}}})
+    const {unmount} = render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/app?tab=music', '/stories/meet-kairo']} initialIndex={1}><Routes>
+      <Route path="/stories/:slug" element={<StoryPage />} /><Route path="/app" element={<Where />} />
+    </Routes></MemoryRouter></QueryClientProvider>)
+    fireEvent.click(await screen.findByRole('button', {name: 'Back'}))
+    expect(await screen.findByTestId('where')).toHaveTextContent('/app?tab=music')
+    unmount()
+
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/stories/meet-kairo']}><Routes>
+      <Route path="/stories/:slug" element={<StoryPage />} /><Route path="/app" element={<Where />} />
+    </Routes></MemoryRouter></QueryClientProvider>)
+    fireEvent.click(await screen.findByRole('button', {name: 'Back'}))
+    expect(await screen.findByTestId('where')).toHaveTextContent('/app?tab=music')
+  })
 })
+
