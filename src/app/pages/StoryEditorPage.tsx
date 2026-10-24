@@ -268,7 +268,7 @@ function StoryEditor({storyId}: {storyId: string}) {
           {uploadError?.role === 'inline' && <p role="alert" className="text-sm text-red-300">{uploadError.message}</p>}
         </section>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field id="story-quote" label="Highlighted quote (optional)" className="sm:col-span-2"><Textarea id="story-quote" rows={2} maxLength={600} value={draft.quoteText} onChange={(event) => set({quoteText: event.target.value})} /></Field>
+          <Field id="story-quote" label="Highlighted quote (optional)" hint="Just the words. The page adds the quote marks, and the name comes from Quote attribution." className="sm:col-span-2"><Textarea id="story-quote" rows={2} maxLength={600} value={draft.quoteText} onChange={(event) => set({quoteText: event.target.value})} /></Field>
           <Field id="story-quote-by" label="Quote attribution"><Input id="story-quote-by" maxLength={120} value={draft.quoteAttribution} onChange={(event) => set({quoteAttribution: event.target.value})} /></Field>
           <div />
           <Field id="story-source-name" label="Source name (optional)"><Input id="story-source-name" maxLength={120} value={draft.sourceName} onChange={(event) => set({sourceName: event.target.value})} /></Field>

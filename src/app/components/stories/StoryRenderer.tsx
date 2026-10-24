@@ -6,6 +6,7 @@ import {Button} from '@/components/ui/button'
 import {usePreview} from '@/hooks/useStorePreview'
 import {storeAssetUrl} from '@/lib/musicStoreApi'
 import {parseInline} from '@/lib/storyInline'
+import {tidyQuote} from '@/lib/storyQuote'
 import {storyMediaUrl, type StoryBlock, type StoryMedia, type StoryPalette, type StoryView} from '@/lib/storiesApi'
 
 /**
@@ -73,7 +74,7 @@ function Spotlight({story, palette}: {story: StoryView; palette: Palette}) {
           <Kicker story={story} palette={palette} fallback="Artist Spotlight" />
           <h1 className="mt-3 text-4xl font-black uppercase leading-[0.95] tracking-tight sm:text-6xl">{story.title}</h1>
           {story.teaser && <p className="mt-5 font-serif text-lg leading-relaxed text-zinc-200">{story.teaser}</p>}
-          {story.quote && <blockquote className="mt-6 border-l-4 border-current pl-4"><p className={`font-serif text-xl italic ${palette.accent}`}>“{story.quote.text}”</p>{story.quote.attribution && <footer className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-300">— {story.quote.attribution}</footer>}</blockquote>}
+          {story.quote && (() => { const quote = tidyQuote(story.quote.text, story.quote.attribution); return <blockquote className="mt-6 border-l-4 border-current pl-4"><p className={`font-serif text-xl italic ${palette.accent}`}>“{quote.text}”</p>{quote.attribution && <footer className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-300">— {quote.attribution}</footer>}</blockquote> })()}
           {artist && <Button asChild className={`mt-7 gap-2 font-bold ${palette.button}`}><Link to={`/artist/${artist.slug}`}>Explore the music<ArrowRight className="h-4 w-4" /></Link></Button>}
         </div>
         {artist && <dl className="w-full max-w-[14rem] shrink-0 space-y-3 rounded-md border border-white/15 bg-black/60 p-4 text-sm backdrop-blur">
@@ -191,7 +192,9 @@ export function InlineText({text, palette}: {text: string; palette: Palette}) {
   }</Fragment>)}</>
 }
 
-function PullQuote({quote, palette}: {quote: {text: string; attribution: string | null}; palette: Palette}) {
+function PullQuote({quote: raw, palette}: {quote: {text: string; attribution: string | null}; palette: Palette}) {
+  const quote = tidyQuote(raw.text, raw.attribution)
+  if (!quote.text) return null
   return <blockquote className={`my-8 border-l-4 pl-5 ${palette.rule}`} style={{borderLeftColor: 'currentColor'}}>
     <p className={`font-serif text-2xl italic leading-snug ${palette.accent}`}>“{quote.text}”</p>
     {quote.attribution && <footer className={`mt-3 font-sans text-xs font-semibold uppercase tracking-[0.18em] ${palette.muted}`}>— {quote.attribution}</footer>}

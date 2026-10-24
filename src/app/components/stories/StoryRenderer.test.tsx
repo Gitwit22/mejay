@@ -85,4 +85,12 @@ describe('StoryRenderer', () => {
     expect(paragraphs).toEqual(expect.arrayContaining(['Is Detroit rap dying?', 'The conversation has opened a debate.', 'According to the outlet, Snap agrees. NOT a heading because of lowercase.']))
     expect(screen.getByRole('heading', {level: 2, name: 'SNAP DOGG: THE PROBLEM GOES DEEPER THAN MUSIC'})).toBeInTheDocument()
   })
+
+  it('cleans up a pasted quote: no label, no doubled quote marks, no repeated name', () => {
+    render$(story({quote: {text: 'Pull quote:\n“People wanna hear what’s hot, but people don’t wanna make what needs to be heard hot.”\n— John Blaze', attribution: 'John Blaze'}}))
+    expect(screen.getByText('“People wanna hear what’s hot, but people don’t wanna make what needs to be heard hot.”')).toBeInTheDocument()
+    expect(screen.queryByText(/Pull quote/)).not.toBeInTheDocument()
+    expect(screen.getAllByText(/John Blaze/)).toHaveLength(1)
+  })
 })
+
