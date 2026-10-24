@@ -102,6 +102,7 @@ describe('story wizard', () => {
     renderAt('/app/marketplace-admin/stories/s1?step=preview')
     expect(await screen.findByTitle('desktop preview')).toBeInTheDocument()
     expect(screen.queryByRole('button', {name: 'Share'})).not.toBeInTheDocument()
+    expect(screen.queryByText(/\d views?$/)).not.toBeInTheDocument()
     expect(screen.getByText('Upload a cover image.')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('radio', {name: /Mobile/}))
     expect(screen.getByTitle('mobile preview')).toBeInTheDocument()

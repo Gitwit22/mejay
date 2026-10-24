@@ -1,5 +1,5 @@
 import {createContext, Fragment, useContext, type ReactNode} from 'react'
-import {ArrowRight, Disc3, Pause, Play, ShoppingBag} from 'lucide-react'
+import {ArrowRight, Disc3, Eye, Pause, Play, ShoppingBag} from 'lucide-react'
 import {Link} from 'react-router-dom'
 
 import {Button} from '@/components/ui/button'
@@ -144,6 +144,7 @@ function Byline({story, palette}: {story: StoryView; palette: Palette}) {
   const share = useContext(ShareSlot)
   return <div className={`mt-6 flex flex-wrap items-center gap-x-3 gap-y-2 border-b pb-4 text-xs ${palette.rule} ${palette.muted}`}>
     {story.authorName && <span className="font-semibold">By {story.authorName}</span>}<span>{date}</span><span>{minutes} min read</span>
+    {typeof story.viewCount === 'number' && <span className="inline-flex items-center gap-1"><Eye aria-hidden="true" className="h-3.5 w-3.5" />{story.viewCount.toLocaleString('en-US')} {story.viewCount === 1 ? 'view' : 'views'}</span>}
     {share && <span className="ml-auto">{share}</span>}
   </div>
 }

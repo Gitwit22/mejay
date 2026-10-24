@@ -37,6 +37,8 @@ export type StoryView = {
   inlineMedia: Record<string, StoryMedia>
   publishedAt: string | null
   updatedAt: string | null
+  /** Reader views (published stories only; absent in the admin preview). */
+  viewCount?: number
   artist: StoryArtistLink | null
   release: StoreReleaseDetail | null
 }
@@ -80,4 +82,11 @@ export function getStory(slug: string): Promise<StoryView> {
 
 export function storyMediaUrl(path: string): string {
   return apiUrl(path)
+}
+
+/** Counts this reader's visit; repeat visits within 30 minutes return the total without counting. */
+export async function recordStoryView(slug: string): Promise<number | null> {
+  const response = await apiFetch(`/api/stories/${encodeURIComponent(slug)}/views`, {method: 'POST', headers: {'content-type': 'application/json'}, body: '{}'})
+  const payload = await response.json().catch(() => null) as Envelope<{views: number}> | null
+  return payload && 'data' in payload ? payload.data.views : null
 }

@@ -23,6 +23,7 @@ import {previewSettingsMigration} from './0020-preview-settings'
 import {releaseArtistCreditsMigration} from './0021-release-artist-credits'
 import {releaseChangeRequestsMigration} from './0022-release-change-requests'
 import {editorialStoriesMigration} from './0023-editorial-stories'
+import {editorialStoryViewsMigration} from './0024-editorial-story-views'
 import type {Migration} from './types'
 
 export const migrations: readonly Migration[] = [
@@ -49,6 +50,7 @@ export const migrations: readonly Migration[] = [
   releaseArtistCreditsMigration,
   releaseChangeRequestsMigration,
   editorialStoriesMigration,
+  editorialStoryViewsMigration,
 ]
 
 const MIGRATION_LOCK_ID = 764_329_101

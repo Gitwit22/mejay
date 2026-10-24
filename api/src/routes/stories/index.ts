@@ -3,6 +3,7 @@ import {STORY_SLUG_PATTERN} from '../../editorial/schemas'
 import {MarketplaceError} from '../../marketplace/service'
 import {isEditorialStorageKey} from '../../marketplace/storage-keys'
 import type {PrivateBucket} from '../../services/r2'
+import {applyRateLimit, getClientIp} from '../_security'
 
 type Context = {
   request: Request
@@ -77,6 +78,28 @@ export async function getStoryMedia(context: Context): Promise<Response> {
         ...(object.contentLength !== undefined ? {'content-length': String(object.contentLength)} : {}),
       },
     })
+  } catch (error) {
+    return failure(error)
+  }
+}
+
+/**
+ * Counts a reader opening a story. One view per visitor per story every 30 minutes (and at most
+ * 300 views per visitor per hour overall), so refreshing or replaying requests can't inflate it.
+ * Link-preview crawlers never call this; it's sent by the page itself.
+ */
+export async function recordStoryView(context: Context): Promise<Response> {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, 500)
+  const slug = context.params?.slug?.trim().toLowerCase() ?? ''
+  if (!STORY_SLUG_PATTERN.test(slug) || slug.length > 80) return json({ok: false, error: 'not_found', message: 'Story was not found'}, 404)
+  try {
+    const service = new EditorialStoryService(context.env.DB)
+    const ip = getClientIp(context.request)
+    const db = context.env.DB as never
+    const perStory = await applyRateLimit({db, key: ip, purpose: 'story_view', kind: slug, maxPerWindow: 1, windowSeconds: 30 * 60, lockoutMs: 30 * 60 * 1000})
+    const overall = perStory.ok ? await applyRateLimit({db, key: ip, purpose: 'story_view', kind: '*', maxPerWindow: 300, windowSeconds: 60 * 60}) : {ok: false}
+    if (!perStory.ok || !overall.ok) return json({ok: true, data: {counted: false, views: await service.viewCount(slug)}})
+    return json({ok: true, data: {counted: true, views: await service.recordView(slug)}}, 201)
   } catch (error) {
     return failure(error)
   }

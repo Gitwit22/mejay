@@ -3,10 +3,10 @@ import {fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {MemoryRouter, Route, Routes, useLocation} from 'react-router-dom'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {getStory, StoryNotFoundError, type StoryView} from '@/lib/storiesApi'
+import {getStory, recordStoryView, StoryNotFoundError, type StoryView} from '@/lib/storiesApi'
 import StoryPage from './StoryPage'
 
-vi.mock('@/lib/storiesApi', async (importOriginal) => ({...await importOriginal<typeof import('@/lib/storiesApi')>(), getStory: vi.fn()}))
+vi.mock('@/lib/storiesApi', async (importOriginal) => ({...await importOriginal<typeof import('@/lib/storiesApi')>(), getStory: vi.fn(), recordStoryView: vi.fn()}))
 
 const view: StoryView = {
   slug: 'meet-kairo', template: 'artist_spotlight', title: 'Meet your next favorite artist', teaser: 'From Detroit to the world.', authorName: null, category: 'Artist Spotlight', tags: [],
@@ -21,7 +21,7 @@ function renderAt(path: string) {
 }
 
 describe('public story page', () => {
-  beforeEach(() => { vi.mocked(getStory).mockReset() })
+  beforeEach(() => { vi.mocked(getStory).mockReset(); vi.mocked(recordStoryView).mockReset().mockResolvedValue(1235) })
 
   it('renders a published story on a direct link and sets its title and share tags', async () => {
     vi.mocked(getStory).mockResolvedValue(view)
@@ -58,6 +58,21 @@ describe('public story page', () => {
     </Routes></MemoryRouter></QueryClientProvider>)
     fireEvent.click(await screen.findByRole('button', {name: 'Back'}))
     expect(await screen.findByTestId('where')).toHaveTextContent('/app?tab=music')
+  })
+
+  it('records one view when the article opens and shows the total with an eye icon', async () => {
+    vi.mocked(getStory).mockResolvedValue({...view, viewCount: 1234})
+    renderAt('/stories/meet-kairo')
+    expect(await screen.findByText('1,235 views')).toBeInTheDocument()
+    expect(recordStoryView).toHaveBeenCalledTimes(1)
+    expect(recordStoryView).toHaveBeenCalledWith('meet-kairo')
+  })
+
+  it('does not count a story that is not available', async () => {
+    vi.mocked(getStory).mockRejectedValue(new StoryNotFoundError('Story was not found'))
+    renderAt('/stories/gone')
+    await screen.findByRole('heading', {name: "This story isn't available"})
+    expect(recordStoryView).not.toHaveBeenCalled()
   })
 })
 

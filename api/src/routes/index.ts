@@ -55,7 +55,7 @@ import {getProviderReporting, getRecipientEarnings} from './marketplace/reportin
 import {getPricingPolicy} from './marketplace/pricing'
 import {claimStorePurchases, createStoreCheckout, downloadGuestFile, downloadStorePurchase, exchangeGuestAccess, getGuestOrderStatus, getStoreOrderStatus, getStorePurchaseArtwork, listStorePurchases, recoverGuestAccess} from './store/commerce'
 import {getMusicDiscovery} from './music'
-import {getStoriesHome, getStory, getStoryMedia, listStories} from './stories'
+import {getStoriesHome, getStory, getStoryMedia, listStories, recordStoryView} from './stories'
 import {commandAdminStory, createAdminStory, deleteStoryMedia, finalizeStoryUpload, getAdminStory, getStaffStoryMedia, initiateStoryUpload, listAdminStories, lookupStoryLinks, updateAdminStory} from './marketplace-admin/stories'
 import {CLIENT_IP_HEADER} from './_security'
 import {assignTrackIsrc, exportIsrcRecords, getIsrcRecord, getIsrcSequence, listIsrcRecords, registerExistingIsrc} from './isrc'
@@ -85,6 +85,7 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'get', path: '/api/stories/home', handler: getStoriesHome},
   {method: 'get', path: '/api/stories/media/:mediaId', handler: getStoryMedia},
   {method: 'get', path: '/api/stories/:slug', handler: getStory},
+  {method: 'post', path: '/api/stories/:slug/views', handler: recordStoryView},
   {method: 'get', path: '/api/store/releases', handler: listCatalog},
   {method: 'get', path: '/api/store/releases/:releaseId', handler: getCatalogRelease},
   {method: 'get', path: '/api/store/artists/:slug', handler: getPublicArtist},

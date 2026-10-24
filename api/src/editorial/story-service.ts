@@ -37,6 +37,7 @@ type StoryRow = {
   appearance: unknown
   featured: boolean
   version: number
+  view_count: number | string
   created_at: string | Date
   updated_at: string | Date
   published_at: string | Date | null
@@ -123,7 +124,7 @@ export class EditorialStoryService {
     const limit = clampLimit(filters.limit, 25, 100)
     const offset = Math.max(0, Math.floor(filters.offset ?? 0))
     const {results} = await this.database.prepare(
-      `SELECT id, slug, template, status, title, featured, version, published_at, updated_at, cover_media_id
+      `SELECT id, slug, template, status, title, featured, version, view_count::integer AS view_count, published_at, updated_at, cover_media_id
        FROM editorial_stories WHERE (?1 = '' OR status = ?1)
        ORDER BY featured DESC, updated_at DESC, id LIMIT ?2 OFFSET ?3`,
     ).bind(status, limit, offset).all()
@@ -415,9 +416,26 @@ export class EditorialStoryService {
       inlineMedia: Object.fromEntries(media.filter((row) => inline.has(row.id)).map((row) => [row.id, toPublic(row)])),
       publishedAt: iso(story.published_at),
       updatedAt: iso(story.updated_at),
+      viewCount: Number(story.view_count ?? 0),
       artist,
       release,
     }
+  }
+
+  /** Counts one view of a published story and returns the new total; drafts are never counted. */
+  async recordView(slug: string): Promise<number> {
+    const row = await this.database.prepare(
+      `UPDATE editorial_stories SET view_count = view_count + 1 WHERE slug = ?1 AND status = 'published' RETURNING view_count`,
+    ).bind(slug).first<{view_count: number | string}>()
+    if (!row) throw new MarketplaceError(404, 'not_found', 'Story was not found')
+    return Number(row.view_count)
+  }
+
+  /** The current total without counting a view (used when a repeat visit is not counted). */
+  async viewCount(slug: string): Promise<number> {
+    const row = await this.database.prepare(`SELECT view_count FROM editorial_stories WHERE slug = ?1 AND status = 'published'`).bind(slug).first<{view_count: number | string}>()
+    if (!row) throw new MarketplaceError(404, 'not_found', 'Story was not found')
+    return Number(row.view_count)
   }
 
   /** Images of published stories only, and only ones the story actually shows. */

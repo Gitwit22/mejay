@@ -42,7 +42,7 @@ export type AdminStory = {
   publishProblems: string[]
 }
 
-export type AdminStoryListItem = Pick<AdminStory, 'id' | 'slug' | 'template' | 'status' | 'title' | 'featured' | 'version' | 'published_at' | 'updated_at' | 'cover_media_id'>
+export type AdminStoryListItem = Pick<AdminStory, 'id' | 'slug' | 'template' | 'status' | 'title' | 'featured' | 'version' | 'published_at' | 'updated_at' | 'cover_media_id'> & {view_count?: number}
 
 export type StoryUpdateInput = {
   expectedVersion: number

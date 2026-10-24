@@ -40,12 +40,13 @@ export function StoriesSection({role}: {role: 'reviewer' | 'admin'}) {
       : !stories.data ? <p className="mt-4 text-sm text-zinc-500">Loading…</p>
         : stories.data.items.length === 0 ? <p className="mt-4 border-y border-dashed border-white/10 py-12 text-center text-sm text-zinc-500">No stories here yet.</p>
           : <div className="mt-4 overflow-x-auto border-y border-white/10"><table className="w-full min-w-[820px] text-left text-sm">
-            <thead><tr className="text-xs uppercase text-zinc-500"><th className="px-3 py-3">Title</th><th className="px-3 py-3">Template</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Published</th><th className="px-3 py-3">Actions</th></tr></thead>
+            <thead><tr className="text-xs uppercase text-zinc-500"><th className="px-3 py-3">Title</th><th className="px-3 py-3">Template</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Published</th><th className="px-3 py-3">Views</th><th className="px-3 py-3">Actions</th></tr></thead>
             <tbody className="divide-y divide-white/10">{stories.data.items.map((story) => <tr key={story.id}>
               <td className="px-3 py-3"><p className="flex items-center gap-2 font-medium text-zinc-100">{story.featured && <Star aria-label="Featured" className="h-4 w-4 fill-emerald-400 text-emerald-400" />}{story.title}</p><p className="text-xs text-zinc-500">/stories/{story.slug}</p></td>
               <td className="px-3 py-3 text-zinc-300">{TEMPLATE_INFO[story.template].name}</td>
               <td className="px-3 py-3"><span className={story.status === 'published' ? 'text-emerald-300' : story.status === 'archived' ? 'text-zinc-500' : 'text-amber-200'}>{story.status}</span>{story.featured && <span className="ml-2 text-xs text-emerald-300">featured</span>}</td>
               <td className="px-3 py-3 text-zinc-400">{story.published_at ? new Date(story.published_at).toLocaleDateString() : '—'}</td>
+              <td className="px-3 py-3 tabular-nums text-zinc-300">{Number(story.view_count ?? 0).toLocaleString('en-US')}</td>
               <td className="px-3 py-3"><div className="flex flex-wrap gap-2">
                 <Button asChild size="sm" variant="outline"><Link to={`/app/marketplace-admin/stories/${story.id}?step=${story.status === 'archived' ? 'preview' : 'content'}`}>{admin ? 'Edit' : 'View'}</Link></Button>
                 {story.status === 'published' ? <Button asChild size="sm" variant="ghost"><Link to={`/stories/${story.slug}`} target="_blank">View live</Link></Button>

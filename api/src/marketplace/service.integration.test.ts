@@ -29,6 +29,7 @@ import {getCatalogAsset} from '../routes/store'
 import {ReleaseChangeRequestService} from './change-request-service'
 import {EditorialStoryService} from '../editorial/story-service'
 import {mediaUploadSchema} from '../editorial/schemas'
+import {recordStoryView} from '../routes/stories'
 import {DiscoveryService} from './discovery-service'
 
 const connectionString = process.env.TEST_DATABASE_URL
@@ -2268,6 +2269,22 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       expect(archived.status).toBe('archived')
       await expect(stories().update(adminUserId, draft.id, baseInput(archived))).rejects.toMatchObject({code: 'story_archived'})
       expect((await stories().listPublished()).items).not.toEqual(expect.arrayContaining([expect.objectContaining({slug: draft.slug})]))
+    })
+
+    it('counts views of published stories once per visitor per half hour, and never for drafts', async () => {
+      const story = await publishedStory('Counted Views')
+      const request = (ip: string) => ({request: new Request(`https://mejay.app/api/stories/${story.slug}/views`, {method: 'POST', headers: {'x-mejay-client-ip': ip}}), env: {DB: new Database(connectionString!, pool) as never}, params: {slug: story.slug}})
+      const first = await (await recordStoryView(request('203.0.113.7'))).json() as {data: {counted: boolean; views: number}}
+      expect(first.data).toEqual({counted: true, views: 1})
+      const repeat = await (await recordStoryView(request('203.0.113.7'))).json() as {data: {counted: boolean; views: number}}
+      expect(repeat.data).toEqual({counted: false, views: 1})
+      const other = await (await recordStoryView(request('198.51.100.9'))).json() as {data: {counted: boolean; views: number}}
+      expect(other.data).toEqual({counted: true, views: 2})
+      expect(await stories().getPublished(story.slug)).toMatchObject({viewCount: 2})
+
+      const draft = await stories().create(adminUserId, {template: 'headliner', title: 'Uncounted Draft'}) as AdminStory
+      expect((await recordStoryView({...request('192.0.2.1'), params: {slug: draft.slug}})).status).toBe(404)
+      expect((await pool.query('SELECT view_count FROM editorial_stories WHERE id = $1', [draft.id])).rows[0].view_count).toBe('0')
     })
 
     it('rejects images that are not what they claim, and keeps the failure visible', async () => {
