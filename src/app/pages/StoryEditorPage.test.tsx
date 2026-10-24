@@ -101,6 +101,7 @@ describe('story wizard', () => {
     vi.mocked(commandAdminStory).mockResolvedValue(story({status: 'published', version: 6, published_at: '2026-10-21T00:00:00Z', publishProblems: []}))
     renderAt('/app/marketplace-admin/stories/s1?step=preview')
     expect(await screen.findByTitle('desktop preview')).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: 'Share'})).not.toBeInTheDocument()
     expect(screen.getByText('Upload a cover image.')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('radio', {name: /Mobile/}))
     expect(screen.getByTitle('mobile preview')).toBeInTheDocument()

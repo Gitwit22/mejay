@@ -255,7 +255,7 @@ function StoryEditor({storyId}: {storyId: string}) {
         <h1 className="text-2xl font-bold">Add story</h1>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field id="story-title" label="Title"><Input id="story-title" required maxLength={160} value={draft.title} onChange={(event) => set({title: event.target.value})} /></Field>
-          <Field id="story-slug" label="Link" hint={story.published_at ? 'Locked after publishing so links keep working.' : `mejay.app/stories/${draft.slug || '…'}`}>
+          <Field id="story-slug" label="Link" hint={story.published_at ? 'Locked after publishing so links keep working.' : `mejayapp.com/stories/${draft.slug || '…'}: short words read best when shared; avoid numbers.`}>
             <Input id="story-slug" maxLength={80} value={draft.slug} disabled={Boolean(story.published_at)} onChange={(event) => set({slug: event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-')})} />
           </Field>
           <Field id="story-teaser" label="Teaser" hint="One or two sentences for story cards." className="sm:col-span-2"><Textarea id="story-teaser" rows={2} maxLength={400} value={draft.teaser} onChange={(event) => set({teaser: event.target.value})} /></Field>

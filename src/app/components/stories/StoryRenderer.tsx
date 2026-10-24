@@ -1,4 +1,4 @@
-import {Fragment} from 'react'
+import {createContext, Fragment, useContext, type ReactNode} from 'react'
 import {ArrowRight, Disc3, Pause, Play, ShoppingBag} from 'lucide-react'
 import {Link} from 'react-router-dom'
 
@@ -28,11 +28,14 @@ function paletteFor(name: StoryPalette | undefined): Palette {
   return PALETTES[name ?? 'ink'] ?? PALETTES.ink
 }
 
-export function StoryRenderer({story}: {story: StoryView}) {
+/** Share controls for the public page (absent in the admin preview). */
+const ShareSlot = createContext<ReactNode>(null)
+
+export function StoryRenderer({story, share}: {story: StoryView; share?: ReactNode}) {
   const palette = paletteFor(story.appearance.palette)
   // A background image only sits behind light-on-dark palettes, under an enforced dark overlay.
   const background = story.appearance.palette !== 'paper' ? story.background : null
-  return <article className={`relative min-h-full overflow-hidden ${palette.page} ${palette.text}`}>
+  return <ShareSlot.Provider value={share ?? null}><article className={`relative min-h-full overflow-hidden ${palette.page} ${palette.text}`}>
     {background && <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[34rem]">
       <img src={storyMediaUrl(background.url)} alt="" className="h-full w-full object-cover" />
       <div className="absolute inset-0" style={{backgroundColor: `rgba(0,0,0,${Math.max(story.appearance.overlay, 35) / 100})`}} />
@@ -43,7 +46,7 @@ export function StoryRenderer({story}: {story: StoryView}) {
         : story.template === 'release_drop' ? <ReleaseDrop story={story} palette={palette} />
           : <Headliner story={story} palette={palette} />}
     </div>
-  </article>
+  </article></ShareSlot.Provider>
 }
 
 function Headliner({story, palette}: {story: StoryView; palette: Palette}) {
@@ -138,9 +141,11 @@ function Byline({story, palette}: {story: StoryView; palette: Palette}) {
   const words = story.content.reduce((count, block) => count + (block.type === 'paragraph' || block.type === 'heading' || block.type === 'quote' ? block.text : block.type === 'list' ? block.items.join(' ') : '').split(/\s+/).filter(Boolean).length, 0)
   const minutes = Math.max(1, Math.round(words / 220))
   const date = story.publishedAt ? new Date(story.publishedAt).toLocaleDateString('en-US', {month: 'short', day: 'numeric', year: 'numeric'}) : 'Not published yet'
-  return <p className={`mt-6 flex flex-wrap gap-x-3 gap-y-1 border-b pb-4 text-xs ${palette.rule} ${palette.muted}`}>
+  const share = useContext(ShareSlot)
+  return <div className={`mt-6 flex flex-wrap items-center gap-x-3 gap-y-2 border-b pb-4 text-xs ${palette.rule} ${palette.muted}`}>
     {story.authorName && <span className="font-semibold">By {story.authorName}</span>}<span>{date}</span><span>{minutes} min read</span>
-  </p>
+    {share && <span className="ml-auto">{share}</span>}
+  </div>
 }
 
 function Body({story, palette, dropCap = false}: {story: StoryView; palette: Palette; dropCap?: boolean}) {
@@ -209,9 +214,11 @@ function Gallery({story, palette, wide = false}: {story: StoryView; palette: Pal
 }
 
 function Footer({story, palette}: {story: StoryView; palette: Palette}) {
+  const share = useContext(ShareSlot)
   const hasTags = story.tags.length > 0
-  if (!story.source && !hasTags) return null
+  if (!story.source && !hasTags && !share) return null
   return <footer className={`mt-10 space-y-3 border-t pt-5 text-sm ${palette.rule} ${palette.muted}`}>
+    {share && <div className="flex flex-wrap items-center gap-3"><span className={`font-semibold ${palette.text}`}>Enjoyed this story? Pass it on.</span>{share}</div>}
     {story.source && <p>Source: {story.source.url ? <a href={story.source.url} target="_blank" rel="noopener noreferrer nofollow" className={`underline ${palette.accent}`}>{story.source.name || story.source.url}</a> : story.source.name}</p>}
     {hasTags && <ul className="flex flex-wrap gap-2" aria-label="Tags">{story.tags.map((tag) => <li key={tag} className={`rounded-full border px-3 py-1 text-xs ${palette.rule}`}>#{tag}</li>)}</ul>}
   </footer>

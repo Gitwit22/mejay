@@ -32,6 +32,7 @@ describe('public story page', () => {
     expect(document.head.querySelector('meta[property="og:image"]')?.getAttribute('content')).toContain('/api/stories/media/c')
     expect(document.head.querySelector('meta[property="og:type"]')?.getAttribute('content')).toBe('article')
     expect(screen.getByRole('link', {name: 'Stories'})).toHaveAttribute('href', '/stories')
+    expect(screen.getAllByRole('button', {name: 'Share'}).length).toBeGreaterThan(0)
   })
 
   it('explains when a story is unpublished or missing', async () => {

@@ -2,6 +2,7 @@ import {useQuery} from '@tanstack/react-query'
 import {Link, useParams} from 'react-router-dom'
 
 import {StoriesTopBar} from '@/app/components/stories/StoriesTopBar'
+import {ShareStory} from '@/app/components/stories/ShareStory'
 import {StoryRenderer} from '@/app/components/stories/StoryRenderer'
 import {Skeleton} from '@/components/ui/skeleton'
 import {usePageMeta} from '@/hooks/usePageMeta'
@@ -25,7 +26,7 @@ export default function StoryPage() {
     {story.isLoading ? <div className="mx-auto max-w-3xl space-y-5 px-4 py-14"><Skeleton className="h-6 w-32 bg-white/5" /><Skeleton className="h-16 w-full bg-white/5" /><Skeleton className="aspect-[16/9] w-full bg-white/5" /></div>
       : story.error instanceof StoryNotFoundError ? <Missing />
         : story.isError ? <div role="alert" className="grid min-h-[50vh] place-items-center px-4 text-center text-red-300"><div><p className="font-semibold">This story could not be loaded</p><p className="mt-2 text-sm text-red-300/70">{story.error.message}</p></div></div>
-          : data ? <main><StoryRenderer story={data} /></main> : null}
+          : data ? <main><StoryRenderer story={data} share={<ShareStory story={data} />} /></main> : null}
   </div>
 }
 
