@@ -6,8 +6,8 @@ import {Link, useParams} from 'react-router-dom'
 import {ArtistPageTopBar, ArtistPageView} from '@/app/pages/ArtistPage'
 import {StoreLoading} from '@/app/pages/MusicStorePage'
 import {Button} from '@/components/ui/button'
-import {toast} from '@/hooks/use-toast'
 import {useResolvedAuthStatus} from '@/hooks/useResolvedAuthStatus'
+import {shareLink} from '@/lib/shareLink'
 import {artistPreviewImageUrl, getArtistPagePreview, type ArtistPageVisibility} from '@/lib/musicStoreApi'
 
 const ARTIST_PORTAL = '/app/artist'
@@ -20,28 +20,11 @@ function visibilityMessage(visibility: ArtistPageVisibility): string {
 }
 
 /**
- * Shares the public page link: the phone share sheet where available, otherwise the clipboard.
+ * Shares the public page link.
  * Only rendered once the page is public, so the link always works for whoever receives it.
  */
 function ShareArtistPageButton({name, slug}: {name: string; slug: string}) {
-  const share = async () => {
-    const url = `${window.location.origin}/artist/${slug}`
-    if (typeof navigator.share === 'function') {
-      try {
-        await navigator.share({title: `${name} on MeJay`, url})
-        return
-      } catch (error) {
-        // Closing the share sheet is not a failure; anything else falls back to copying.
-        if (error instanceof DOMException && error.name === 'AbortError') return
-      }
-    }
-    try {
-      await navigator.clipboard.writeText(url)
-      toast({title: 'Link copied', description: url})
-    } catch {
-      toast({title: 'Could not copy the link', description: url, variant: 'destructive'})
-    }
-  }
+  const share = () => shareLink(`${name} on MeJay`, `${window.location.origin}/artist/${slug}`)
   return <Button size="sm" className="gap-2" onClick={() => void share()}><Share2 className="h-3.5 w-3.5" />Share link</Button>
 }
 

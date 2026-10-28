@@ -48,6 +48,17 @@ describe('StoreReleasePage song sales', () => {
     fireEvent.click(buySong[0])
     await waitFor(() => expect(startStoreCheckout).toHaveBeenCalledWith('song-product'))
   })
+
+  it('links to the artist page and shares the release link', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'share', {value: undefined, configurable: true})
+    Object.defineProperty(navigator, 'clipboard', {value: {writeText}, configurable: true})
+    const client = new QueryClient({defaultOptions: {queries: {retry: false}}})
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/app/store/release-1']}><Routes><Route path="/app/store/:releaseId" element={<StoreReleasePage />} /></Routes></MemoryRouter></QueryClientProvider>)
+    expect(await screen.findByRole('link', {name: 'View artist page'})).toHaveAttribute('href', '/artist/example-artist')
+    fireEvent.click(screen.getByRole('button', {name: 'Share'}))
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/app/store/release-1`))
+  })
 })
 
 describe('StoreReleasePage pre-orders and guest checkout', () => {
