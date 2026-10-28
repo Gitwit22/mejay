@@ -1,4 +1,5 @@
 import {z} from 'zod'
+import {MAX_PREVIEW_LENGTH_MS, MIN_PREVIEW_LENGTH_MS} from '../audio/transcode'
 import {isValidTimeZone} from './release-schedule'
 import {externalIsrcProblem} from './isrc'
 import {formatMinimumPrice, MINIMUM_RELEASE_PRICE_MINOR} from './sale-policy'
@@ -105,8 +106,10 @@ export const trackDraftSchema = z.object({
   instrumental: z.boolean(),
   recordingYear: z.number().int().min(1900).max(2200).nullable().optional(),
   recordingLocation: nonEmpty.nullable().optional(),
-  /** Where the 10-second store preview starts, in ms; null = automatic. Omitted keeps the stored value. */
+  /** Where the store preview starts, in ms; null = automatic. Omitted keeps the stored value. */
   previewStartMs: z.number().int().min(0).max(24 * 60 * 60 * 1000).nullable().optional(),
+  /** How long the store preview plays, in whole seconds as ms (5 to 30 s). Omitted keeps the stored value. */
+  previewLengthMs: z.number().int().min(MIN_PREVIEW_LENGTH_MS).max(MAX_PREVIEW_LENGTH_MS).multipleOf(1000).optional(),
 })
 
 export const assetSchema = z.object({

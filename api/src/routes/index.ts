@@ -21,7 +21,7 @@ import {
   assignGeneratedIsrc,
   createArtist,
   createPrice,
-  setReleasePrice, setTrackPrice, replaceTrackCredits, getReleaseCertification, saveReleaseCertification, addRightsMaterial, deleteRightsMaterial, getArtistProfile, getArtistPagePreview, listProviderIsrcs, exportProviderIsrcs, getArtistPagePreviewImage, updateArtistProfile, replaceArtistGallery, clearTrackPrice,
+  setReleasePrice, setTrackPrice, replaceTrackCredits, getReleaseCertification, saveReleaseCertification, addRightsMaterial, deleteRightsMaterial, getArtistProfile, getArtistPagePreview, listProviderIsrcs, exportProviderIsrcs, getArtistPagePreviewImage, getOwnAudio, updateArtistProfile, replaceArtistGallery, clearTrackPrice,
   createProduct,
   createProvider,
   createRelease,
@@ -46,7 +46,7 @@ import {
   updateTrack,
   finalizeUpload,
 } from './marketplace'
-import {commandProvider as marketplaceAdminCommandProvider, commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview, recordSplitDispute, replaceDiscoveryFeatures, retryProviderPayouts, getFinanceSummary as marketplaceAdminFinance, getReleaseReview as marketplaceAdminReleaseReview, getReviewAsset as marketplaceAdminReviewAsset, listChangeRequests, getChangeRequestReview, commandChangeRequest} from './marketplace-admin'
+import {commandProvider as marketplaceAdminCommandProvider, commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview, recordSplitDispute, replaceDiscoveryFeatures, retryProviderPayouts, getFinanceSummary as marketplaceAdminFinance, exportFinance as marketplaceAdminFinanceExport, getFinanceOrder as marketplaceAdminFinanceOrder, getReleaseReview as marketplaceAdminReleaseReview, getReviewAsset as marketplaceAdminReviewAsset, listChangeRequests, getChangeRequestReview, commandChangeRequest} from './marketplace-admin'
 import {createIndustryReportingBatch, createIndustryReportingCorrection, exportIndustryReportingBatch, getIndustryReporting, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting} from './marketplace-admin/reporting'
 import {onRequest as stripeWebhook} from './stripe-webhook'
 import {getCatalogAsset, getCatalogRelease, getPublicArtist, listCatalog, recordCatalogPreview} from './store'
@@ -55,6 +55,8 @@ import {getProviderReporting, getRecipientEarnings} from './marketplace/reportin
 import {getPricingPolicy} from './marketplace/pricing'
 import {claimStorePurchases, createStoreCheckout, downloadGuestFile, downloadStorePurchase, exchangeGuestAccess, getGuestOrderStatus, getStoreOrderStatus, getStorePurchaseArtwork, listStorePurchases, recoverGuestAccess} from './store/commerce'
 import {getMusicDiscovery} from './music'
+import {getStoriesHome, getStory, getStoryMedia, listStories, recordStoryView} from './stories'
+import {commandAdminStory, createAdminStory, deleteStoryMedia, finalizeStoryUpload, getAdminStory, getStaffStoryMedia, initiateStoryUpload, listAdminStories, lookupStoryLinks, updateAdminStory} from './marketplace-admin/stories'
 import {CLIENT_IP_HEADER} from './_security'
 import {assignTrackIsrc, exportIsrcRecords, getIsrcRecord, getIsrcSequence, listIsrcRecords, registerExistingIsrc} from './isrc'
 
@@ -79,6 +81,11 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'get', path: '/api/download/full-program', handler: downloadFullProgram},
   {method: 'get', path: '/api/entitlements', handler: entitlements},
   {method: 'get', path: '/api/music/discovery', handler: getMusicDiscovery},
+  {method: 'get', path: '/api/stories', handler: listStories},
+  {method: 'get', path: '/api/stories/home', handler: getStoriesHome},
+  {method: 'get', path: '/api/stories/media/:mediaId', handler: getStoryMedia},
+  {method: 'get', path: '/api/stories/:slug', handler: getStory},
+  {method: 'post', path: '/api/stories/:slug/views', handler: recordStoryView},
   {method: 'get', path: '/api/store/releases', handler: listCatalog},
   {method: 'get', path: '/api/store/releases/:releaseId', handler: getCatalogRelease},
   {method: 'get', path: '/api/store/artists/:slug', handler: getPublicArtist},
@@ -110,6 +117,7 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'get', path: '/api/marketplace/artists/:artistId/profile', handler: getArtistProfile},
   {method: 'get', path: '/api/marketplace/artists/:artistId/page-preview', handler: getArtistPagePreview},
   {method: 'get', path: '/api/marketplace/artists/:artistId/page-preview/images/:assetId', handler: getArtistPagePreviewImage},
+  {method: 'get', path: '/api/marketplace/assets/:assetId/audio', handler: getOwnAudio},
   {method: 'put', path: '/api/marketplace/artists/:artistId/profile', handler: updateArtistProfile},
   {method: 'put', path: '/api/marketplace/artists/:artistId/gallery', handler: replaceArtistGallery},
   {method: 'get', path: '/api/marketplace/releases', handler: listReleases},
@@ -154,9 +162,21 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'post', path: '/api/marketplace-admin/payouts/retry', handler: retryProviderPayouts},
   {method: 'get', path: '/api/marketplace-admin/overview', handler: marketplaceAdminOverview},
   {method: 'get', path: '/api/marketplace-admin/finance', handler: marketplaceAdminFinance},
+  {method: 'get', path: '/api/marketplace-admin/finance/export', handler: marketplaceAdminFinanceExport},
+  {method: 'get', path: '/api/marketplace-admin/finance/orders/:orderId', handler: marketplaceAdminFinanceOrder},
   {method: 'get', path: '/api/marketplace-admin/releases/:releaseId/review', handler: marketplaceAdminReleaseReview},
   {method: 'get', path: '/api/marketplace-admin/assets/:assetId', handler: marketplaceAdminReviewAsset},
   {method: 'get', path: '/api/marketplace-admin/change-requests', handler: listChangeRequests},
+  {method: 'get', path: '/api/marketplace-admin/stories', handler: listAdminStories},
+  {method: 'post', path: '/api/marketplace-admin/stories', handler: createAdminStory},
+  {method: 'get', path: '/api/marketplace-admin/stories/lookup', handler: lookupStoryLinks},
+  {method: 'get', path: '/api/marketplace-admin/stories/media/:mediaId', handler: getStaffStoryMedia},
+  {method: 'post', path: '/api/marketplace-admin/stories/media/:mediaId/finalize', handler: finalizeStoryUpload},
+  {method: 'delete', path: '/api/marketplace-admin/stories/media/:mediaId', handler: deleteStoryMedia},
+  {method: 'get', path: '/api/marketplace-admin/stories/:storyId', handler: getAdminStory},
+  {method: 'put', path: '/api/marketplace-admin/stories/:storyId', handler: updateAdminStory},
+  {method: 'post', path: '/api/marketplace-admin/stories/:storyId/commands', handler: commandAdminStory},
+  {method: 'post', path: '/api/marketplace-admin/stories/:storyId/media', handler: initiateStoryUpload},
   {method: 'get', path: '/api/marketplace-admin/change-requests/:changeRequestId', handler: getChangeRequestReview},
   {method: 'post', path: '/api/marketplace-admin/change-requests/:changeRequestId/commands', handler: commandChangeRequest},
   {method: 'put', path: '/api/marketplace-admin/discovery/features', handler: replaceDiscoveryFeatures},

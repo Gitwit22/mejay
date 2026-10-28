@@ -68,6 +68,7 @@ function ReviewBody({releaseId, onDone}: {releaseId: string; onDone: () => void}
   const latest = data.certifications[0]
   const status = release.status
   const canApprove = status === 'UNDER_REVIEW' && APPROVABLE.includes(release.rights_status)
+  const undocumented = data.materials.filter((material) => !material.document_asset_id).length
   const needsNote = (action: ReleaseAdminAction) => ['request_changes', 'reject', 'flag_rights', 'clear_rights'].includes(action)
   const run = (action: ReleaseAdminAction) => {
     if (needsNote(action) && !note.trim()) {
@@ -115,7 +116,9 @@ function ReviewBody({releaseId, onDone}: {releaseId: string; onDone: () => void}
           <td className="py-2 pr-3"><p>{track.title}{track.version_title ? ` (${track.version_title})` : ''}</p><p className="text-xs text-zinc-500">{track.explicit ? 'Explicit' : 'Clean'}{track.language_code ? ` · ${track.language_code}` : ''}</p></td>
           <td className="py-2 pr-3 text-xs text-zinc-300">{[...track.featured_artists.map((artist) => `feat. ${artist.name}`), ...track.contributors.map((contributor) => `${contributor.name} (${contributor.role.replace(/_/g, ' ')}${contributor.publisherName ? `, ${contributor.publisherName}` : ''})`)].join(', ') || <span className="text-zinc-500">None</span>}</td>
           <td className="py-2 pr-3 font-mono text-xs">{track.isrc ?? <span className="font-sans text-zinc-500">Assigned on approval</span>}</td>
-          <td className="py-2 text-xs">{track.audio_ready ? 'Ready' : <span className="text-red-300">Missing</span>}</td>
+          <td className="py-2 text-xs">{track.audio_ready
+            ? track.audio_asset_id ? <audio controls preload="none" src={reviewAssetUrl(track.audio_asset_id)} aria-label={`Play ${track.title}`} className="h-9 w-56" /> : 'Ready'
+            : <span className="text-red-300">Missing</span>}</td>
         </tr>)}</tbody></table></div>
     </Section>
 
@@ -124,6 +127,8 @@ function ReviewBody({releaseId, onDone}: {releaseId: string; onDone: () => void}
     </Section>
 
     {data.reviewEvents.length > 0 && <Section title="Review history"><ul className="space-y-1 text-sm text-zinc-400">{data.reviewEvents.map((event, index) => <li key={index}>{new Date(event.created_at).toLocaleString()} · {event.decision.replace(/_/g, ' ')}{event.note ? ` — ${event.note}` : ''}</li>)}</ul></Section>}
+
+    {CLEARABLE.includes(release.rights_status) && ['SUBMITTED', 'UNDER_REVIEW'].includes(status) && <RightsChecklist answer={latest?.third_party_material ?? null} materials={data.materials} />}
 
     {['SUBMITTED', 'UNDER_REVIEW'].includes(status) && <div className="space-y-3 border-t border-white/10 pt-4">
       <Textarea placeholder="Note to the artist (required to request changes, reject, flag or clear rights)" value={note} onChange={(event) => setNote(event.target.value)} />
@@ -135,7 +140,21 @@ function ReviewBody({releaseId, onDone}: {releaseId: string; onDone: () => void}
         <Button variant="outline" className="border-amber-400/40 text-amber-200" disabled={command.isPending} onClick={() => run('flag_rights')}>Flag rights issue</Button>
         {status === 'UNDER_REVIEW' && <Button variant="outline" className="border-red-400/40 text-red-300" disabled={command.isPending} onClick={() => run('reject')}>Reject</Button>}
       </div>
-      {status === 'UNDER_REVIEW' && !canApprove && <p className="text-xs text-amber-300">Approval is locked until the rights are cleared. MeJay never approves releases marked for rights review automatically.</p>}
+      {status === 'UNDER_REVIEW' && !canApprove && <p className="text-xs text-amber-300">Approval is locked until the rights are cleared{undocumented > 0 ? ` (${undocumented} item${undocumented === 1 ? ' has' : 's have'} no license document)` : ''}. MeJay never approves releases marked for rights review automatically.</p>}
     </div>}
+  </div>
+}
+
+/** Why a release is held for rights review, and what the reviewer has to decide. */
+function RightsChecklist({answer, materials}: {answer: string | null; materials: ReleaseReview['materials']}) {
+  return <div className="space-y-2 rounded-md border border-amber-400/30 bg-amber-400/5 p-4 text-sm">
+    <p className="font-semibold text-amber-200">What to check before approving</p>
+    <p className="text-zinc-300">{answer === 'unsure'
+      ? 'The artist said they are unsure whether the recording contains third-party material.'
+      : 'The artist said the recording uses third-party material they have rights to.'}</p>
+    {materials.length > 0 && <ul className="list-disc space-y-1 pl-5 text-zinc-300">{materials.map((material) => <li key={material.id}>
+      {material.material_type.replace(/_/g, ' ')} from {material.licensor_name} ({material.license_type.replace(/_/g, ' ')}): {material.document_asset_id ? 'license document attached' : <span className="text-amber-300">no license document</span>}
+    </li>)}</ul>}
+    <p className="text-zinc-400">Listen to the tracks and check the details. Then press <span className="font-medium text-zinc-200">Clear rights</span> with a note saying what you verified, or <span className="font-medium text-zinc-200">Request changes</span> to ask for the license.</p>
   </div>
 }

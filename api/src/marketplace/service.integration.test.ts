@@ -27,6 +27,10 @@ import {signVerifiedToken} from '../routes/_auth'
 import {ensurePreviewJobs, wakeConverterIfQueued} from './preview-jobs'
 import {getCatalogAsset} from '../routes/store'
 import {ReleaseChangeRequestService} from './change-request-service'
+import {EditorialStoryService} from '../editorial/story-service'
+import {mediaUploadSchema} from '../editorial/schemas'
+import {recordStoryView} from '../routes/stories'
+import {DiscoveryService} from './discovery-service'
 
 const connectionString = process.env.TEST_DATABASE_URL
 const describeWithDatabase = connectionString ? describe : describe.skip
@@ -836,6 +840,42 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       expect(filtered.totals.orders).toBe(0)
       const dated = await finance.getSummary(adminUserId, {providerId: fixture.provider.id, from: today, to: today, paymentStatus: 'paid'})
       expect(dated.totals.orders).toBe(1)
+      expect(summary.byProvider).toEqual([expect.objectContaining({providerId: fixture.provider.id, orders: 1, grossMinor: 999, artistEarningsMinor: 840})])
+      expect(summary.transactions[0]).toMatchObject({providerId: fixture.provider.id})
+    })
+
+    it('opens one order with everything recorded about it, and exports orders, for admins only', async () => {
+      const {order, fixture, commerce, buyerId} = await buyLiveRelease('FinanceDetail', 59)
+      const finance = new MarketplaceFinanceService(new Database(connectionString!, pool) as never)
+      const [purchase] = await commerce.listPurchases(buyerId) as Array<{entitlement_id: string; files: Array<{id: string}>}>
+      await commerce.getDownload(buyerId, purchase.entitlement_id, purchase.files[0].id)
+      await pool.query(
+        `INSERT INTO marketplace_download_events (id, entitlement_id, entitlement_file_id, buyer_user_id) VALUES ($1, $2, $3, $4)`,
+        [crypto.randomUUID(), purchase.entitlement_id, purchase.files[0].id, buyerId],
+      )
+
+      await expect(finance.getOrderDetail(reviewerUserId, order.id)).rejects.toMatchObject({code: 'marketplace_admin_required'})
+      await expect(finance.getOrderDetail(adminUserId, crypto.randomUUID())).rejects.toMatchObject({code: 'order_not_found'})
+      const detail = await finance.getOrderDetail(adminUserId, order.id)
+      expect(detail.order).toMatchObject({
+        id: order.id, provider_profile_id: fixture.provider.id, gross_amount_minor: 999, platform_commission_minor: 100,
+        processing_fees_recovered_minor: 59, artist_earnings_minor: 840, payment_status: 'paid', guest_checkout: false,
+        buyer_user_id: buyerId, buyer_account_email: expect.stringContaining('@'), stripe_charge_id: order.stripe_charge_id,
+      })
+      expect(detail.items).toEqual([expect.objectContaining({release_id: fixture.release.id, unit_amount_minor: 999})])
+      expect(detail.entitlements).toEqual([expect.objectContaining({id: purchase.entitlement_id, status: 'active', file_count: 1, download_count: expect.any(Number)})])
+      expect(Number(detail.entitlements[0].download_count)).toBeGreaterThanOrEqual(1)
+      expect(detail.ledger.map((transaction) => transaction.transaction_type)).toContain('sale')
+      const sale = detail.ledger.find((transaction) => transaction.transaction_type === 'sale') as {entries: Array<{account: string; debitMinor: number; creditMinor: number}>}
+      // The sale's double entry balances.
+      expect(sale.entries.reduce((sum, entry) => sum + entry.debitMinor - entry.creditMinor, 0)).toBe(0)
+
+      await expect(finance.exportCsv(reviewerUserId, {})).rejects.toMatchObject({code: 'marketplace_admin_required'})
+      const csv = await finance.exportCsv(adminUserId, {providerId: fixture.provider.id})
+      expect(csv.fileName).toMatch(/^mejay-sales-.*\.csv$/)
+      const lines = csv.data.trimEnd().split('\n')
+      expect(lines[0]).toMatch(/^order_id,paid_at_utc,artist_account/)
+      expect(lines.slice(1).some((line) => line.startsWith(`${order.id},`) && line.includes(',9.99,1.00,0.59,8.40,8.40,'))).toBe(true)
     })
 
     it('sells a single song end to end: price, store, checkout, fulfillment, payout, reporting, takedown', async () => {
@@ -1808,14 +1848,15 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       await expect(retryFailedConfirmations(db() as never, emailEnv)).resolves.toBe(0)
     })
 
-    /** A finished clip for a track, as the converter would store it. */
-    async function addClip(owner: {provider: {id: string}; track: {id: string}}, setting: number | null) {
+    /** A finished clip for a track, as the converter would store it; `lengthMs` defaults to the track's current length, null leaves it out like clips made before lengths existed. */
+    async function addClip(owner: {provider: {id: string}; track: {id: string}}, setting: number | null, lengthMs?: number | null) {
       const source = await pool.query<{id: string}>(`SELECT id FROM marketplace_assets WHERE track_id = $1 AND kind = 'audio' ORDER BY created_at DESC LIMIT 1`, [owner.track.id])
+      const length = lengthMs === undefined ? (await pool.query<{preview_length_ms: number}>('SELECT preview_length_ms FROM tracks WHERE id = $1', [owner.track.id])).rows[0].preview_length_ms : lengthMs
       const clipId = crypto.randomUUID()
       await pool.query(
         `INSERT INTO marketplace_assets (id, provider_profile_id, track_id, kind, storage_key, mime_type, byte_size, processing_status, metadata)
          VALUES ($1, $2, $3, 'audio_preview', $4, 'audio/mpeg', 160000, 'ready', $5)`,
-        [clipId, owner.provider.id, owner.track.id, `mejay-artist/${owner.provider.id}/audio_preview/${owner.track.id}/${clipId}.mp3`, JSON.stringify({sourceAssetId: source.rows[0].id, previewSetting: setting})],
+        [clipId, owner.provider.id, owner.track.id, `mejay-artist/${owner.provider.id}/audio_preview/${owner.track.id}/${clipId}.mp3`, JSON.stringify({sourceAssetId: source.rows[0].id, previewSetting: setting, ...(length === null ? {} : {previewLengthMs: length})})],
       )
       await pool.query(`UPDATE audio_processing_jobs SET status = 'succeeded' WHERE track_id = $1 AND status IN ('queued', 'processing')`, [owner.track.id])
       return clipId
@@ -1854,6 +1895,32 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       expect(await wakeConverterIfQueued(db() as never, {CONVERTER_URL: 'https://converter.test/', CONVERTER_TRIGGER_SECRET: 'secret'}, fetchSpy as never)).toBe(true)
       expect(fetchSpy).toHaveBeenCalledWith('https://converter.test/jobs/run', expect.objectContaining({method: 'POST', headers: {authorization: 'Bearer secret'}}))
       await addClip(owner, 50000)
+      expect((await service.getRelease(owner.userId, owner.release.id) as {tracks: Array<{preview_status: string}>}).tracks[0].preview_status).toBe('ready')
+    })
+
+    it('defaults new songs to 15-second previews and rebuilds a clip once when the artist picks another length', async () => {
+      await pool.query(`UPDATE audio_processing_jobs SET status = 'succeeded' WHERE status IN ('queued', 'processing')`)
+      const owner = await scheduledPreorder('ClipLength')
+      const track = async () => (await pool.query('SELECT preview_length_ms FROM tracks WHERE id = $1', [owner.track.id])).rows[0].preview_length_ms
+      const jobsFor = async () => (await pool.query(`SELECT status, preview_length_ms FROM audio_processing_jobs WHERE track_id = $1 ORDER BY created_at`, [owner.track.id])).rows
+      expect(await track()).toBe(15_000)
+
+      // A clip made before lengths existed was 10 seconds: it still matches a song left at 10 seconds.
+      await pool.query('UPDATE tracks SET preview_length_ms = 10000 WHERE id = $1', [owner.track.id])
+      await addClip(owner, null, null)
+      await ensurePreviewJobs(db() as never, 500)
+      expect(await jobsFor()).toEqual([])
+
+      // A new length queues exactly one job carrying it; a failed file is not retried for the same length.
+      await pool.query('UPDATE tracks SET preview_length_ms = 20000 WHERE id = $1', [owner.track.id])
+      await ensurePreviewJobs(db() as never, 500)
+      await ensurePreviewJobs(db() as never, 500)
+      expect(await jobsFor()).toEqual([{status: 'queued', preview_length_ms: 20_000}])
+      await pool.query(`UPDATE audio_processing_jobs SET status = 'failed' WHERE track_id = $1`, [owner.track.id])
+      await ensurePreviewJobs(db() as never, 500)
+      expect(await jobsFor()).toHaveLength(1)
+      expect((await service.getRelease(owner.userId, owner.release.id) as {tracks: Array<{preview_status: string}>}).tracks[0].preview_status).toBe('waiting')
+      await addClip(owner, null)
       expect((await service.getRelease(owner.userId, owner.release.id) as {tracks: Array<{preview_status: string}>}).tracks[0].preview_status).toBe('ready')
     })
 
@@ -1898,8 +1965,14 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       await service.updateTrack(fixture.userId, fixture.track.id, {...trackInput, previewStartMs: 95_000})
       await service.updateTrack(fixture.userId, fixture.track.id, trackInput)
       expect((await pool.query('SELECT preview_start_ms FROM tracks WHERE id = $1', [fixture.track.id])).rows[0].preview_start_ms).toBe(95_000)
+      // New songs play 15 seconds, so the latest start on a 3:00 song is 2:45.
       await expect(service.updateTrack(fixture.userId, fixture.track.id, {...trackInput, previewStartMs: 175_000}))
-        .rejects.toMatchObject({code: 'preview_start_too_late', message: expect.stringContaining('2:50')})
+        .rejects.toMatchObject({code: 'preview_start_too_late', message: expect.stringContaining('play 15 seconds. The latest start for this song is 2:45')})
+      await expect(service.updateTrack(fixture.userId, fixture.track.id, {...trackInput, previewStartMs: 160_000, previewLengthMs: 25_000}))
+        .rejects.toMatchObject({code: 'preview_start_too_late', message: expect.stringContaining('2:35')})
+      await service.updateTrack(fixture.userId, fixture.track.id, {...trackInput, previewStartMs: 150_000, previewLengthMs: 25_000})
+      await service.updateTrack(fixture.userId, fixture.track.id, trackInput)
+      expect((await pool.query('SELECT preview_start_ms, preview_length_ms FROM tracks WHERE id = $1', [fixture.track.id])).rows[0]).toEqual({preview_start_ms: 150_000, preview_length_ms: 25_000})
       await service.updateTrack(fixture.userId, fixture.track.id, {...trackInput, previewStartMs: null})
       expect((await pool.query('SELECT preview_start_ms FROM tracks WHERE id = $1', [fixture.track.id])).rows[0].preview_start_ms).toBeNull()
 
@@ -2026,6 +2099,21 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
           .rejects.toMatchObject({code: 'release_locked'})
       })
 
+      it('prefills the last certification after a withdraw and lets staff play the master', async () => {
+        const fixture = await submitted('Recertify')
+        const submissions = new ReleaseSubmissionService(db() as never)
+        const review = await adminService().getReleaseReview(reviewerUserId, fixture.release.id) as {tracks: Array<{audio_asset_id: string | null}>}
+        const master = await pool.query(`SELECT id FROM marketplace_assets WHERE track_id = $1 AND kind = 'audio' AND processing_status = 'ready'`, [fixture.track.id])
+        expect(review.tracks[0].audio_asset_id).toBe(master.rows[0].id)
+
+        await service.withdrawSubmission(fixture.userId, fixture.release.id, fixture.version)
+        const state = await submissions.getCertification(fixture.userId, fixture.release.id) as {draft: unknown; problems: string[]; previous: {thirdPartyMaterial: string; accepted: string[]; version: string} | null}
+        expect(state.draft).toBeNull()
+        expect(state.problems).toContain('rights certification')
+        expect(state.previous).toMatchObject({thirdPartyMaterial: 'none', version: CERTIFICATION_VERSION})
+        expect(state.previous!.accepted).toEqual(expect.arrayContaining(['original_recording', 'information_accurate']))
+      })
+
       it('lets exactly one of a withdraw and a review start win', async () => {
         const fixture = await submitted('WithdrawRace')
         const outcomes = await Promise.allSettled([
@@ -2093,6 +2181,82 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
         expect((await pool.query('SELECT storage_key FROM download_entitlement_files WHERE entitlement_id = $1', [fixture.entitlement.id])).rows).toEqual(filesBefore)
       })
 
+      it('lets a scheduled pre-order turn on previews before release, only once staff approve', async () => {
+        const owner = await scheduledPreorder('ChangePreviewTiming')
+        const clipId = await addClip(owner, null)
+        const store = new StoreService(db() as never)
+        const trackPreview = async () => (await store.getRelease(owner.release.id) as {tracks: Array<{preview_asset_id: string | null}>}).tracks[0].preview_asset_id
+        expect(await trackPreview()).toBeNull()
+
+        const saved = await changes().saveDraft(owner.userId, owner.release.id, {release: {previewTiming: 'before_release'}, tracks: [], audioReplacements: []}) as {request: {id: string; diff: Array<{key: string; before: unknown; after: unknown}>}}
+        expect(saved.request.diff).toEqual([expect.objectContaining({key: 'release.previewTiming', before: 'after_release', after: 'before_release'})])
+        await changes().submit(owner.userId, owner.release.id)
+        // Still hidden while the request waits for review.
+        expect(await trackPreview()).toBeNull()
+
+        await changes().command(reviewerUserId, saved.request.id, {action: 'start_review'})
+        await changes().command(reviewerUserId, saved.request.id, {action: 'approve', confirmSameRecording: false})
+        expect((await pool.query('SELECT preview_timing, status FROM releases WHERE id = $1', [owner.release.id])).rows[0]).toEqual({preview_timing: 'before_release', status: 'SCHEDULED'})
+        expect(await trackPreview()).toBe(clipId)
+        await expect(store.getAsset(clipId)).resolves.toMatchObject({kind: 'audio_preview'})
+      })
+
+      it('changes a song\'s preview length through review, re-checking the start against it', async () => {
+        const owner = await scheduledPreorder('ChangePreviewLength')
+        await pool.query('UPDATE tracks SET duration_ms = 200000, preview_start_ms = 180000 WHERE id = $1', [owner.track.id])
+        await expect(changes().saveDraft(owner.userId, owner.release.id, {release: {}, tracks: [{trackId: owner.track.id, previewLengthMs: 30_000}], audioReplacements: []}))
+          .rejects.toMatchObject({code: 'preview_start_too_late'})
+        const saved = await changes().saveDraft(owner.userId, owner.release.id, {release: {}, tracks: [{trackId: owner.track.id, previewLengthMs: 20_000}], audioReplacements: []}) as {request: {id: string; diff: Array<{key: string; before: unknown; after: unknown}>}}
+        expect(saved.request.diff).toEqual([expect.objectContaining({key: `track.${owner.track.id}.previewLengthMs`, before: 15_000, after: 20_000})])
+        await changes().submit(owner.userId, owner.release.id)
+        expect((await pool.query('SELECT preview_length_ms FROM tracks WHERE id = $1', [owner.track.id])).rows[0].preview_length_ms).toBe(15_000)
+        await changes().command(reviewerUserId, saved.request.id, {action: 'start_review'})
+        await changes().command(reviewerUserId, saved.request.id, {action: 'approve', confirmSameRecording: false})
+        expect((await pool.query('SELECT preview_length_ms, preview_start_ms FROM tracks WHERE id = $1', [owner.track.id])).rows[0]).toEqual({preview_length_ms: 20_000, preview_start_ms: 180_000})
+      })
+
+      it("lets only the owner play their song files, giving the preview picker MeJay's MP3 when it exists", async () => {
+        await resetIsrcState()
+        const live = await prepareLiveRelease('OwnAudio')
+        const master = (await pool.query<{id: string}>(`SELECT id FROM marketplace_assets WHERE track_id = $1 AND kind = 'audio' AND processing_status = 'ready'`, [live.track.id])).rows[0].id
+        const listen = async () => (await service.getRelease(live.userId, live.release.id) as {tracks: Array<{listen_asset_id: string | null}>}).tracks[0].listen_asset_id
+        const derived = async (kind: 'audio_delivery' | 'audio_preview', sourceAssetId: string) => {
+          const id = crypto.randomUUID()
+          await pool.query(
+            `INSERT INTO marketplace_assets (id, provider_profile_id, track_id, kind, storage_key, mime_type, byte_size, processing_status, metadata)
+             VALUES ($1, $2, $3, $4, $5, 'audio/mpeg', 1000, 'ready', $6)`,
+            [id, live.provider.id, live.track.id, kind, `mejay-artist/${live.provider.id}/${kind}/${live.track.id}/${id}.mp3`, JSON.stringify({sourceAssetId, fileName: 'song.mp3'})],
+          )
+          return id
+        }
+        await pool.query(`DELETE FROM marketplace_assets WHERE track_id = $1 AND kind = 'audio_delivery'`, [live.track.id])
+        // This file's fixture keeps uploads under a test path; real uploads live under MeJay's prefix.
+        await pool.query(`UPDATE marketplace_assets SET storage_key = $2 WHERE id = $1`, [master, `mejay-artist/${live.provider.id}/audio/${live.track.id}/${master}.wav`])
+        // Before MeJay makes the MP3 the picker plays the master; an MP3 of some other upload does not count.
+        expect(await listen()).toBe(master)
+        await derived('audio_delivery', crypto.randomUUID())
+        expect(await listen()).toBe(master)
+        const delivery = await derived('audio_delivery', master)
+        expect(await listen()).toBe(delivery)
+
+        await expect(service.getOwnAudio(live.userId, delivery)).resolves.toMatchObject({mimeType: 'audio/mpeg', fileName: 'song.mp3'})
+        await expect(service.getOwnAudio(live.userId, master)).resolves.toMatchObject({storageKey: expect.stringMatching(/^mejay-artist\//)})
+        const draft = await changes().saveDraft(live.userId, live.release.id, {release: {}, tracks: [], audioReplacements: []}) as {request: {id: string}}
+        const staged = await stagedAudio(live, draft.request.id)
+        await expect(service.getOwnAudio(live.userId, staged)).resolves.toMatchObject({mimeType: 'audio/wav'})
+
+        // Not other providers' songs, and not preview clips or other kinds through this route.
+        const other = await createProviderFixture('OwnAudioOther')
+        await expect(service.getOwnAudio(other.userId, master)).rejects.toMatchObject({code: 'not_found'})
+        await expect(service.getOwnAudio(other.userId, staged)).rejects.toMatchObject({code: 'not_found'})
+        await expect(service.getOwnAudio(live.userId, await derived('audio_preview', master))).rejects.toMatchObject({code: 'not_found'})
+        const artwork = (await pool.query<{id: string}>(`SELECT id FROM marketplace_assets WHERE release_id = $1 AND kind = 'artwork' LIMIT 1`, [live.release.id])).rows[0]
+        if (artwork) await expect(service.getOwnAudio(live.userId, artwork.id)).rejects.toMatchObject({code: 'not_found'})
+        // A failed upload is never played.
+        await pool.query(`UPDATE marketplace_assets SET processing_status = 'failed' WHERE id = $1`, [staged])
+        await expect(service.getOwnAudio(live.userId, staged)).rejects.toMatchObject({code: 'not_found'})
+      })
+
       it('requires a same-song confirmation for audio on a live release, and rejection changes nothing', async () => {
         await resetIsrcState()
         const live = await prepareLiveRelease('ChangeLive')
@@ -2157,6 +2321,188 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
         await expect(changes().saveDraft(other.userId, other.release.id, {release: {title: 'Nope'}, tracks: [], audioReplacements: []}))
           .rejects.toMatchObject({code: 'release_not_changeable'})
       })
+    })
+  })
+
+  describe('editorial stories', () => {
+    const stories = () => new EditorialStoryService(new Database(connectionString!, pool) as never)
+    /** A minimal PNG header: signature + IHDR with the given size, enough for byte inspection. */
+    const png = (width: number, height: number) => {
+      const bytes = new Uint8Array(33)
+      bytes.set([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82])
+      new DataView(bytes.buffer).setUint32(16, width)
+      new DataView(bytes.buffer).setUint32(20, height)
+      bytes[24] = 8
+      bytes[25] = 2
+      return bytes
+    }
+    const imageBucket = (width: number, height: number, byteSize = 500_000) => ({
+      createUploadUrl: async () => 'https://upload.test',
+      head: async () => ({byteSize, contentType: 'image/png'}),
+      getExact: async () => ({body: new Response(png(width, height)).body!}),
+    })
+
+    async function uploadImage(storyId: string, role: 'cover' | 'background' | 'gallery' | 'inline', size = {width: 1600, height: 900}) {
+      const started = await stories().initiateUpload(adminUserId, storyId, {role, fileName: 'photo.png', mimeType: 'image/png', byteSize: 500_000, ...size}, imageBucket(size.width, size.height) as never) as {media: {id: string}}
+      return (await stories().finalizeUpload(adminUserId, started.media.id, imageBucket(size.width, size.height) as never) as {id: string}).id
+    }
+
+    type AdminStory = {id: string; slug: string; version: number; status: string; featured: boolean; publishProblems: string[]}
+    const baseInput = (story: AdminStory, overrides: Record<string, unknown> = {}) => ({
+      expectedVersion: story.version, template: 'headliner' as const, title: 'Detroit Has Something to Say', slug: story.slug,
+      teaser: 'Inside the studios pushing Detroit forward.', authorName: 'MeJay Editorial', category: 'Stories', tags: ['detroit'],
+      content: [{type: 'paragraph' as const, text: 'Detroit has always been more than **music**.'}],
+      appearance: {palette: 'ink' as const, overlay: 50, coverFocal: {x: 50, y: 40}}, media: [], ...overrides,
+    })
+
+    async function publishedStory(title: string) {
+      const created = await stories().create(adminUserId, {template: 'headliner', title}) as AdminStory
+      const coverId = await uploadImage(created.id, 'cover')
+      const saved = await stories().update(adminUserId, created.id, baseInput(created, {title, coverMediaId: coverId, media: [{mediaId: coverId, altText: 'Producer at a mixing desk'}]})) as AdminStory
+      return await stories().command(adminUserId, created.id, {action: 'publish', expectedVersion: saved.version}) as AdminStory
+    }
+
+    beforeAll(async () => {
+      await pool.query('DELETE FROM editorial_stories')
+    })
+
+    it('lets only marketplace admins create and change stories', async () => {
+      await expect(stories().create(reviewerUserId, {template: 'headliner', title: 'Nope'})).rejects.toMatchObject({code: 'marketplace_admin_required'})
+      await expect(stories().create(crypto.randomUUID(), {template: 'headliner', title: 'Nope'})).rejects.toMatchObject({code: 'marketplace_staff_required'})
+      const story = await stories().create(adminUserId, {template: 'headliner', title: 'Staff Only'}) as AdminStory
+      await expect(stories().get(reviewerUserId, story.id)).resolves.toMatchObject({id: story.id})
+      await expect(stories().update(reviewerUserId, story.id, baseInput(story))).rejects.toMatchObject({code: 'marketplace_admin_required'})
+      await expect(stories().command(reviewerUserId, story.id, {action: 'publish', expectedVersion: story.version})).rejects.toMatchObject({code: 'marketplace_admin_required'})
+      await expect(stories().initiateUpload(reviewerUserId, story.id, {role: 'cover', fileName: 'a.png', mimeType: 'image/png', byteSize: 10, width: 1600, height: 900}, imageBucket(1600, 900) as never))
+        .rejects.toMatchObject({code: 'marketplace_admin_required'})
+    })
+
+    it('keeps drafts private, checks completeness before publishing and locks the link afterwards', async () => {
+      const draft = await stories().create(adminUserId, {template: 'headliner', title: 'Detroit Has Something to Say'}) as AdminStory
+      const twin = await stories().create(adminUserId, {template: 'headliner', title: 'Detroit Has Something to Say'}) as AdminStory
+      expect(draft.slug).toBe('detroit-has-something-to-say')
+      expect(twin.slug).toBe('detroit-has-something-to-say-2')
+      await expect(stories().getPublished(draft.slug)).rejects.toMatchObject({status: 404})
+      await expect(stories().command(adminUserId, draft.id, {action: 'publish', expectedVersion: draft.version})).rejects.toMatchObject({
+        code: 'story_incomplete', details: expect.arrayContaining(['Add a teaser. It appears on story cards.', 'Write the article body.', 'Upload a cover image.']),
+      })
+
+      const coverId = await uploadImage(draft.id, 'cover')
+      const unusedId = await uploadImage(draft.id, 'inline', {width: 900, height: 700})
+      await expect(stories().update(adminUserId, draft.id, baseInput(draft, {expectedVersion: draft.version + 5}))).rejects.toMatchObject({code: 'stale_story_version'})
+      const missingAlt = await stories().update(adminUserId, draft.id, baseInput(draft, {coverMediaId: coverId})) as AdminStory
+      expect(missingAlt.publishProblems).toContain('Describe every image (alt text) so screen-reader users know what it shows.')
+      const saved = await stories().update(adminUserId, draft.id, baseInput(missingAlt, {coverMediaId: coverId, media: [{mediaId: coverId, altText: 'Producer at a mixing desk', credit: 'MeJay'}]})) as AdminStory
+      expect(saved.publishProblems).toEqual([])
+      await expect(stories().getPublicMedia(coverId)).rejects.toMatchObject({status: 404})
+
+      const published = await stories().command(adminUserId, draft.id, {action: 'publish', expectedVersion: saved.version}) as AdminStory
+      expect(published.status).toBe('published')
+      const view = await stories().getPublished(draft.slug) as Record<string, unknown>
+      expect(view).toMatchObject({title: 'Detroit Has Something to Say', cover: {altText: 'Producer at a mixing desk', credit: 'MeJay'}})
+      for (const privateField of ['id', 'version', 'status', 'created_by_user_id', 'updated_by_user_id', 'featured']) expect(view).not.toHaveProperty(privateField)
+      await expect(stories().getPublicMedia(coverId)).resolves.toMatchObject({mimeType: 'image/png'})
+      await expect(stories().getPublicMedia(unusedId)).rejects.toMatchObject({status: 404})
+      await expect(stories().update(adminUserId, draft.id, baseInput(published, {slug: 'a-new-link', coverMediaId: coverId}))).rejects.toMatchObject({code: 'slug_locked'})
+      expect((await stories().listPublished()).items).toEqual(expect.arrayContaining([expect.objectContaining({slug: draft.slug})]))
+
+      const unpublished = await stories().command(adminUserId, draft.id, {action: 'unpublish', expectedVersion: published.version}) as AdminStory
+      expect(unpublished.status).toBe('draft')
+      await expect(stories().getPublished(draft.slug)).rejects.toMatchObject({status: 404})
+      await expect(stories().getPublicMedia(coverId)).rejects.toMatchObject({status: 404})
+      const archived = await stories().command(adminUserId, draft.id, {action: 'archive', expectedVersion: unpublished.version}) as AdminStory
+      expect(archived.status).toBe('archived')
+      await expect(stories().update(adminUserId, draft.id, baseInput(archived))).rejects.toMatchObject({code: 'story_archived'})
+      expect((await stories().listPublished()).items).not.toEqual(expect.arrayContaining([expect.objectContaining({slug: draft.slug})]))
+    })
+
+    it('counts views of published stories once per visitor per half hour, and never for drafts', async () => {
+      const story = await publishedStory('Counted Views')
+      const request = (ip: string) => ({request: new Request(`https://mejay.app/api/stories/${story.slug}/views`, {method: 'POST', headers: {'x-mejay-client-ip': ip}}), env: {DB: new Database(connectionString!, pool) as never}, params: {slug: story.slug}})
+      const first = await (await recordStoryView(request('203.0.113.7'))).json() as {data: {counted: boolean; views: number}}
+      expect(first.data).toEqual({counted: true, views: 1})
+      const repeat = await (await recordStoryView(request('203.0.113.7'))).json() as {data: {counted: boolean; views: number}}
+      expect(repeat.data).toEqual({counted: false, views: 1})
+      const other = await (await recordStoryView(request('198.51.100.9'))).json() as {data: {counted: boolean; views: number}}
+      expect(other.data).toEqual({counted: true, views: 2})
+      expect(await stories().getPublished(story.slug)).toMatchObject({viewCount: 2})
+
+      const draft = await stories().create(adminUserId, {template: 'headliner', title: 'Uncounted Draft'}) as AdminStory
+      expect((await recordStoryView({...request('192.0.2.1'), params: {slug: draft.slug}})).status).toBe(404)
+      expect((await pool.query('SELECT view_count FROM editorial_stories WHERE id = $1', [draft.id])).rows[0].view_count).toBe('0')
+    })
+
+    it('rejects images that are not what they claim, and keeps the failure visible', async () => {
+      const story = await stories().create(adminUserId, {template: 'headliner', title: 'Upload Checks'}) as AdminStory
+      expect(() => mediaUploadSchema.parse({role: 'cover', fileName: 'small.png', mimeType: 'image/png', byteSize: 10, width: 600, height: 400})).toThrow(/at least 1200 x 630/)
+      expect(() => mediaUploadSchema.parse({role: 'cover', fileName: 'huge.png', mimeType: 'image/png', byteSize: 16 * 1024 * 1024, width: 1600, height: 900})).toThrow(/15 MB/)
+      expect(() => mediaUploadSchema.parse({role: 'cover', fileName: 'x.gif', mimeType: 'image/gif', byteSize: 10, width: 1600, height: 900})).toThrow()
+      const started = await stories().initiateUpload(adminUserId, story.id, {role: 'cover', fileName: 'lie.png', mimeType: 'image/png', byteSize: 500_000, width: 1600, height: 900}, imageBucket(1600, 900) as never) as {media: {id: string}}
+      await expect(stories().finalizeUpload(adminUserId, started.media.id, imageBucket(1300, 700) as never)).rejects.toMatchObject({code: 'upload_validation_failed'})
+      expect((await pool.query('SELECT status FROM editorial_media WHERE id = $1', [started.media.id])).rows[0].status).toBe('failed')
+      await expect(stories().update(adminUserId, story.id, baseInput(story, {coverMediaId: started.media.id}))).rejects.toMatchObject({code: 'media_not_ready'})
+    })
+
+    it('keeps exactly one featured story, replacing it atomically and clearing it on unpublish', async () => {
+      await pool.query(`UPDATE editorial_stories SET featured = FALSE`)
+      const first = await publishedStory('First Feature')
+      const second = await publishedStory('Second Feature')
+      const featuredFirst = await stories().command(adminUserId, first.id, {action: 'feature', expectedVersion: first.version}) as AdminStory
+      expect(featuredFirst.featured).toBe(true)
+      await Promise.allSettled([
+        stories().command(adminUserId, second.id, {action: 'feature', expectedVersion: second.version}),
+        stories().command(adminUserId, second.id, {action: 'feature', expectedVersion: second.version}),
+      ])
+      const featured = await pool.query(`SELECT id FROM editorial_stories WHERE featured`)
+      expect(featured.rows).toEqual([{id: second.id}])
+      expect((await stories().home()).featured).toMatchObject({slug: second.slug})
+      const current = (await pool.query('SELECT version FROM editorial_stories WHERE id = $1', [second.id])).rows[0].version
+      await stories().command(adminUserId, second.id, {action: 'unpublish', expectedVersion: current})
+      expect((await pool.query(`SELECT COUNT(*)::int AS n FROM editorial_stories WHERE featured`)).rows[0].n).toBe(0)
+      const home = await stories().home()
+      expect(home.featured).not.toMatchObject({slug: second.slug})
+      const draft = await stories().create(adminUserId, {template: 'headliner', title: 'Draft Only'}) as AdminStory
+      await expect(stories().command(adminUserId, draft.id, {action: 'feature', expectedVersion: draft.version})).rejects.toMatchObject({code: 'story_not_published'})
+    })
+
+    it('links releases and artists only while they are public, and never copies their data', async () => {
+      await resetIsrcState()
+      const live = await prepareLiveRelease('StoryDrop')
+      const drop = await stories().create(adminUserId, {template: 'release_drop', title: 'After Hours'}) as AdminStory
+      const saved = await stories().update(adminUserId, drop.id, baseInput(drop, {template: 'release_drop', title: 'After Hours', releaseId: live.release.id, artistId: live.artist.id})) as AdminStory
+      expect(saved.publishProblems).toEqual([])
+      await stories().command(adminUserId, drop.id, {action: 'publish', expectedVersion: saved.version})
+      const view = await stories().getPublished(drop.slug) as {release: {release: {id: string; amount_minor: number}} | null; artist: {slug: string} | null}
+      expect(view.release?.release).toMatchObject({id: live.release.id, amount_minor: 999})
+      expect(view.artist).toMatchObject({slug: expect.any(String)})
+      const card = (await stories().listPublished()).items.find((item) => (item as {slug: string}).slug === drop.slug) as {image: {url: string} | null}
+      expect(card.image?.url).toMatch(/^\/api\/store\/assets\//)
+
+      await pool.query(`UPDATE releases SET status = 'TAKEN_DOWN' WHERE id = $1`, [live.release.id])
+      await pool.query(`UPDATE provider_profiles SET suspended_at = CURRENT_TIMESTAMP WHERE id = $1`, [live.provider.id])
+      const hidden = await stories().getPublished(drop.slug) as {release: unknown; artist: unknown}
+      expect(hidden.release).toBeNull()
+      expect(hidden.artist).toBeNull()
+      const hiddenCard = (await stories().listPublished()).items.find((item) => (item as {slug: string}).slug === drop.slug) as {image: unknown}
+      expect(hiddenCard.image).toBeNull()
+      await pool.query(`UPDATE provider_profiles SET suspended_at = NULL WHERE id = $1`, [live.provider.id])
+      await pool.query(`DELETE FROM releases WHERE id = $1`, [live.release.id]).catch(() => undefined)
+    })
+
+    it('lists only live releases with an offer, with playable preview clips, on Discover', async () => {
+      await resetIsrcState()
+      const live = await prepareLiveRelease('DiscoverNew')
+      const clip = crypto.randomUUID()
+      await pool.query(
+        `INSERT INTO marketplace_assets (id, provider_profile_id, track_id, kind, storage_key, mime_type, byte_size, processing_status, metadata)
+         VALUES ($1, $2, $3, 'audio_preview', $4, 'audio/mpeg', 1000, 'ready', '{}'::jsonb)`,
+        [clip, live.provider.id, live.track.id, `mejay-artist/${live.provider.id}/audio_preview/${live.track.id}/${clip}.mp3`],
+      )
+      const scheduled = await prepareLiveRelease('DiscoverLater', {stage: 'pricing'})
+      const overview = await new DiscoveryService(new Database(connectionString!, pool) as never).getOverview()
+      const listed = overview.newestReleases.find((release) => release.id === live.release.id)
+      expect(listed).toMatchObject({preview_asset_id: clip})
+      expect(overview.newestReleases.some((release) => release.id === scheduled.release.id)).toBe(false)
     })
   })
 })

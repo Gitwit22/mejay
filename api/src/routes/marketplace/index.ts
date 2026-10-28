@@ -343,6 +343,38 @@ export const getArtistPagePreview = async (context: Context): Promise<Response> 
   }
 }
 
+/**
+ * Streams one of the owner's own song files (master, staged replacement or MeJay MP3) to the preview
+ * picker. Byte ranges let the player seek through a full-length song; ownership is checked per request.
+ */
+export const getOwnAudio = async (context: Context): Promise<Response> => {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+  if (!context.env.DOWNLOADS) return json({ok: false, error: 'storage_unavailable'}, {status: 503})
+  const userId = await getSessionUserId(context.request, context.env)
+  if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+  try {
+    const asset = await new MarketplaceService(context.env.DB).getOwnAudio(userId, requiredParam(context.params ?? {}, 'assetId'))
+    const requestedRange = context.request.headers.get('range')
+    const range = requestedRange && /^bytes=\d*-\d*$/.test(requestedRange) && requestedRange !== 'bytes=-' ? requestedRange : undefined
+    const object = await context.env.DOWNLOADS.getExact(asset.storageKey, range)
+    if (!object) return json({ok: false, error: 'not_found'}, {status: 404})
+    return new Response(object.body, {
+      status: object.contentRange ? 206 : 200,
+      headers: {
+        'content-type': asset.mimeType,
+        'content-disposition': `inline; filename="${asset.fileName}"`,
+        'cache-control': 'private, no-store, max-age=0',
+        'x-content-type-options': 'nosniff',
+        'accept-ranges': 'bytes',
+        ...(object.contentLength !== undefined ? {'content-length': String(object.contentLength)} : {}),
+        ...(object.contentRange ? {'content-range': object.contentRange} : {}),
+      },
+    })
+  } catch (error) {
+    return errorResponse(error)
+  }
+}
+
 /** Streams one of the owner's own profile images for the page preview; ownership is checked per request. */
 export const getArtistPagePreviewImage = async (context: Context): Promise<Response> => {
   if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})

@@ -154,8 +154,12 @@ export type ProviderTrack = {
   recording_location?: string | null
   contributors?: TrackContributor[]
   featured_artist_ids?: string[]
-  /** Where the 10-second store preview starts (ms); null = automatic. */
+  /** Where the store preview starts (ms); null = automatic. */
   preview_start_ms?: number | null
+  /** How long the store preview plays (ms), 5 to 30 seconds. */
+  preview_length_ms?: number
+  /** The song file the preview picker plays: MeJay's MP3 of the latest master, or the master itself. */
+  listen_asset_id?: string | null
   /** Whether MeJay has made the preview clip for the current setting. */
   preview_status?: 'ready' | 'processing' | 'waiting'
 }
@@ -189,6 +193,8 @@ export type ReleaseCertificationState = {
   materials: RightsMaterial[]
   problems: string[]
   history: Array<{id: string; certification_version: string; third_party_material: ThirdPartyMaterial; rights_status: RightsStatus; certified_at: string}>
+  /** The last submitted certification (absent from older API responses); used to prefill a re-confirmation. */
+  previous?: {version: string; thirdPartyMaterial: ThirdPartyMaterial; accepted: string[]; certifiedAt: string} | null
 }
 
 export function replaceTrackCredits(trackId: string, input: {featuredArtistIds: string[]; contributors: TrackContributor[]}): Promise<unknown> {
@@ -306,6 +312,11 @@ export function listProviderIsrcs(): Promise<ProviderIsrc[]> {
 /** CSV of the account's ISRCs; opened as a normal download so the session cookie applies. */
 export function providerIsrcExportUrl(): string {
   return apiUrl('/api/marketplace/isrcs/export')
+}
+
+/** One of the account's own song files (master, staged replacement or MeJay MP3), for the preview picker. */
+export function providerAudioUrl(assetId: string): string {
+  return apiUrl(`/api/marketplace/assets/${encodeURIComponent(assetId)}/audio`)
 }
 
 /** Business details editable from portal Settings; the page address and review status are not. */
@@ -461,6 +472,7 @@ export function updateProviderTrack(trackId: string, input: {
   recordingYear?: number | null
   recordingLocation?: string | null
   previewStartMs?: number | null
+  previewLengthMs?: number
 }): Promise<ProviderTrack> {
   return request(`/api/marketplace/tracks/${encodeURIComponent(trackId)}`, {
     method: 'PATCH', headers: {'content-type': 'application/json'}, body: JSON.stringify(input),
@@ -531,6 +543,7 @@ export type ReleaseFieldChanges = Partial<{
   phonographicCopyrightHolder: string | null
   requestedReleaseAt: string
   releaseTimezone: string | null
+  previewTiming: 'before_release' | 'after_release'
   additionalArtists: Array<{role: 'primary' | 'featured'; artistId?: string | null; name: string}>
 }>
 
@@ -542,6 +555,7 @@ export type TrackFieldChanges = {
   languageCode?: string | null
   genre?: string | null
   previewStartMs?: number | null
+  previewLengthMs?: number
   credits?: {featuredArtistIds: string[]; contributors: TrackContributor[]}
 }
 

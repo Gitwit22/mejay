@@ -67,4 +67,17 @@ describe('release review dialog', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Flag rights issue'}))
     await waitFor(() => expect(commandMarketplaceRelease).toHaveBeenCalledWith('release-1', {action: 'flag_rights', expectedVersion: 4, note: 'Sample in the hook is not cleared'}))
   })
+
+  it('lets staff play each ready master and explains an undocumented rights hold', async () => {
+    const data = review('RIGHTS_REVIEW_REQUIRED')
+    data.tracks[0].audio_asset_id = 'audio-1'
+    data.materials = [{...data.materials[0], material_type: 'sample', license_type: 'other', document_asset_id: null, document_file_name: null}]
+    vi.mocked(getReleaseReview).mockResolvedValue(data)
+    await openDialog()
+    expect(screen.getByLabelText('Play Getaway')).toHaveAttribute('src', expect.stringContaining('/api/marketplace-admin/assets/audio-1'))
+    expect(screen.getByText('What to check before approving')).toBeInTheDocument()
+    expect(screen.getAllByText('no license document').length).toBeGreaterThan(0)
+    expect(screen.getByText(/1 item has no license document/)).toBeInTheDocument()
+  })
 })
+

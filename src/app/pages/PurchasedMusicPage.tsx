@@ -12,6 +12,7 @@ import {preorderLabel, SCHEDULER_NOTE} from '@/lib/releaseTime'
 import {toast} from '@/hooks/use-toast'
 import {useDJStore} from '@/stores/djStore'
 import {usePlanStore} from '@/stores/planStore'
+import {SPAM_FOLDER_HINT} from '@/lib/emailCopy'
 
 export default function PurchasedMusicPage() {
   const authStatus = usePlanStore((state) => state.authStatus)
@@ -129,6 +130,7 @@ function LinkGuestPurchases() {
         <Input inputMode="numeric" autoComplete="one-time-code" aria-label="Verification code" placeholder="6-digit code" value={code} onChange={(event) => setCode(event.target.value)} className="sm:w-40" />
         <Button size="sm" type="submit" disabled={!code.trim() || link.isPending}>{link.isPending ? 'Linking…' : 'Verify and link'}</Button>
       </form>}
+    {codeSent && <p className="text-xs text-zinc-500">{SPAM_FOLDER_HINT}</p>}
     {(send.isError || link.isError) && <p role="alert" className="text-red-300">{(send.error ?? link.error)?.message}</p>}
     <button type="button" className="text-xs text-zinc-500 hover:text-zinc-300" onClick={() => setOpen(false)}>Cancel</button>
   </div>

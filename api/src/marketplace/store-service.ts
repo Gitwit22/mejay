@@ -85,7 +85,7 @@ export class StoreService {
         (provider.suspended_at IS NULL AND provider.stripe_details_submitted AND provider.stripe_payouts_enabled
           AND provider.stripe_transfers_status = 'active') AS purchase_available,
         COUNT(DISTINCT track.id)::integer AS track_count,
-        -- Only MeJay-made 10-second clips are ever public; pre-orders play them only if the artist allows.
+        -- Only MeJay-made preview clips are ever public; pre-orders play them only if the artist allows.
         CASE WHEN ${PREVIEW_PLAYABLE_SQL} THEN (ARRAY_AGG(preview.id ORDER BY track.disc_number, track.track_number, preview.created_at DESC) FILTER (WHERE preview.id IS NOT NULL))[1] END AS preview_asset_id
        FROM releases r
       JOIN provider_profiles provider ON provider.id = r.provider_profile_id
@@ -205,7 +205,7 @@ export class StoreService {
          -- Cover art of any listed release (LIVE or open for pre-order).
          (asset.kind = 'artwork' AND EXISTS (
            SELECT 1 FROM releases r WHERE r.id = asset.release_id AND ${STORE_LISTED_RELEASE_SQL}))
-         -- Audio only as the 10-second preview clip, never the uploaded master.
+         -- Audio only as the preview clip, never the uploaded master.
          OR (asset.kind = 'audio_preview' AND EXISTS (
            SELECT 1 FROM releases r WHERE r.id = track.release_id AND ${STORE_LISTED_RELEASE_SQL} AND ${PREVIEW_PLAYABLE_SQL}))
          OR (asset.kind IN ('artist_photo', 'artist_banner', 'artist_cutout', 'artist_gallery') AND EXISTS (

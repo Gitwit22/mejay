@@ -69,6 +69,7 @@ describe('request changes to an approved release', () => {
     const title = await screen.findByLabelText('Release title')
     expect(title).toHaveValue('Night Drive')
     expect(screen.queryByText('Release date', {selector: 'h2'})).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Before release too (during pre-orders)')).not.toBeInTheDocument()
     expect(screen.getByText(/MeJay must confirm a replacement is the same song/)).toBeInTheDocument()
     fireEvent.change(title, {target: {value: 'Night Drive (Deluxe)'}})
     fireEvent.change(screen.getByLabelText('Genre', {selector: '#cr-track-genre-track-1'}), {target: {value: 'Deep House'}})
@@ -80,6 +81,79 @@ describe('request changes to an approved release', () => {
     expect(input.release).not.toHaveProperty('requestedReleaseAt')
     expect(input.tracks).toEqual([expect.objectContaining({trackId: 'track-1', genre: 'Deep House', credits: {featuredArtistIds: [], contributors: [{name: 'Pen Writer', role: 'writer', publisherName: null}]}})])
     expect(input.audioReplacements).toEqual([])
+  })
+
+  it('lets a scheduled release ask for previews before release, and hides the option once live', async () => {
+    const scheduled = detail('SCHEDULED')
+    scheduled.release.preorders_enabled = true
+    scheduled.release.preview_timing = 'after_release'
+    vi.mocked(getProviderRelease).mockResolvedValue(scheduled)
+    renderPage()
+    const before = await screen.findByLabelText('Before release too (during pre-orders)')
+    expect(screen.getByLabelText('After release only')).toBeChecked()
+    fireEvent.click(before)
+    expect(screen.queryByText(/pre-orders are off for this release/)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Save draft'}))
+    await waitFor(() => expect(saveReleaseChangeRequest).toHaveBeenCalled())
+    expect(vi.mocked(saveReleaseChangeRequest).mock.calls[0][1].release).toMatchObject({previewTiming: 'before_release'})
+  })
+
+  it('sends a new preview length and shows preview changes as times', async () => {
+    renderPage()
+    const length = await screen.findByLabelText('Preview length')
+    expect(length).toHaveValue('10')
+    fireEvent.change(length, {target: {value: '25'}})
+    expect(screen.getByText('Previews play 25 seconds from the start you choose (minutes:seconds).')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Save draft'}))
+    await waitFor(() => expect(saveReleaseChangeRequest).toHaveBeenCalled())
+    expect(vi.mocked(saveReleaseChangeRequest).mock.calls[0][1].tracks).toEqual([expect.objectContaining({trackId: 'track-1', previewLengthMs: 25_000, previewStartMs: null})])
+  })
+
+  it('picks the preview section on the current song and sends it with the request', async () => {
+    const live = detail()
+    live.tracks = [{...track, preview_start_ms: 60_000, preview_length_ms: 15_000, listen_asset_id: 'mp3-1'} as never]
+    vi.mocked(getProviderRelease).mockResolvedValue(live)
+    renderPage()
+    const section = await screen.findByRole('slider', {name: 'Preview section of Night Drive'})
+    expect(document.querySelector('audio')).toHaveAttribute('src', expect.stringContaining('/api/marketplace/assets/mp3-1/audio'))
+    fireEvent.keyDown(section, {key: 'ArrowLeft'})
+    expect(screen.getByLabelText('Preview starts at')).toHaveValue('0:59')
+    fireEvent.click(screen.getByRole('button', {name: 'Save draft'}))
+    await waitFor(() => expect(saveReleaseChangeRequest).toHaveBeenCalled())
+    expect(vi.mocked(saveReleaseChangeRequest).mock.calls[0][1].tracks).toEqual([expect.objectContaining({previewStartMs: 59_000, previewLengthMs: 15_000})])
+  })
+
+  it('plays the replacement upload in the picker once one is part of the request', async () => {
+    const live = detail()
+    live.tracks = [{...track, listen_asset_id: 'mp3-1'} as never]
+    vi.mocked(getProviderRelease).mockResolvedValue(live)
+    vi.mocked(getReleaseChangeRequest).mockResolvedValue({request: request({audio_replacements: [{trackId: 'track-1', assetId: 'staged-1'}]}), sameRecordingRequired: false})
+    renderPage()
+    await screen.findByText(/Playing your new upload/)
+    expect(document.querySelector('audio')).toHaveAttribute('src', expect.stringContaining('/api/marketplace/assets/staged-1/audio'))
+    fireEvent.click(screen.getByRole('button', {name: 'Keep the current audio'}))
+    await waitFor(() => expect(document.querySelector('audio')).toHaveAttribute('src', expect.stringContaining('/api/marketplace/assets/mp3-1/audio')))
+    expect(screen.queryByText(/Playing your new upload/)).not.toBeInTheDocument()
+  })
+
+  it('lists preview length and start changes in seconds and minutes', async () => {
+    const diff = [
+      {key: 'track.track-1.previewLengthMs', label: 'Preview length', trackId: 'track-1', trackTitle: 'Night Drive', kind: 'value' as const, before: 15_000, after: 25_000},
+      {key: 'track.track-1.previewStartMs', label: 'Preview start', trackId: 'track-1', trackTitle: 'Night Drive', kind: 'value' as const, before: null, after: 65_000},
+    ]
+    vi.mocked(getReleaseChangeRequest).mockResolvedValue({request: request({status: 'submitted', diff}), sameRecordingRequired: false})
+    renderPage()
+    expect(await screen.findByText('15 seconds')).toBeInTheDocument()
+    expect(screen.getByText('25 seconds')).toBeInTheDocument()
+    expect(screen.getByText('Automatic')).toBeInTheDocument()
+    expect(screen.getByText('1:05')).toBeInTheDocument()
+  })
+
+  it('warns that previews before release need pre-orders', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail('SCHEDULED'))
+    renderPage()
+    fireEvent.click(await screen.findByLabelText('Before release too (during pre-orders)'))
+    expect(screen.getByText(/pre-orders are off for this release/)).toBeInTheDocument()
   })
 
   it('shows submitted changes with a withdraw option, and locks them once MeJay starts reviewing', async () => {

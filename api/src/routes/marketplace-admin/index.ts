@@ -140,27 +140,52 @@ export const retryProviderPayouts = async (context: {request: Request; env: Admi
   }
 }
 
-export const getFinanceSummary = async (context: {request: Request; env: EnvWithDb}): Promise<Response> => {
+/** The Finance page's filters, read from the query string; shared by the summary and the CSV export. */
+function financeFilters(request: Request) {
+  const params = new URL(request.url).searchParams
+  return normalizeFinanceFilters({
+    from: params.get('from') ?? undefined,
+    to: params.get('to') ?? undefined,
+    providerId: params.get('providerId') ?? undefined,
+    releaseId: params.get('releaseId') ?? undefined,
+    status: params.get('status') ?? undefined,
+  })
+}
+
+type FinanceContext = {request: Request; env: EnvWithDb; params?: Record<string, string | undefined>}
+
+async function financeRoute(context: FinanceContext, label: string, run: (service: MarketplaceFinanceService, userId: string) => Promise<Response>): Promise<Response> {
   if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
   const userId = await getSessionUserId(context.request, context.env)
   if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
   try {
-    const params = new URL(context.request.url).searchParams
-    const filters = normalizeFinanceFilters({
-      from: params.get('from') ?? undefined,
-      to: params.get('to') ?? undefined,
-      providerId: params.get('providerId') ?? undefined,
-      releaseId: params.get('releaseId') ?? undefined,
-      status: params.get('status') ?? undefined,
-    })
-    const data = await new MarketplaceFinanceService(context.env.DB).getSummary(userId, filters)
-    return json({ok: true, data})
+    return await run(new MarketplaceFinanceService(context.env.DB), userId)
   } catch (error) {
     if (error instanceof MarketplaceError) return json({ok: false, error: error.code, message: error.message}, {status: error.status})
-    console.error('[marketplace-admin] finance summary failed', error)
+    console.error(`[marketplace-admin] ${label} failed`, error)
     return json({ok: false, error: 'server_error'}, {status: 500})
   }
 }
+
+export const getFinanceSummary = (context: FinanceContext): Promise<Response> => financeRoute(context, 'finance summary', async (service, userId) =>
+  json({ok: true, data: await service.getSummary(userId, financeFilters(context.request))}))
+
+export const exportFinance = (context: FinanceContext): Promise<Response> => financeRoute(context, 'finance export', async (service, userId) => {
+  const result = await service.exportCsv(userId, financeFilters(context.request))
+  return new Response(result.data, {
+    headers: {
+      'content-type': 'text/csv; charset=utf-8',
+      'content-disposition': `attachment; filename="${result.fileName}"`,
+      'cache-control': 'no-store, max-age=0',
+    },
+  })
+})
+
+export const getFinanceOrder = (context: FinanceContext): Promise<Response> => financeRoute(context, 'finance order', async (service, userId) => {
+  const orderId = context.params?.orderId?.trim()
+  if (!orderId) return json({ok: false, error: 'missing_parameter'}, {status: 400})
+  return json({ok: true, data: await service.getOrderDetail(userId, orderId)})
+})
 
 export const getReleaseReview = async (context: {request: Request; env: EnvWithDb; params: Record<string, string | undefined>}): Promise<Response> => {
   if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
@@ -187,16 +212,21 @@ export const getReviewAsset = async (context: {request: Request; env: EnvWithDb 
   if (!assetId) return json({ok: false, error: 'missing_parameter'}, {status: 400})
   try {
     const asset = await new MarketplaceAdminService(context.env.DB).getReviewAsset(userId, assetId)
-    const object = await context.env.DOWNLOADS.getExact(asset.storageKey)
+    // Byte ranges let the review audio player seek through a full-length master.
+    const requestedRange = context.request.headers.get('range')
+    const range = requestedRange && /^bytes=\d*-\d*$/.test(requestedRange) && requestedRange !== 'bytes=-' ? requestedRange : undefined
+    const object = await context.env.DOWNLOADS.getExact(asset.storageKey, range)
     if (!object) return json({ok: false, error: 'not_found'}, {status: 404})
     return new Response(object.body, {
-      status: 200,
+      status: object.contentRange ? 206 : 200,
       headers: {
         'content-type': asset.mimeType,
         'content-disposition': `inline; filename="${asset.fileName}"`,
         'cache-control': 'private, no-store, max-age=0',
         'x-content-type-options': 'nosniff',
+        'accept-ranges': 'bytes',
         ...(object.contentLength !== undefined ? {'content-length': String(object.contentLength)} : {}),
+        ...(object.contentRange ? {'content-range': object.contentRange} : {}),
       },
     })
   } catch (error) {

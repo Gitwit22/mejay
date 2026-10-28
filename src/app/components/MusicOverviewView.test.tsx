@@ -8,8 +8,10 @@ import {listStoreReleases, type StoreRelease} from '@/lib/musicStoreApi'
 import {BROWSE_PAGE_SIZE} from './BrowseAllMusic'
 import LegacyStoreRedirect from './LegacyStoreRedirect'
 import {MusicOverviewView} from './MusicOverviewView'
+import {getStoriesHome, type StoryCard} from '@/lib/storiesApi'
 
 vi.mock('@/lib/musicDiscoveryApi', () => ({getMusicDiscovery: vi.fn()}))
+vi.mock('@/lib/storiesApi', async (importOriginal) => ({...await importOriginal<typeof import('@/lib/storiesApi')>(), getStoriesHome: vi.fn()}))
 vi.mock('@/lib/musicStoreApi', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/musicStoreApi')>(),
   listStoreReleases: vi.fn(),
@@ -43,6 +45,7 @@ describe('MusicOverviewView', () => {
       featuredArtists: [{id: 'artist-1', name: 'Nova', slug: 'nova', artwork_asset_id: null, release_count: 1}],
     })
     vi.mocked(listStoreReleases).mockResolvedValue([release])
+    vi.mocked(getStoriesHome).mockReset().mockResolvedValue({featured: null, latest: []})
   })
 
   it('renders discovery rails and links to Purchased Music and artist pages', async () => {
@@ -50,7 +53,8 @@ describe('MusicOverviewView', () => {
 
     expect(await screen.findByRole('heading', {name: 'MEJAY MUSIC'})).toBeInTheDocument()
     expect(screen.getByRole('heading', {name: 'Admin Picks'})).toBeInTheDocument()
-    expect(screen.getByRole('heading', {name: 'New This Week'})).toBeInTheDocument()
+    expect(screen.getByRole('heading', {name: 'New Releases'})).toBeInTheDocument()
+    expect(screen.queryByRole('heading', {name: 'New This Week'})).not.toBeInTheDocument()
     expect(screen.getByRole('heading', {name: 'Most Purchased'})).toBeInTheDocument()
     expect(screen.getByRole('heading', {name: 'Most Previewed'})).toBeInTheDocument()
     expect(screen.getByRole('link', {name: 'Purchased Music'})).toHaveAttribute('href', '/app/purchased')
@@ -116,6 +120,83 @@ describe('MusicOverviewView', () => {
 
     fireEvent.click(within(section).getByRole('button', {name: /Echo/}))
     expect(within(section).getByText('First Light')).toBeInTheDocument()
+  })
+})
+
+describe('Discover new releases and stories', () => {
+  const project: StoreRelease = {...release, id: 'release-2', title: 'Long Night', release_type: 'album', preview_asset_id: 'clip-2'}
+  const card = (slug: string, title: string): StoryCard => ({slug, template: 'headliner', title, teaser: `${title} teaser`, category: 'Stories', publishedAt: '2026-10-20T00:00:00Z', featured: false, image: null})
+
+  beforeEach(() => {
+    vi.mocked(getMusicDiscovery).mockResolvedValue({
+      newestReleases: [release, project], newestSingles: [release], newestProjects: [project],
+      mostPurchased: [], mostPreviewed: [], featuredReleases: [release], featuredArtists: [],
+    })
+    vi.mocked(listStoreReleases).mockResolvedValue([release])
+    vi.mocked(getStoriesHome).mockReset().mockResolvedValue({featured: null, latest: []})
+  })
+
+  it('shows new releases in one compact section with type tabs, prices, previews and a jump to the full catalog', async () => {
+    renderDiscover()
+    const section = (await screen.findByRole('heading', {name: 'New Releases'})).closest('section')!
+    expect(within(section).getByText('Long Night')).toBeInTheDocument()
+    expect(within(section).getAllByText(/\$9\.99/).length).toBeGreaterThan(0)
+    expect(within(section).getAllByRole('link', {name: /First Light/})[0]).toHaveAttribute('href', '/app/store/release-1')
+    expect(within(section).getByRole('button', {name: 'Preview Long Night'})).toBeEnabled()
+    const scrollIntoView = vi.fn()
+    Element.prototype.scrollIntoView = scrollIntoView
+    fireEvent.click(within(section).getByRole('button', {name: 'View all music'}))
+    expect(scrollIntoView).toHaveBeenCalled()
+    fireEvent.click(within(section).getByRole('tab', {name: 'Singles'}))
+    expect(within(section).queryByText('Long Night')).not.toBeInTheDocument()
+  })
+
+  it('leads with the featured story, keeps music near the top and lists more stories before the full catalog', async () => {
+    vi.mocked(getStoriesHome).mockResolvedValue({
+      featured: {...card('lead', 'Detroit has something to say'), featured: true},
+      latest: [card('two', 'Second'), card('three', 'Third'), card('four', 'Fourth'), card('five', 'Fifth')],
+    })
+    renderDiscover()
+    expect(await screen.findByRole('link', {name: /Detroit has something to say/})).toHaveAttribute('href', '/stories/lead')
+    expect(screen.getByRole('link', {name: /Second/})).toHaveAttribute('href', '/stories/two')
+    const more = screen.getByRole('heading', {name: 'More Stories'}).closest('section')!
+    expect(within(more).getByRole('link', {name: /Fifth/})).toHaveAttribute('href', '/stories/five')
+    expect(within(more).getByRole('link', {name: 'All stories'})).toHaveAttribute('href', '/stories')
+    const headings = screen.getAllByRole('heading', {level: 2}).map((heading) => heading.textContent)
+    expect(headings.indexOf('New Releases')).toBeLessThan(headings.indexOf('Admin Picks'))
+    expect(headings.indexOf('More Stories')).toBeLessThan(headings.indexOf('Browse All Music'))
+  })
+
+  it('stays music-only without published stories, or when stories fail to load', async () => {
+    renderDiscover()
+    await screen.findByRole('heading', {name: 'New Releases'})
+    expect(screen.queryByRole('heading', {name: 'More Stories'})).not.toBeInTheDocument()
+    expect(screen.queryByText(/Read the story/)).not.toBeInTheDocument()
+    vi.mocked(getStoriesHome).mockRejectedValue(new Error('down'))
+    renderDiscover()
+    expect((await screen.findAllByRole('heading', {name: 'New Releases'})).length).toBeGreaterThan(0)
+  })
+})
+
+describe('Discover empty state', () => {
+  const emptyDiscovery = {newestReleases: [], newestSingles: [], newestProjects: [], mostPurchased: [], mostPreviewed: [], featuredReleases: [], featuredArtists: []}
+  beforeEach(() => {
+    vi.mocked(getMusicDiscovery).mockResolvedValue(emptyDiscovery)
+    vi.mocked(getStoriesHome).mockReset().mockResolvedValue({featured: null, latest: []})
+  })
+
+  it('does not say new music is on the way while a pre-order is on sale', async () => {
+    vi.mocked(listStoreReleases).mockResolvedValue([{...release, title: 'MIA', availability: 'preorder', release_at: '2026-11-06T05:00:00Z'}])
+    renderDiscover()
+    expect(await screen.findByRole('heading', {name: 'Browse All Music'})).toBeInTheDocument()
+    expect(await within(browseSection()).findByText('MIA')).toBeInTheDocument()
+    expect(screen.queryByText('New music is on the way')).not.toBeInTheDocument()
+  })
+
+  it('still says so when nothing at all is on sale', async () => {
+    vi.mocked(listStoreReleases).mockResolvedValue([])
+    renderDiscover()
+    expect(await screen.findByText('New music is on the way')).toBeInTheDocument()
   })
 })
 

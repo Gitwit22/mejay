@@ -1,12 +1,12 @@
 import {useState} from 'react'
-import {useMutation, useQueryClient} from '@tanstack/react-query'
+import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {Clock, Lock, PencilLine, ShieldCheck} from 'lucide-react'
 import {Link} from 'react-router-dom'
 
 import {Button} from '@/components/ui/button'
 import {Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '@/components/ui/dialog'
 import {toast} from '@/hooks/use-toast'
-import {withdrawProviderRelease, type ProviderReleaseDetail} from '@/lib/providerApi'
+import {getReleaseCertification, withdrawProviderRelease, type ProviderReleaseDetail} from '@/lib/providerApi'
 import {releaseEditState} from '@/lib/releaseEditState'
 
 /** Explains why a release can't be edited right now, and offers the one way forward (if any). */
@@ -64,5 +64,20 @@ export function ReleaseLockBanner({release}: {release: ProviderReleaseDetail['re
   return <div role="status" className={`${box} border-white/10 bg-white/[0.03]`}>
     <Lock className="h-5 w-5 shrink-0 text-zinc-400" />
     <div className="flex-1"><p className="font-semibold text-zinc-100">This release is {release.status.replace(/_/g, ' ').toLowerCase()}</p><p className="text-zinc-400">It can no longer be edited. Contact MeJay support if you need help.</p></div>
+  </div>
+}
+
+/**
+ * After an Edit, the stored certification no longer covers the release, so it must be confirmed
+ * again before resubmitting. Shown on every step so it isn't a surprise at the end.
+ */
+export function RecertifyNotice({release}: {release: ProviderReleaseDetail['release']}) {
+  const editable = releaseEditState(release.status) === 'editable'
+  const state = useQuery({queryKey: ['provider', 'release', release.id, 'certification'], queryFn: () => getReleaseCertification(release.id), enabled: editable})
+  if (!editable || !state.data || state.data.draft || !(state.data.previous ?? state.data.history.length)) return null
+  return <div role="status" className="mb-6 flex flex-col gap-3 rounded-md border border-sky-400/30 bg-sky-400/5 p-4 text-sm sm:flex-row sm:items-center">
+    <ShieldCheck className="h-5 w-5 shrink-0 text-sky-300" />
+    <p className="flex-1 text-zinc-300"><span className="font-semibold text-zinc-100">Confirm the rights certification again before you resubmit.</span> You changed this release after certifying it. Your previous answers are saved, so it takes one click.</p>
+    <Button asChild variant="outline" size="sm"><Link to={`/app/artist/releases/${release.id}/edit/certification`}>Go to certification</Link></Button>
   </div>
 }

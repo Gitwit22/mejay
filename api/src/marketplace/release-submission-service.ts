@@ -195,7 +195,19 @@ export class ReleaseSubmissionService {
        FROM release_certifications WHERE release_id = ?1 ORDER BY certified_at DESC`,
     ).bind(releaseId).all()
     const draft = parseDraft(release.certification_draft)
+    // The last submitted certification, so an artist re-confirming after an edit starts from their answers.
+    const last = await this.database.prepare(
+      `SELECT certification_version, third_party_material, accepted_certifications, certified_at
+       FROM release_certifications WHERE release_id = ?1 ORDER BY certified_at DESC LIMIT 1`,
+    ).bind(releaseId).first<{certification_version: string; third_party_material: string; accepted_certifications: unknown; certified_at: string}>()
+    const lastAccepted = last ? (typeof last.accepted_certifications === 'string' ? JSON.parse(last.accepted_certifications) : last.accepted_certifications) as Array<{key?: string} | string> : []
     return {
+      previous: last ? {
+        version: last.certification_version,
+        thirdPartyMaterial: last.third_party_material,
+        accepted: lastAccepted.map((statement) => typeof statement === 'string' ? statement : statement.key).filter((key): key is string => Boolean(key)),
+        certifiedAt: last.certified_at,
+      } : null,
       version: CERTIFICATION_VERSION,
       policy: ORIGINAL_MUSIC_POLICY,
       statements: [...CERTIFICATION_STATEMENTS, ...(missingIsrc > 0 ? [ISRC_STATEMENT] : [])],

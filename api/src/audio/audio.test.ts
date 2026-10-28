@@ -64,6 +64,19 @@ describe('ffmpeg arguments', () => {
     // Fades in over 1 s and out over the last 1.5 s.
     expect(args[args.indexOf('-af') + 1]).toBe('afade=t=in:d=1.000,afade=t=out:st=8.500:d=1.500')
   })
+
+  it("plays the artist's chosen preview length, kept inside the song", () => {
+    expect(previewWindow(200_000, null, 15_000)).toEqual({startSeconds: 30, lengthSeconds: 15})
+    expect(previewWindow(200_000, 0, 30_000)).toEqual({startSeconds: 0, lengthSeconds: 30})
+    // Pulled back so the whole chosen length still plays.
+    expect(previewWindow(200_000, 190_000, 30_000)).toEqual({startSeconds: 170, lengthSeconds: 30})
+    expect(maxPreviewStartMs(200_000, 30_000)).toBe(170_000)
+    // A song shorter than the chosen length plays whole.
+    expect(previewWindow(12_000, null, 30_000)).toEqual({startSeconds: 0, lengthSeconds: 12})
+    const args = previewArgs({sourcePath: '/s', coverPath: null, outputPath: '/p.mp3', tags, probe, requestedStartMs: 0, lengthMs: 20_000})
+    expect(args).toEqual(expect.arrayContaining(['-ss', '0', '-t', '20']))
+    expect(args[args.indexOf('-af') + 1]).toBe('afade=t=in:d=1.000,afade=t=out:st=18.500:d=1.500')
+  })
 })
 
 describe('probe parsing and verification', () => {

@@ -126,8 +126,10 @@ describeWithDatabase('audio processing jobs (PostgreSQL + real ffmpeg)', () => {
     expect(mp3).toMatchObject({codec: 'mp3', hasCoverArt: true, sampleRate: 48000})
     expect(mp3.tags).toMatchObject({title: 'Night Drive', artist: 'John Blaze', album: 'Woodward EP', track: '1/1'})
     expect(Math.abs(mp3.durationMs - 100_000)).toBeLessThan(500)
+    // New songs default to a 15-second preview.
     const preview = await probeAudio(bucket.path(outputKey(done!, 'audio_preview')))
-    expect(Math.abs(preview.durationMs - 10_000)).toBeLessThan(500)
+    expect(done!.preview_length_ms).toBe(15_000)
+    expect(Math.abs(preview.durationMs - 15_000)).toBeLessThan(500)
     expect(preview.tags.title).toBe('Night Drive (Preview)')
 
     const {rows} = await pool.query(`SELECT kind, mime_type, sha256 FROM marketplace_assets WHERE track_id = $1 ORDER BY kind`, [owner.track.id])
@@ -189,9 +191,9 @@ describeWithDatabase('audio processing jobs (PostgreSQL + real ffmpeg)', () => {
 
   it("cuts the preview at the artist's chosen start, 10 s long, fading in and out", async () => {
     const owner = await fixture('PreviewStart', {source: 'quiet-then-loud.wav', artwork: false})
-    await pool.query('UPDATE tracks SET preview_start_ms = 62000 WHERE id = $1', [owner.track.id])
+    await pool.query('UPDATE tracks SET preview_start_ms = 62000, preview_length_ms = 10000 WHERE id = $1', [owner.track.id])
     const job = await enqueueAudioJob(db as never, owner.audioId)
-    expect(job.preview_start_ms).toBe(62000)
+    expect(job).toMatchObject({preview_start_ms: 62000, preview_length_ms: 10_000})
     await createAudioJobRunner(deps()).kick()
     const done = await getAudioJob(db as never, job.id)
     expect(done).toMatchObject({status: 'succeeded'})
@@ -203,7 +205,7 @@ describeWithDatabase('audio processing jobs (PostgreSQL + real ffmpeg)', () => {
     expect(await meanVolume(clip, 0, 0.3)).toBeLessThan(middle - 3)
     expect(await meanVolume(clip, 9.7, 0.3)).toBeLessThan(middle - 3)
     const asset = await pool.query(`SELECT metadata FROM marketplace_assets WHERE track_id = $1 AND kind = 'audio_preview'`, [owner.track.id])
-    expect(asset.rows[0].metadata).toMatchObject({previewSetting: 62000, startMs: 62000})
+    expect(asset.rows[0].metadata).toMatchObject({previewSetting: 62000, previewLengthMs: 10_000, startMs: 62000})
 
     // Automatic start (0:30) lands in the silent part: proves the chosen offset was really used.
     await pool.query('UPDATE tracks SET preview_start_ms = NULL WHERE id = $1', [owner.track.id])
@@ -211,5 +213,22 @@ describeWithDatabase('audio processing jobs (PostgreSQL + real ffmpeg)', () => {
     await createAudioJobRunner(deps()).kick()
     const autoDone = await getAudioJob(db as never, autoJob.id)
     expect(await meanVolume(bucket.path(outputKey(autoDone!, 'audio_preview')))).toBeLessThan(-60)
+  }, 180_000)
+
+  it("plays the artist's chosen preview length, and 10 s for jobs queued before lengths existed", async () => {
+    const owner = await fixture('PreviewLength', {artwork: false})
+    await pool.query('UPDATE tracks SET preview_start_ms = 0, preview_length_ms = 25000 WHERE id = $1', [owner.track.id])
+    const job = await enqueueAudioJob(db as never, owner.audioId)
+    await createAudioJobRunner(deps()).kick()
+    const done = await getAudioJob(db as never, job.id)
+    expect(done).toMatchObject({status: 'succeeded', preview_length_ms: 25_000})
+    expect(Math.abs((await probeAudio(bucket.path(outputKey(done!, 'audio_preview')))).durationMs - 25_000)).toBeLessThan(500)
+
+    const legacy = await enqueueAudioJob(db as never, owner.audioId)
+    await pool.query('UPDATE audio_processing_jobs SET preview_length_ms = NULL WHERE id = $1', [legacy.id])
+    await createAudioJobRunner(deps()).kick()
+    const legacyDone = await getAudioJob(db as never, legacy.id)
+    expect(legacyDone).toMatchObject({status: 'succeeded'})
+    expect(Math.abs((await probeAudio(bucket.path(outputKey(legacyDone!, 'audio_preview')))).durationMs - 10_000)).toBeLessThan(500)
   }, 180_000)
 })

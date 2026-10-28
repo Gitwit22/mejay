@@ -117,8 +117,10 @@ export function CertificationStep({detail, onBack, onContinue}: {detail: Provide
   const [accepted, setAccepted] = useState<string[]>([])
   useEffect(() => {
     if (!state.data) return
-    setAnswer((current) => current ?? state.data.draft?.thirdPartyMaterial ?? null)
-    if (state.data.draft?.version === state.data.version) setAccepted((current) => current.length ? current : state.data.draft!.accepted)
+    // No saved draft after an edit: start from the last submitted answers. Nothing is saved until the artist confirms.
+    const source = state.data.draft ?? state.data.previous ?? null
+    setAnswer((current) => current ?? source?.thirdPartyMaterial ?? null)
+    if (source?.version === state.data.version) setAccepted((current) => current.length ? current : source.accepted.filter((key) => state.data.requiredKeys.includes(key)))
   }, [state.data])
   const save = useMutation({
     mutationFn: () => saveReleaseCertification(releaseId, {version: state.data!.version, thirdPartyMaterial: answer!, accepted}),
@@ -138,6 +140,7 @@ export function CertificationStep({detail, onBack, onContinue}: {detail: Provide
     <Heading title="Rights Certification" detail="Confirm you have the rights to release this music. This takes a minute." />
     <div className="flex gap-3 rounded-md border border-emerald-400/30 bg-emerald-400/5 p-4 text-sm text-zinc-200"><ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-300" /><p>{data.policy}</p></div>
     {!editable && <p className="mt-4 text-sm text-zinc-400">This release is {detail.release.status.replace(/_/g, ' ').toLowerCase()} and can no longer be changed.</p>}
+    {editable && !data.draft && data.previous && <p role="status" className="mt-4 rounded-md border border-sky-400/30 bg-sky-400/5 p-4 text-sm text-sky-100">You edited this release after certifying it, so MeJay needs you to confirm the certification again. Your previous answers are filled in: review them and press Review Submission.</p>}
 
     <section className="mt-8"><h2 className="text-base font-semibold">Does this recording contain samples, interpolations, leased beats, licensed beats, purchased instrumentals, or other third-party material?</h2>
       <div className="mt-3 grid gap-3" role="radiogroup" aria-label="Third-party material">{thirdPartyOptions.map((option) => <button key={option.value} type="button" role="radio" aria-checked={answer === option.value} disabled={!editable} onClick={() => setAnswer(option.value)} className={`rounded-md border p-4 text-left text-sm ${answer === option.value ? 'border-emerald-400 bg-emerald-400/10' : 'border-white/10 bg-[#141417] hover:border-white/20'}`}><p className="font-medium text-zinc-100">{option.label}</p><p className="mt-1 text-zinc-400">{option.detail}</p></button>)}</div>
@@ -145,6 +148,7 @@ export function CertificationStep({detail, onBack, onContinue}: {detail: Provide
 
     {answer === 'unsure' && <div className="mt-4 flex gap-3 rounded-md border border-amber-400/30 bg-amber-400/5 p-4 text-sm text-amber-200"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" /><p>You can submit, but MeJay will hold this release for rights review. You must verify that you own or control every part of the recording before it can be approved.</p></div>}
     {answer === 'licensed' && <RightsMaterials releaseId={releaseId} materials={data.materials} editable={editable} />}
+    {answer === 'licensed' && data.materials.some((material) => !material.document_asset_id) && <div className="mt-4 flex gap-3 rounded-md border border-amber-400/30 bg-amber-400/5 p-4 text-sm text-amber-200"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" /><p>Without a license document, MeJay checks these rights by hand before approving. Attach the license or agreement to speed up review.</p></div>}
 
     <section className="mt-8"><h2 className="text-base font-semibold">Certifications</h2><p className="mt-1 text-sm text-zinc-400">Check each statement that is true. All are required.</p>
       <div className="mt-3 grid gap-3">{data.statements.map((statement) => <Label key={statement.key} className={`flex cursor-pointer items-start gap-3 rounded-md border p-4 ${accepted.includes(statement.key) ? 'border-emerald-400/40 bg-emerald-400/5' : 'border-white/10 bg-[#141417]'}`}>

@@ -272,9 +272,23 @@ export type MarketplaceFinanceSummary = {
     pendingTransfers: {count: number; amountMinor: number}
     failedTransfers: {count: number; amountMinor: number}
   }
+  /** One row per artist account across every matching order (absent from older API responses). */
+  byProvider?: Array<{
+    providerId: string | null
+    providerName: string | null
+    orders: number
+    grossMinor: number
+    platformCommissionMinor: number
+    artistAllocationMinor: number
+    artistEarningsMinor: number
+    refundsMinor: number
+    pendingPayoutMinor: number
+    paidOutMinor: number
+  }>
   transactions: Array<{
     orderId: string
     paidAt: string
+    providerId?: string | null
     providerName: string | null
     releaseTitle: string
     songTitle?: string | null
@@ -291,12 +305,53 @@ export type MarketplaceFinanceSummary = {
   }>
 }
 
-/** Read-only marketplace finance totals and transactions (marketplace admins only). */
-export function getMarketplaceFinance(filters: MarketplaceFinanceFilters): Promise<MarketplaceFinanceSummary> {
+function financeQuery(filters: MarketplaceFinanceFilters): string {
   const params = new URLSearchParams()
   for (const [key, value] of Object.entries(filters)) if (value) params.set(key, value)
-  const query = params.size ? `?${params.toString()}` : ''
-  return request(`/api/marketplace-admin/finance${query}`)
+  return params.size ? `?${params.toString()}` : ''
+}
+
+/** Read-only marketplace finance totals and transactions (marketplace admins only). */
+export function getMarketplaceFinance(filters: MarketplaceFinanceFilters): Promise<MarketplaceFinanceSummary> {
+  return request(`/api/marketplace-admin/finance${financeQuery(filters)}`)
+}
+
+/** Downloads every order matching the filters as CSV (the page lists only the latest 500). */
+export async function downloadMarketplaceFinanceCsv(filters: MarketplaceFinanceFilters): Promise<void> {
+  const response = await apiFetch(`/api/marketplace-admin/finance/export${financeQuery(filters)}`, {cache: 'no-store'})
+  if (!response.ok) throw new Error(`Export failed (${response.status})`)
+  const blob = await response.blob()
+  const fileName = (response.headers.get('content-disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'mejay-sales.csv'
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = fileName
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+export type FinanceOrderDetail = {
+  order: {
+    id: string; created_at: string; paid_at: string | null; purchase_type: string | null
+    buyer_user_id: string | null; buyer_email: string | null; buyer_account_email: string | null; buyer_country_code: string | null; guest_checkout: boolean
+    provider_profile_id: string | null; provider_name: string | null; currency: string
+    gross_amount_minor: number; platform_fee_minor: number; provider_proceeds_minor: number; platform_fee_bps: number | null
+    platform_commission_minor: number; processing_fees_recovered_minor: number; artist_earnings_minor: number
+    stripe_fee_minor: number | null; refunded_amount_minor: number; transfer_reversed_minor: number | null
+    payment_status: string; transfer_status: string; dispute_status: string; livemode: boolean | null
+    stripe_checkout_session_id: string | null; stripe_payment_intent_id: string | null; stripe_charge_id: string | null
+    stripe_transfer_id: string | null; stripe_transfer_reversal_id: string | null; stripe_destination_account_id: string | null
+  }
+  items: Array<{id: string; product_name: string; release_id: string | null; release_title: string; artist_name: string; song_title: string | null; unit_amount_minor: number; currency: string}>
+  splits: Array<{track_title: string; payee_name: string; payee_role: string | null; share_bps: number; amount_minor: number}>
+  entitlements: Array<{id: string; status: string; delivery_status: string | null; delivery_available_at: string | null; granted_at: string; file_count: number; download_count: number; last_downloaded_at: string | null}>
+  ledger: Array<{id: string; transaction_type: string; stripe_reference_id: string | null; occurred_at: string; entries: Array<{account: string; debitMinor: number; creditMinor: number}>}>
+  emails: Array<{kind: string; status: string; attempts: number; sent_at: string | null; created_at: string}>
+}
+
+/** Everything recorded about one order (marketplace admins only). */
+export function getMarketplaceFinanceOrder(orderId: string): Promise<FinanceOrderDetail> {
+  return request(`/api/marketplace-admin/finance/orders/${encodeURIComponent(orderId)}`)
 }
 
 export type ReleaseReview = {
@@ -315,6 +370,8 @@ export type ReleaseReview = {
   tracks: Array<{
     id: string; title: string; version_title: string | null; track_number: number; explicit: boolean; language_code: string | null
     isrc: string | null; isrc_source: string | null; audio_ready: boolean
+    /** Latest ready master, playable by staff through reviewAssetUrl (absent from older API responses). */
+    audio_asset_id?: string | null
     contributors: Array<{name: string; role: string; publisherName: string | null}>
     featured_artists: Array<{id: string; name: string}>
   }>
