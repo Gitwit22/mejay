@@ -1,6 +1,6 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {getReviewAsset} from './index'
+import {exportFinance, getFinanceOrder, getReviewAsset} from './index'
 
 const {getSessionUserId} = vi.hoisted(() => ({getSessionUserId: vi.fn()}))
 
@@ -63,5 +63,49 @@ describe('staff review asset route', () => {
     const {value, getExact} = context({range: 'bytes=0-99'}, false)
     expect((await getReviewAsset(value)).status).toBe(403)
     expect(getExact).not.toHaveBeenCalled()
+  })
+})
+
+describe('finance export and order routes', () => {
+  beforeEach(() => {
+    getSessionUserId.mockReset().mockResolvedValue('admin-1')
+  })
+
+  function financeDb(role: string | null) {
+    return {
+      prepare: (sql: string) => {
+        const statement = {
+          bind: () => statement,
+          first: async () => sql.includes('marketplace_staff') ? (role ? {role} : null) : null,
+          all: async () => ({results: []}),
+        }
+        return statement
+      },
+    }
+  }
+  const financeContext = (role: string | null, url = 'https://mejay.app/api/marketplace-admin/finance/export?from=2026-10-01&to=2026-10-28', params: Record<string, string> = {}) =>
+    ({request: new Request(url), env: {DB: financeDb(role)} as never, params})
+
+  it('downloads the filtered orders as a private CSV attachment for admins', async () => {
+    const response = await exportFinance(financeContext('admin'))
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('text/csv')
+    expect(response.headers.get('content-disposition')).toBe('attachment; filename="mejay-sales-2026-10-01-to-2026-10-28.csv"')
+    expect(response.headers.get('cache-control')).toContain('no-store')
+    expect(await response.text()).toMatch(/^order_id,paid_at_utc,/)
+  })
+
+  it('refuses reviewers and signed-out visitors, and rejects bad filters', async () => {
+    expect((await exportFinance(financeContext('reviewer'))).status).toBe(403)
+    expect((await getFinanceOrder(financeContext('reviewer', 'https://mejay.app/x', {orderId: 'o1'}))).status).toBe(403)
+    getSessionUserId.mockResolvedValueOnce(null)
+    expect((await exportFinance(financeContext('admin'))).status).toBe(401)
+    expect((await exportFinance(financeContext('admin', 'https://mejay.app/api/marketplace-admin/finance/export?from=10/01/2026'))).status).toBe(400)
+  })
+
+  it('reports an unknown order as not found', async () => {
+    const response = await getFinanceOrder(financeContext('admin', 'https://mejay.app/x', {orderId: 'missing'}))
+    expect(response.status).toBe(404)
+    expect(await response.json()).toMatchObject({error: 'order_not_found'})
   })
 })

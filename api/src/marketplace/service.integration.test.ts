@@ -840,6 +840,42 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       expect(filtered.totals.orders).toBe(0)
       const dated = await finance.getSummary(adminUserId, {providerId: fixture.provider.id, from: today, to: today, paymentStatus: 'paid'})
       expect(dated.totals.orders).toBe(1)
+      expect(summary.byProvider).toEqual([expect.objectContaining({providerId: fixture.provider.id, orders: 1, grossMinor: 999, artistEarningsMinor: 840})])
+      expect(summary.transactions[0]).toMatchObject({providerId: fixture.provider.id})
+    })
+
+    it('opens one order with everything recorded about it, and exports orders, for admins only', async () => {
+      const {order, fixture, commerce, buyerId} = await buyLiveRelease('FinanceDetail', 59)
+      const finance = new MarketplaceFinanceService(new Database(connectionString!, pool) as never)
+      const [purchase] = await commerce.listPurchases(buyerId) as Array<{entitlement_id: string; files: Array<{id: string}>}>
+      await commerce.getDownload(buyerId, purchase.entitlement_id, purchase.files[0].id)
+      await pool.query(
+        `INSERT INTO marketplace_download_events (id, entitlement_id, entitlement_file_id, buyer_user_id) VALUES ($1, $2, $3, $4)`,
+        [crypto.randomUUID(), purchase.entitlement_id, purchase.files[0].id, buyerId],
+      )
+
+      await expect(finance.getOrderDetail(reviewerUserId, order.id)).rejects.toMatchObject({code: 'marketplace_admin_required'})
+      await expect(finance.getOrderDetail(adminUserId, crypto.randomUUID())).rejects.toMatchObject({code: 'order_not_found'})
+      const detail = await finance.getOrderDetail(adminUserId, order.id)
+      expect(detail.order).toMatchObject({
+        id: order.id, provider_profile_id: fixture.provider.id, gross_amount_minor: 999, platform_commission_minor: 100,
+        processing_fees_recovered_minor: 59, artist_earnings_minor: 840, payment_status: 'paid', guest_checkout: false,
+        buyer_user_id: buyerId, buyer_account_email: expect.stringContaining('@'), stripe_charge_id: order.stripe_charge_id,
+      })
+      expect(detail.items).toEqual([expect.objectContaining({release_id: fixture.release.id, unit_amount_minor: 999})])
+      expect(detail.entitlements).toEqual([expect.objectContaining({id: purchase.entitlement_id, status: 'active', file_count: 1, download_count: expect.any(Number)})])
+      expect(Number(detail.entitlements[0].download_count)).toBeGreaterThanOrEqual(1)
+      expect(detail.ledger.map((transaction) => transaction.transaction_type)).toContain('sale')
+      const sale = detail.ledger.find((transaction) => transaction.transaction_type === 'sale') as {entries: Array<{account: string; debitMinor: number; creditMinor: number}>}
+      // The sale's double entry balances.
+      expect(sale.entries.reduce((sum, entry) => sum + entry.debitMinor - entry.creditMinor, 0)).toBe(0)
+
+      await expect(finance.exportCsv(reviewerUserId, {})).rejects.toMatchObject({code: 'marketplace_admin_required'})
+      const csv = await finance.exportCsv(adminUserId, {providerId: fixture.provider.id})
+      expect(csv.fileName).toMatch(/^mejay-sales-.*\.csv$/)
+      const lines = csv.data.trimEnd().split('\n')
+      expect(lines[0]).toMatch(/^order_id,paid_at_utc,artist_account/)
+      expect(lines.slice(1).some((line) => line.startsWith(`${order.id},`) && line.includes(',9.99,1.00,0.59,8.40,8.40,'))).toBe(true)
     })
 
     it('sells a single song end to end: price, store, checkout, fulfillment, payout, reporting, takedown', async () => {

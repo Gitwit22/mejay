@@ -3,7 +3,7 @@ import {describe, expect, it, vi} from 'vitest'
 
 import {estimateSale, calculateSaleAmounts, resolvePlatformFeeBps} from './commerce-money'
 import {connectOnboardingStatus} from './connect-service'
-import {buildFinanceSummary, normalizeFinanceFilters, type FinanceOrderRow} from './finance-service'
+import {buildFinanceCsv, buildFinanceSummary, normalizeFinanceFilters, type FinanceOrderRow} from './finance-service'
 import {DEFAULT_MINIMUM_RELEASE_PRICE_MINOR, resolveMinimumReleasePriceMinor} from './sale-policy'
 import {priceSchema, releasePriceSchema} from './schemas'
 import {onRequest as stripeWebhook, stripeKeyLivemode, verifyStripeWebhookSource, verifyStripeWebhookWithAnySecret} from '../routes/stripe-webhook'
@@ -124,6 +124,32 @@ describe('marketplace finance summary', () => {
     expect(totals.artistEarningsAfterAdjustmentsMinor).toBe(2099)
     expect(transactions).toHaveLength(4)
     expect(transactions[0]).not.toHaveProperty('buyerEmail')
+  })
+
+  it('totals sales per artist account across every matching order, largest first', () => {
+    const rows = [
+      order({provider_profile_id: 'p1', provider_name: 'Label'}),
+      order({provider_profile_id: 'p1', provider_name: 'Label', refunded_amount_minor: 500, payment_status: 'partially_refunded'}),
+      order({provider_profile_id: 'p2', provider_name: 'Indie', transfer_status: 'pending'}),
+    ]
+    const {byProvider, totals} = buildFinanceSummary({}, rows, 0)
+    expect(byProvider.map((row) => row.providerName)).toEqual(['Label', 'Indie'])
+    expect(byProvider[0]).toMatchObject({providerId: 'p1', orders: 2, grossMinor: 1998, platformCommissionMinor: 200, artistAllocationMinor: 1680, refundsMinor: 500, artistEarningsMinor: 1259, paidOutMinor: 1680, pendingPayoutMinor: 0})
+    expect(byProvider[1]).toMatchObject({providerId: 'p2', orders: 1, grossMinor: 999, artistEarningsMinor: 840, pendingPayoutMinor: 840, paidOutMinor: 0})
+    // The per-artist rows add back up to the page totals.
+    expect(byProvider.reduce((sum, row) => sum + row.grossMinor, 0)).toBe(totals.grossSalesMinor)
+    expect(byProvider.reduce((sum, row) => sum + row.artistEarningsMinor, 0)).toBe(totals.artistEarningsAfterAdjustmentsMinor)
+  })
+
+  it('exports every order as CSV in dollars, with spreadsheet formulas neutralised', () => {
+    const csv = buildFinanceCsv([
+      order({id: 'o1', release_title: 'Night, Drive', artist_name: '=HYPERLINK("x")', stripe_fee_minor: null}),
+      order({id: 'o2', song_title: 'MIA', paid_at: new Date('2026-10-02T00:00:00Z') as never}),
+    ])
+    const [header, first, second] = csv.trimEnd().split('\n')
+    expect(header.split(',')).toEqual(['order_id', 'paid_at_utc', 'artist_account', 'artist', 'release', 'song', 'currency', 'gross', 'mejay_commission', 'stripe_fees_recovered', 'artist_allocation', 'artist_earnings_after_adjustments', 'stripe_fee', 'refunded', 'payment_status', 'transfer_status', 'dispute_status', 'live_mode'])
+    expect(first).toBe(`o1,2026-10-01T12:00:00.000Z,Label,"'=HYPERLINK(""x"")","Night, Drive",,USD,9.99,1.00,0.59,8.40,8.40,,0.00,paid,transferred,none,false`)
+    expect(second).toContain('o2,2026-10-02T00:00:00.000Z,Label,Artist,Song,MIA,USD,9.99')
   })
 
   it('validates filters', () => {

@@ -6,12 +6,13 @@ import {Link, useSearchParams} from 'react-router-dom'
 import {ReleaseReviewDialog} from '@/app/components/admin/ReleaseReviewDialog'
 import {ChangeRequestsSection} from '@/app/components/admin/ChangeRequestReviewDialog'
 import {StoriesSection} from '@/app/components/admin/stories/StoriesSection'
+import {FinanceOrderDialog} from '@/app/components/admin/FinanceOrderDialog'
 import {Button} from '@/components/ui/button'
 import {Dialog, DialogContent, DialogHeader, DialogTitle} from '@/components/ui/dialog'
 import {Input} from '@/components/ui/input'
 import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
-import {getMarketplaceFinance, type MarketplaceFinanceFilters, commandMarketplaceProvider, commandMarketplaceRelease, recordSplitDispute, retryMarketplacePayouts, type ProviderAdminAction, createIndustryReportingBatch, downloadIndustryReportingBatch, downloadIsrcRegistryExport, getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview, replaceMarketplaceDiscoveryFeatures, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting, type AdminRecord, type IndustryReportingDashboard, type IsrcRegistryRecord, type MarketplaceAdminOverview, type ReleaseAdminAction} from '@/lib/marketplaceAdminApi'
+import {downloadMarketplaceFinanceCsv, getMarketplaceFinance, type MarketplaceFinanceFilters, type MarketplaceFinanceSummary, commandMarketplaceProvider, commandMarketplaceRelease, recordSplitDispute, retryMarketplacePayouts, type ProviderAdminAction, createIndustryReportingBatch, downloadIndustryReportingBatch, downloadIsrcRegistryExport, getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview, replaceMarketplaceDiscoveryFeatures, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting, type AdminRecord, type IndustryReportingDashboard, type IsrcRegistryRecord, type MarketplaceAdminOverview, type ReleaseAdminAction} from '@/lib/marketplaceAdminApi'
 
 type Section = 'pending' | 'changes' | 'stories' | 'catalog' | 'discovery' | 'providers' | 'artists' | 'isrcs' | 'rights' | 'pricing' | 'splits' | 'takedowns' | 'reporting' | 'finance'
 
@@ -317,6 +318,7 @@ function FinanceSection({data}: {data: MarketplaceAdminOverview}) {
   const [filters, setFilters] = useState<MarketplaceFinanceFilters>({})
   const finance = useQuery({queryKey: ['marketplace-admin', 'finance', filters], queryFn: () => getMarketplaceFinance(filters)})
   const update = (key: keyof MarketplaceFinanceFilters, value: string) => setFilters((current) => ({...current, [key]: value || undefined}))
+  const exportCsv = useMutation({mutationFn: () => downloadMarketplaceFinanceCsv(filters), onError: (error) => toast({title: 'Export failed', description: error.message, variant: 'destructive'})})
   const selectClass = 'h-10 rounded-md border border-white/10 bg-[#141417] px-3 text-sm text-zinc-200'
   const releases = [...new Map([...data.catalog, ...data.takedowns.filter((row) => row.release_id)]
     .map((row) => [String(row.release_id ?? row.id), String(row.title ?? row.release_title ?? row.id)] as const)).entries()]
@@ -329,13 +331,15 @@ function FinanceSection({data}: {data: MarketplaceAdminOverview}) {
       <label className="text-xs text-zinc-500">Artist account<select className={`mt-1 block ${selectClass}`} value={filters.providerId ?? ''} onChange={(event) => update('providerId', event.target.value)}><option value="">All artist accounts</option>{data.providers.map((row) => <option key={String(row.id)} value={String(row.id)}>{formatValue(row.display_name)}</option>)}</select></label>
       <label className="text-xs text-zinc-500">Release<select className={`mt-1 block ${selectClass}`} value={filters.releaseId ?? ''} onChange={(event) => update('releaseId', event.target.value)}><option value="">All releases</option>{releases.map((row) => <option key={row.id} value={row.id}>{row.title}</option>)}</select></label>
       <label className="text-xs text-zinc-500">Status<select className={`mt-1 block ${selectClass}`} value={filters.status ?? ''} onChange={(event) => update('status', event.target.value)}>{financeStatuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      <Button type="button" variant="outline" className="gap-2" disabled={exportCsv.isPending} onClick={() => exportCsv.mutate()}><Download className="h-4 w-4" />{exportCsv.isPending ? 'Exporting…' : 'Export CSV'}</Button>
     </div>
-    {finance.isLoading ? <Skeleton className="h-72 bg-white/5" /> : finance.isError || !finance.data ? <ErrorState message={finance.error?.message || 'Finance reporting is unavailable'} /> : <FinanceReport summary={finance.data} />}
+    {finance.isLoading ? <Skeleton className="h-72 bg-white/5" /> : finance.isError || !finance.data ? <ErrorState message={finance.error?.message || 'Finance reporting is unavailable'} /> : <FinanceReport summary={finance.data} selectedProviderId={filters.providerId} onSelectProvider={(providerId) => update('providerId', providerId ?? '')} />}
   </div>
 }
 
-function FinanceReport({summary}: {summary: Awaited<ReturnType<typeof getMarketplaceFinance>>}) {
+function FinanceReport({summary, selectedProviderId, onSelectProvider}: {summary: MarketplaceFinanceSummary; selectedProviderId?: string; onSelectProvider: (providerId: string | null) => void}) {
   const totals = summary.totals
+  const [openOrderId, setOpenOrderId] = useState<string | null>(null)
   const metrics: Array<[string, string, string?]> = [
     ['Gross Marketplace Sales', money(totals.grossSalesMinor), `${totals.orders} orders`],
     ['Stripe Fees', money(totals.stripeFeesMinor), totals.ordersWithUnknownStripeFee ? `${totals.ordersWithUnknownStripeFee} not yet reported by Stripe` : undefined],
@@ -349,10 +353,38 @@ function FinanceReport({summary}: {summary: Awaited<ReturnType<typeof getMarketp
   ]
   return <div className="space-y-7">
     <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{metrics.map(([label, value, detail]) => <div key={label} className="border border-white/10 bg-[#141417] p-5"><dt className="text-xs uppercase text-zinc-500">{label}</dt><dd className="mt-3 text-2xl font-bold tabular-nums">{value}</dd>{detail && <dd className="mt-1 text-xs text-zinc-500">{detail}</dd>}</div>)}</dl>
-    <section><h2 className="text-lg font-semibold">Transactions</h2><p className="mt-1 text-sm text-zinc-500">Latest {summary.transactions.length} orders. Sale amounts are fixed at the time of purchase; refunds and disputes are recorded separately.</p>
-      {summary.transactions.length === 0 ? <div className="mt-4 border-y border-dashed border-white/10 py-12 text-center text-sm text-zinc-500">No orders match these filters.</div> : <div className="mt-4 overflow-x-auto border-y border-white/10"><table className="w-full min-w-[1100px] text-left text-sm"><thead className="text-xs uppercase text-zinc-500"><tr><th className="px-3 py-3">Date</th><th className="px-3 py-3">Release</th><th className="px-3 py-3">Artist account</th><th className="px-3 py-3">Gross</th><th className="px-3 py-3">Commission</th><th className="px-3 py-3">Stripe fee</th><th className="px-3 py-3">Artist</th><th className="px-3 py-3">Refunded</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Order</th></tr></thead><tbody className="divide-y divide-white/10">{summary.transactions.map((row) => <tr key={row.orderId}><td className="px-3 py-3">{formatDate(row.paidAt)}</td><td className="px-3 py-3"><p>{row.songTitle ?? row.releaseTitle}</p><p className="text-xs text-zinc-500">{row.songTitle ? `Song · ${row.releaseTitle} · ` : ''}{row.artistName}</p></td><td className="px-3 py-3 text-zinc-300">{row.providerName ?? '-'}</td><td className="px-3 py-3 tabular-nums">{money(row.grossMinor)}</td><td className="px-3 py-3 tabular-nums">{money(row.platformCommissionMinor)}</td><td className="px-3 py-3 tabular-nums">{row.stripeFeeMinor === null ? 'Pending' : money(row.stripeFeeMinor)}</td><td className="px-3 py-3 tabular-nums">{money(row.artistAllocationMinor)}</td><td className="px-3 py-3 tabular-nums">{row.refundedMinor ? money(row.refundedMinor) : '-'}</td><td className="px-3 py-3 capitalize"><p>{row.paymentStatus.replace(/_/g, ' ')}</p><p className="text-xs text-zinc-500">Transfer {row.transferStatus}{row.disputeStatus !== 'none' ? ` · dispute ${row.disputeStatus}` : ''}{row.livemode === false ? ' · test' : ''}</p></td><td className="px-3 py-3 font-mono text-xs" title={row.orderId}>{shortId(row.orderId)}</td></tr>)}</tbody></table></div>}
+    <SalesByArtist rows={summary.byProvider ?? []} selectedProviderId={selectedProviderId} onSelect={onSelectProvider} />
+    <section><h2 className="text-lg font-semibold">Transactions</h2><p className="mt-1 text-sm text-zinc-500">Latest {summary.transactions.length} orders. Sale amounts are fixed at the time of purchase; refunds and disputes are recorded separately. Select an order to see everything about it; Export CSV includes every matching order.</p>
+      {summary.transactions.length === 0 ? <div className="mt-4 border-y border-dashed border-white/10 py-12 text-center text-sm text-zinc-500">No orders match these filters.</div> : <div className="mt-4 overflow-x-auto border-y border-white/10"><table className="w-full min-w-[1100px] text-left text-sm"><thead className="text-xs uppercase text-zinc-500"><tr><th className="px-3 py-3">Date</th><th className="px-3 py-3">Release</th><th className="px-3 py-3">Artist account</th><th className="px-3 py-3">Gross</th><th className="px-3 py-3">Commission</th><th className="px-3 py-3">Stripe fee</th><th className="px-3 py-3">Artist</th><th className="px-3 py-3">Refunded</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Order</th></tr></thead><tbody className="divide-y divide-white/10">{summary.transactions.map((row) => <tr key={row.orderId} tabIndex={0} aria-label={`Open order ${row.orderId}`} className="cursor-pointer hover:bg-white/[0.03] focus:bg-white/[0.05] focus:outline-none" onClick={() => setOpenOrderId(row.orderId)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setOpenOrderId(row.orderId) } }}><td className="px-3 py-3">{formatDate(row.paidAt)}</td><td className="px-3 py-3"><p>{row.songTitle ?? row.releaseTitle}</p><p className="text-xs text-zinc-500">{row.songTitle ? `Song · ${row.releaseTitle} · ` : ''}{row.artistName}</p></td><td className="px-3 py-3 text-zinc-300">{row.providerName ?? '-'}</td><td className="px-3 py-3 tabular-nums">{money(row.grossMinor)}</td><td className="px-3 py-3 tabular-nums">{money(row.platformCommissionMinor)}</td><td className="px-3 py-3 tabular-nums">{row.stripeFeeMinor === null ? 'Pending' : money(row.stripeFeeMinor)}</td><td className="px-3 py-3 tabular-nums">{money(row.artistAllocationMinor)}</td><td className="px-3 py-3 tabular-nums">{row.refundedMinor ? money(row.refundedMinor) : '-'}</td><td className="px-3 py-3 capitalize"><p>{row.paymentStatus.replace(/_/g, ' ')}</p><p className="text-xs text-zinc-500">Transfer {row.transferStatus}{row.disputeStatus !== 'none' ? ` · dispute ${row.disputeStatus}` : ''}{row.livemode === false ? ' · test' : ''}</p></td><td className="px-3 py-3 font-mono text-xs" title={row.orderId}>{shortId(row.orderId)}</td></tr>)}</tbody></table></div>}
     </section>
+    <FinanceOrderDialog orderId={openOrderId} onClose={() => setOpenOrderId(null)} />
   </div>
+}
+
+/** Sales per artist account for the current filters; selecting a row filters the whole page to that artist. */
+function SalesByArtist({rows, selectedProviderId, onSelect}: {rows: NonNullable<MarketplaceFinanceSummary['byProvider']>; selectedProviderId?: string; onSelect: (providerId: string | null) => void}) {
+  return <section><h2 className="text-lg font-semibold">Sales by artist</h2>
+    <p className="mt-1 text-sm text-zinc-500">Every order matching the filters, grouped by artist account. Select an artist to see only their sales; select again to show everyone.</p>
+    {rows.length === 0 ? <div className="mt-4 border-y border-dashed border-white/10 py-10 text-center text-sm text-zinc-500">No sales match these filters.</div>
+      : <div className="mt-4 overflow-x-auto border-y border-white/10"><table className="w-full min-w-[900px] text-left text-sm">
+        <thead className="text-xs uppercase text-zinc-500"><tr><th className="px-3 py-3">Artist account</th><th className="px-3 py-3">Orders</th><th className="px-3 py-3">Gross</th><th className="px-3 py-3">MEJay commission</th><th className="px-3 py-3">Artist earnings</th><th className="px-3 py-3">Refunds</th><th className="px-3 py-3">Paid out</th><th className="px-3 py-3">Waiting to pay out</th></tr></thead>
+        <tbody className="divide-y divide-white/10">{rows.map((row) => {
+          const selected = Boolean(row.providerId) && row.providerId === selectedProviderId
+          return <tr key={row.providerId ?? 'none'} aria-selected={selected} className={selected ? 'bg-emerald-400/10' : undefined}>
+            <td className="px-3 py-3">{row.providerId
+              ? <button type="button" className="text-left font-medium text-emerald-300 hover:underline" onClick={() => onSelect(selected ? null : row.providerId)}>{row.providerName ?? 'Unnamed account'}{selected ? ' (showing only)' : ''}</button>
+              : <span className="text-zinc-400">No artist account</span>}</td>
+            <td className="px-3 py-3 tabular-nums">{row.orders}</td>
+            <td className="px-3 py-3 tabular-nums">{money(row.grossMinor)}</td>
+            <td className="px-3 py-3 tabular-nums">{money(row.platformCommissionMinor)}</td>
+            <td className="px-3 py-3 tabular-nums">{money(row.artistEarningsMinor)}</td>
+            <td className="px-3 py-3 tabular-nums">{row.refundsMinor ? money(row.refundsMinor) : '-'}</td>
+            <td className="px-3 py-3 tabular-nums">{money(row.paidOutMinor)}</td>
+            <td className="px-3 py-3 tabular-nums">{money(row.pendingPayoutMinor)}</td>
+          </tr>
+        })}</tbody>
+      </table></div>}
+  </section>
 }
 
 function money(amountMinor: number) { return new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD'}).format(amountMinor / 100) }

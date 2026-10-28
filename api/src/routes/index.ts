@@ -46,7 +46,7 @@ import {
   updateTrack,
   finalizeUpload,
 } from './marketplace'
-import {commandProvider as marketplaceAdminCommandProvider, commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview, recordSplitDispute, replaceDiscoveryFeatures, retryProviderPayouts, getFinanceSummary as marketplaceAdminFinance, getReleaseReview as marketplaceAdminReleaseReview, getReviewAsset as marketplaceAdminReviewAsset, listChangeRequests, getChangeRequestReview, commandChangeRequest} from './marketplace-admin'
+import {commandProvider as marketplaceAdminCommandProvider, commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview, recordSplitDispute, replaceDiscoveryFeatures, retryProviderPayouts, getFinanceSummary as marketplaceAdminFinance, exportFinance as marketplaceAdminFinanceExport, getFinanceOrder as marketplaceAdminFinanceOrder, getReleaseReview as marketplaceAdminReleaseReview, getReviewAsset as marketplaceAdminReviewAsset, listChangeRequests, getChangeRequestReview, commandChangeRequest} from './marketplace-admin'
 import {createIndustryReportingBatch, createIndustryReportingCorrection, exportIndustryReportingBatch, getIndustryReporting, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting} from './marketplace-admin/reporting'
 import {onRequest as stripeWebhook} from './stripe-webhook'
 import {getCatalogAsset, getCatalogRelease, getPublicArtist, listCatalog, recordCatalogPreview} from './store'
@@ -162,6 +162,8 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'post', path: '/api/marketplace-admin/payouts/retry', handler: retryProviderPayouts},
   {method: 'get', path: '/api/marketplace-admin/overview', handler: marketplaceAdminOverview},
   {method: 'get', path: '/api/marketplace-admin/finance', handler: marketplaceAdminFinance},
+  {method: 'get', path: '/api/marketplace-admin/finance/export', handler: marketplaceAdminFinanceExport},
+  {method: 'get', path: '/api/marketplace-admin/finance/orders/:orderId', handler: marketplaceAdminFinanceOrder},
   {method: 'get', path: '/api/marketplace-admin/releases/:releaseId/review', handler: marketplaceAdminReleaseReview},
   {method: 'get', path: '/api/marketplace-admin/assets/:assetId', handler: marketplaceAdminReviewAsset},
   {method: 'get', path: '/api/marketplace-admin/change-requests', handler: listChangeRequests},
