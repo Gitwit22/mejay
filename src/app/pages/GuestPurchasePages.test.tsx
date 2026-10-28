@@ -68,6 +68,7 @@ describe('guest download page', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Email me new links'}))
     await waitFor(() => expect(recoverGuestAccess).toHaveBeenCalledWith('fan@example.test'))
     expect(await screen.findByText('If that email has MeJay purchases, new download links are on the way.')).toBeInTheDocument()
+    expect(screen.getByText(/Check your spam or junk folder/)).toBeInTheDocument()
   })
 })
 
@@ -83,6 +84,7 @@ describe('guest purchase complete page', () => {
     expect(screen.getByText('Pre-order · releases Nov 10, 2026, 8:00 AM EST')).toBeInTheDocument()
     expect(screen.getByText("You'll be charged today. Downloads become available on release day.")).toBeInTheDocument()
     expect(screen.getByText(/to f•••@example\.test on release day/)).toBeInTheDocument()
+    expect(screen.getByText(/may be in your spam or junk folder/)).toBeInTheDocument()
     expect(screen.getByRole('link', {name: 'Create a free account'})).toHaveAttribute('href', expect.stringContaining('/login?intent=signup'))
     expect(getGuestOrderStatus).toHaveBeenCalledWith('cs_test_123456789')
   })
