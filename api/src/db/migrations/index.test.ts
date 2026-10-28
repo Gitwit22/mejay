@@ -38,6 +38,7 @@ describe('runMigrations', () => {
       {version: 22, name: 'release_change_requests'},
       {version: 23, name: 'editorial_stories'},
       {version: 24, name: 'editorial_story_views'},
+      {version: 25, name: 'preview_length'},
     ])
   })
 

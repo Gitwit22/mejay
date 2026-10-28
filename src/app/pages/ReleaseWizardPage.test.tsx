@@ -3,7 +3,7 @@ import {fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {MemoryRouter, Route, Routes} from 'react-router-dom'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {createProviderPricing, generateProviderIsrc, getMarketplacePricingPolicy, getProviderRelease, getReleaseCertification, listProviderArtists, replaceProviderSplits, replaceTrackCredits, updateProviderRelease, updateProviderTrack, withdrawProviderRelease, type ProviderReleaseDetail} from '@/lib/providerApi'
+import {createProviderPricing, generateProviderIsrc, getMarketplacePricingPolicy, getProviderRelease, getReleaseCertification, listProviderArtists, replaceProviderSplits, replaceTrackCredits, updateProviderRelease, updateProviderTrack, withdrawProviderRelease, type ProviderReleaseDetail, type ReleaseCertificationState} from '@/lib/providerApi'
 import ReleaseWizardPage from './ReleaseWizardPage'
 
 // Radix checkboxes measure themselves; jsdom has no ResizeObserver.
@@ -50,6 +50,19 @@ function renderStep(step: string) {
     <Routes><Route path="/app/artist/releases/:releaseId/edit/:step" element={<ReleaseWizardPage />} /></Routes>
   </MemoryRouter></QueryClientProvider>)
 }
+
+/** A complete certification response, like the API's; any step that reaches Rights Certification can render it. */
+function certification(overrides: Partial<ReleaseCertificationState> = {}): ReleaseCertificationState {
+  return {
+    version: 'v', policy: 'MeJay accepts original music.', statements: [], requiredKeys: [], tracksWithoutIsrc: 0, rightsStatus: 'NOT_CERTIFIED',
+    thirdPartyMaterial: null, draft: null, materials: [], problems: ['rights certification'], history: [], ...overrides,
+  }
+}
+
+// Each test starts from a complete certification response, so one test's override never leaks into the next.
+beforeEach(() => {
+  vi.mocked(getReleaseCertification).mockReset().mockResolvedValue(certification())
+})
 
 describe('release wizard: UPC and ISRCs', () => {
   beforeEach(() => {
@@ -156,7 +169,7 @@ describe('release wizard: song previews', () => {
   it('lets the artist allow previews before release and saves the choice', async () => {
     vi.mocked(getProviderRelease).mockResolvedValue(detail())
     renderStep('release-information')
-    expect(await screen.findByText(/Fans hear a 10-second clip that fades in and out/)).toBeInTheDocument()
+    expect(await screen.findByText(/Fans hear a short clip that fades in and out/)).toBeInTheDocument()
     expect(screen.getByLabelText('After release only')).toBeChecked()
     fireEvent.click(screen.getByLabelText('Before release too (during pre-orders)'))
     expect(screen.getByText(/Turn on pre-orders above to use this/)).toBeInTheDocument()
@@ -180,6 +193,43 @@ describe('release wizard: song previews', () => {
     fireEvent.change(input, {target: {value: ''}})
     fireEvent.click(screen.getByRole('button', {name: 'Save track metadata'}))
     await waitFor(() => expect(updateProviderTrack).toHaveBeenLastCalledWith('track-1', expect.objectContaining({previewStartMs: null})))
+  })
+
+  it('picks the preview section on the real song, keeping the start field and save in step', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail({tracks: [{...track, preview_start_ms: 60_000, preview_length_ms: 15_000, listen_asset_id: 'mp3-1'}]}))
+    renderStep('track-metadata')
+    const section = await screen.findByRole('slider', {name: 'Preview section of Night Drive'})
+    expect(document.querySelector('audio')).toHaveAttribute('src', expect.stringContaining('/api/marketplace/assets/mp3-1/audio'))
+    fireEvent.keyDown(section, {key: 'ArrowRight', shiftKey: true})
+    expect(screen.getByLabelText('Preview starts at')).toHaveValue('1:05')
+    expect(section).toHaveAttribute('aria-valuetext', 'Preview 1:05 to 1:20')
+    // Typing still works and moves the section.
+    fireEvent.change(screen.getByLabelText('Preview starts at'), {target: {value: '2:00'}})
+    expect(section).toHaveAttribute('aria-valuetext', 'Preview 2:00 to 2:15')
+    fireEvent.click(screen.getByRole('button', {name: 'Save track metadata'}))
+    await waitFor(() => expect(updateProviderTrack).toHaveBeenCalledWith('track-1', expect.objectContaining({previewStartMs: 120_000, previewLengthMs: 15_000})))
+  })
+
+  it('shows no picker until the song is uploaded', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail({tracks: [{...track, listen_asset_id: null}]}))
+    renderStep('track-metadata')
+    await screen.findByLabelText('Preview starts at')
+    expect(screen.queryByRole('slider')).not.toBeInTheDocument()
+  })
+
+  it('lets the artist choose 5 to 30 seconds of preview, checking the start against that length', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail({tracks: [{...track, preview_start_ms: 160_000, preview_length_ms: 15_000}]}))
+    renderStep('track-metadata')
+    const length = await screen.findByLabelText('Preview length')
+    expect(length).toHaveValue('15')
+    expect([...(length as HTMLSelectElement).options].map((option) => option.value)).toEqual(Array.from({length: 26}, (_, index) => String(index + 5)))
+    expect(screen.getByText(/Fans hear 15 seconds from this point/)).toBeInTheDocument()
+    fireEvent.change(length, {target: {value: '30'}})
+    expect(screen.getByText('Start at least 30 seconds before the end of the song.')).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Save track metadata'})).toBeDisabled()
+    fireEvent.change(length, {target: {value: '20'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Save track metadata'}))
+    await waitFor(() => expect(updateProviderTrack).toHaveBeenCalledWith('track-1', expect.objectContaining({previewStartMs: 160_000, previewLengthMs: 20_000})))
   })
 })
 
@@ -274,7 +324,10 @@ describe('release wizard: locked while in review', () => {
 
   it('reminds the artist to confirm the certification again after an edit', async () => {
     vi.mocked(getProviderRelease).mockResolvedValue(detail())
-    vi.mocked(getReleaseCertification).mockResolvedValue({draft: null, history: [{id: 'cert-1'}], previous: {version: 'v', thirdPartyMaterial: 'none', accepted: [], certifiedAt: '2026-10-22T00:00:00.000Z'}} as never)
+    vi.mocked(getReleaseCertification).mockResolvedValue(certification({
+      history: [{id: 'cert-1', certification_version: 'v', third_party_material: 'none', rights_status: 'CERTIFIED_ORIGINAL', certified_at: '2026-10-22T00:00:00.000Z'}],
+      previous: {version: 'v', thirdPartyMaterial: 'none', accepted: [], certifiedAt: '2026-10-22T00:00:00.000Z'},
+    }))
     renderStep('release-information')
     expect(await screen.findByText('Confirm the rights certification again before you resubmit.')).toBeInTheDocument()
     expect(screen.getByRole('link', {name: 'Go to certification'})).toHaveAttribute('href', '/app/artist/releases/release-1/edit/certification')

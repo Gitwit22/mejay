@@ -4,8 +4,11 @@ import type {AudioProbe} from './probe'
 /** Delivery MP3: constant 320 kbps, the highest MP3 bitrate players universally support. */
 export const DELIVERY_BITRATE = '320k'
 export const PREVIEW_BITRATE = '128k'
-/** Store previews are 10-second clips that fade in and out. */
-export const PREVIEW_SECONDS = 10
+/** Store previews fade in and out; the artist picks each song's length within these bounds. */
+export const MIN_PREVIEW_LENGTH_MS = 5_000
+export const MAX_PREVIEW_LENGTH_MS = 30_000
+/** Length of clips made before artists could choose one, and of jobs queued before then. */
+export const LEGACY_PREVIEW_LENGTH_MS = 10_000
 export const PREVIEW_FADE_IN_SECONDS = 1
 export const PREVIEW_FADE_OUT_SECONDS = 1.5
 /** Automatic start for songs long enough to skip the intro. */
@@ -68,28 +71,29 @@ export function deliveryArgs(args: {sourcePath: string; coverPath: string | null
   ]
 }
 
-/** Latest start (ms) that still leaves a full 10-second clip; 0 for songs shorter than that. */
-export function maxPreviewStartMs(durationMs: number): number {
-  return Math.max(0, Math.floor(durationMs - PREVIEW_SECONDS * 1000))
+/** Latest start (ms) that still leaves a full clip of `lengthMs`; 0 for songs shorter than that. */
+export function maxPreviewStartMs(durationMs: number, lengthMs: number = LEGACY_PREVIEW_LENGTH_MS): number {
+  return Math.max(0, Math.floor(durationMs - lengthMs))
 }
 
 /**
  * Where the preview starts. `requestedStartMs` is the artist's choice (null = automatic: 30 s in for
- * songs of 90 s or more, otherwise the top), clamped so the clip never runs past the end.
+ * songs of 90 s or more, otherwise the top), clamped so the clip never runs past the end. Songs
+ * shorter than `lengthMs` get a clip as long as the song.
  */
-export function previewWindow(durationMs: number, requestedStartMs: number | null = null): {startSeconds: number; lengthSeconds: number} {
+export function previewWindow(durationMs: number, requestedStartMs: number | null = null, lengthMs: number = LEGACY_PREVIEW_LENGTH_MS): {startSeconds: number; lengthSeconds: number} {
   const durationSeconds = durationMs / 1000
   const wanted = requestedStartMs === null || requestedStartMs === undefined
     ? (durationSeconds >= AUTO_START_SECONDS * 3 ? AUTO_START_SECONDS : 0)
     : requestedStartMs / 1000
-  const startSeconds = Math.round(Math.max(0, Math.min(wanted, maxPreviewStartMs(durationMs) / 1000)) * 1000) / 1000
-  const lengthSeconds = Math.max(1, Math.min(PREVIEW_SECONDS, durationSeconds - startSeconds))
+  const startSeconds = Math.round(Math.max(0, Math.min(wanted, maxPreviewStartMs(durationMs, lengthMs) / 1000)) * 1000) / 1000
+  const lengthSeconds = Math.max(1, Math.min(lengthMs / 1000, durationSeconds - startSeconds))
   return {startSeconds, lengthSeconds: Math.round(lengthSeconds * 1000) / 1000}
 }
 
-/** 10-second tagged clip that fades in and out, for store previews. */
-export function previewArgs(args: {sourcePath: string; coverPath: string | null; outputPath: string; tags: TrackTagData; probe: AudioProbe; requestedStartMs?: number | null}): string[] {
-  const {startSeconds, lengthSeconds} = previewWindow(args.probe.durationMs, args.requestedStartMs ?? null)
+/** Tagged clip of the artist's chosen length that fades in and out, for store previews. */
+export function previewArgs(args: {sourcePath: string; coverPath: string | null; outputPath: string; tags: TrackTagData; probe: AudioProbe; requestedStartMs?: number | null; lengthMs?: number}): string[] {
+  const {startSeconds, lengthSeconds} = previewWindow(args.probe.durationMs, args.requestedStartMs ?? null, args.lengthMs ?? LEGACY_PREVIEW_LENGTH_MS)
   const fadeIn = Math.min(PREVIEW_FADE_IN_SECONDS, lengthSeconds / 4)
   const fadeOut = Math.min(PREVIEW_FADE_OUT_SECONDS, lengthSeconds / 4)
   return [

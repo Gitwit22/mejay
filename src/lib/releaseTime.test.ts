@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {formatPreviewStart, formatReleaseTime, meetsReleaseLead, parsePreviewStart, preorderLabel, utcToZonedLocal, zonedLocalToUtcIso} from './releaseTime'
+import {automaticPreviewStartMs, clampPreviewStartMs, formatPreviewStart, formatReleaseTime, latestPreviewStartMs, meetsReleaseLead, parsePreviewStart, preorderLabel, utcToZonedLocal, zonedLocalToUtcIso} from './releaseTime'
 
 describe('release time conversion', () => {
   it('converts a wall time in the chosen timezone to UTC across DST', () => {
@@ -36,5 +36,21 @@ describe('preview start input', () => {
     expect(parsePreviewStart('soon')).toBeUndefined()
     expect(formatPreviewStart(65_000)).toBe('1:05')
     expect(formatPreviewStart(null)).toBe('')
+  })
+})
+
+describe('preview window placement', () => {
+  it('starts automatic previews 0:30 in on songs of 1:30 or more, like the converter', () => {
+    expect(automaticPreviewStartMs(90_000)).toBe(30_000)
+    expect(automaticPreviewStartMs(89_999)).toBe(0)
+  })
+
+  it('keeps the whole window inside the song, on whole seconds', () => {
+    expect(latestPreviewStartMs(200_500, 15_000)).toBe(185_000)
+    expect(latestPreviewStartMs(8_000, 15_000)).toBe(0)
+    expect(clampPreviewStartMs(64_400, 200_000, 15_000)).toBe(64_000)
+    expect(clampPreviewStartMs(64_600, 200_000, 15_000)).toBe(65_000)
+    expect(clampPreviewStartMs(-3_000, 200_000, 15_000)).toBe(0)
+    expect(clampPreviewStartMs(199_000, 200_000, 15_000)).toBe(185_000)
   })
 })

@@ -4,6 +4,7 @@ import {ArrowLeft, Clock, Lock, Plus, ShieldCheck, Trash2, Upload, XCircle} from
 import {Link, useParams} from 'react-router-dom'
 
 import {AdditionalArtistsField} from '@/app/components/provider/AdditionalArtistsField'
+import {PreviewPicker} from '@/app/components/provider/PreviewPicker'
 import {ReleaseDateTimePicker} from '@/app/components/provider/ReleaseDateTimePicker'
 import {Button} from '@/components/ui/button'
 import {Checkbox} from '@/components/ui/checkbox'
@@ -16,6 +17,7 @@ import {
   getProviderRelease,
   getReleaseChangeRequest,
   listProviderArtists,
+  providerAudioUrl,
   saveReleaseChangeRequest,
   submitReleaseChangeRequest,
   uploadProviderAsset,
@@ -30,8 +32,8 @@ import {
   type TrackFieldChanges,
 } from '@/lib/providerApi'
 import {releaseEditState} from '@/lib/releaseEditState'
-import {CONTRIBUTOR_ROLE_LABELS, formatChangeValue as formatValue, SAME_SONG_NOTE} from '@/lib/changeRequestFormat'
-import {browserTimeZone, formatPreviewStart, formatReleaseTime, listTimeZones, meetsReleaseLead, parsePreviewStart, PREVIEW_SECONDS, RELEASE_LEAD_MESSAGE, utcToZonedLocal, zonedLocalToUtcIso} from '@/lib/releaseTime'
+import {CONTRIBUTOR_ROLE_LABELS, formatChangeItemValue, PREVIEW_TIMING_LABELS, SAME_SONG_NOTE} from '@/lib/changeRequestFormat'
+import {browserTimeZone, formatPreviewStart, formatReleaseTime, listTimeZones, meetsReleaseLead, parsePreviewStart, PREVIEW_LENGTH_OPTIONS, previewSeconds, RELEASE_LEAD_MESSAGE, utcToZonedLocal, zonedLocalToUtcIso} from '@/lib/releaseTime'
 
 const ROLE_LABELS = CONTRIBUTOR_ROLE_LABELS
 const selectClass = 'h-10 w-full rounded-md border border-white/10 bg-zinc-950 px-3 text-sm'
@@ -39,9 +41,9 @@ const selectClass = 'h-10 w-full rounded-md border border-white/10 bg-zinc-950 p
 type ReleaseForm = {
   title: string; versionTitle: string; genre: string; subgenre: string; labelName: string; catalogNumber: string; upc: string
   originalReleaseDate: string; copyrightYear: string; copyrightHolder: string; phonographicCopyrightYear: string; phonographicCopyrightHolder: string
-  local: string; timeZone: string
+  local: string; timeZone: string; previewTiming: 'before_release' | 'after_release'
 }
-type TrackForm = {trackId: string; title: string; versionTitle: string; explicit: boolean; languageCode: string; genre: string; previewStart: string; featuredArtistIds: string[]; contributors: TrackContributor[]}
+type TrackForm = {trackId: string; title: string; versionTitle: string; explicit: boolean; languageCode: string; genre: string; previewStart: string; previewLength: number; featuredArtistIds: string[]; contributors: TrackContributor[]}
 
 const text = (value: string | null | undefined) => value ?? ''
 const orNull = (value: string) => value.trim() || null
@@ -58,6 +60,7 @@ function releaseForm(release: ProviderReleaseDetail['release'], saved?: ReleaseC
     phonographicCopyrightYear: pick('phonographicCopyrightYear', release.phonographic_copyright_year)?.toString() ?? '',
     phonographicCopyrightHolder: text(pick('phonographicCopyrightHolder', release.phonographic_copyright_holder)),
     local: utcToZonedLocal(pick('requestedReleaseAt', release.scheduled_release_at ?? release.requested_release_at ?? null), timeZone), timeZone,
+    previewTiming: pick('previewTiming', release.preview_timing ?? 'after_release'),
   }
 }
 
@@ -67,6 +70,7 @@ function trackForm(track: ProviderTrack, saved?: TrackFieldChanges): TrackForm {
     trackId: track.id, title: value('title', track.title) ?? track.title, versionTitle: text(value('versionTitle', track.version_title)),
     explicit: Boolean(value('explicit', track.explicit)), languageCode: text(value('languageCode', track.language_code)), genre: text(value('genre', track.genre)),
     previewStart: formatPreviewStart(value('previewStartMs', track.preview_start_ms ?? null)),
+    previewLength: (value('previewLengthMs', track.preview_length_ms) ?? previewSeconds(track) * 1000) / 1000,
     featuredArtistIds: saved?.credits?.featuredArtistIds ?? track.featured_artist_ids ?? [],
     contributors: saved?.credits?.contributors ?? track.contributors ?? [],
   }
@@ -115,10 +119,10 @@ function ClosedOutcome({request}: {request: ReleaseChangeRequest}) {
 
 function DiffList({diff}: {diff: ChangeDiffItem[]}) {
   if (diff.length === 0) return <p className="text-sm text-zinc-500">No changes.</p>
-  const show = (item: ChangeDiffItem, value: unknown) => item.kind === 'asset' ? (value ? 'New file' : 'None') : formatValue(value)
+  const show = (item: ChangeDiffItem, value: unknown) => item.kind === 'asset' ? (value ? 'New file' : 'None') : formatChangeItemValue(item, value)
   return <ul className="divide-y divide-white/10 rounded-md border border-white/10">{diff.map((item) => <li key={item.key} className="grid gap-1 p-3 text-sm sm:grid-cols-[12rem_1fr]">
     <span className="text-zinc-400">{item.trackTitle ? `${item.trackTitle}: ` : ''}{item.label}</span>
-    <span><span className="text-zinc-500 line-through">{item.kind === 'asset' ? 'Current file' : formatValue(item.before)}</span> → <span className="text-zinc-100">{show(item, item.after)}</span></span>
+    <span><span className="text-zinc-500 line-through">{item.kind === 'asset' ? 'Current file' : formatChangeItemValue(item, item.before)}</span> → <span className="text-zinc-100">{show(item, item.after)}</span></span>
   </li>)}</ul>
 }
 
@@ -180,12 +184,12 @@ function ChangeForm({detail, draft, sameRecordingRequired, onStarted}: {detail: 
       labelName: orNull(form.labelName), catalogNumber: orNull(form.catalogNumber), upc: orNull(form.upc), originalReleaseDate: orNull(form.originalReleaseDate),
       copyrightYear: yearOrNull(form.copyrightYear), copyrightHolder: orNull(form.copyrightHolder),
       phonographicCopyrightYear: yearOrNull(form.phonographicCopyrightYear), phonographicCopyrightHolder: orNull(form.phonographicCopyrightHolder),
-      additionalArtists: additionalArtists ?? [],
+      additionalArtists: additionalArtists ?? [], previewTiming: form.previewTiming,
       ...(dateChanged && instant ? {requestedReleaseAt: instant, releaseTimezone: form.timeZone} : {}),
     },
     tracks: tracks.map((row) => ({
       trackId: row.trackId, title: row.title.trim(), versionTitle: orNull(row.versionTitle), explicit: row.explicit, languageCode: orNull(row.languageCode),
-      genre: orNull(row.genre), previewStartMs: parsePreviewStart(row.previewStart) ?? null,
+      genre: orNull(row.genre), previewStartMs: parsePreviewStart(row.previewStart) ?? null, previewLengthMs: row.previewLength * 1000,
       credits: {featuredArtistIds: row.featuredArtistIds, contributors: row.contributors.filter((contributor) => contributor.name.trim()).map((contributor) => ({...contributor, name: contributor.name.trim(), publisherName: contributor.publisherName?.trim() || null}))},
     })),
     artworkAssetId: overrides.artworkAssetId !== undefined ? overrides.artworkAssetId : artworkAssetId,
@@ -259,6 +263,15 @@ function ChangeForm({detail, draft, sameRecordingRequired, onStarted}: {detail: 
       </div>
     </section>}
 
+    {!live && <fieldset className="space-y-2 rounded-md border border-white/10 p-4">
+      <legend className="px-1 text-lg font-semibold">Previews</legend>
+      <p className="text-xs text-zinc-400">When store visitors can play the previews. Once the release is out, previews always play.</p>
+      {(['after_release', 'before_release'] as const).map((timing) => <label key={timing} className="flex items-center gap-2 text-sm">
+        <input type="radio" name="cr-preview-timing" checked={form.previewTiming === timing} onChange={() => setForm({...form, previewTiming: timing})} />{PREVIEW_TIMING_LABELS[timing]}
+      </label>)}
+      {form.previewTiming === 'before_release' && !release.preorders_enabled && <p className="text-xs text-amber-300">Previews before release only play while the release is open for pre-order, and pre-orders are off for this release.</p>}
+    </fieldset>}
+
     <section className="space-y-3">
       <h2 className="text-lg font-semibold">Cover art</h2>
       <FilePicker label={artworkAssetId ? 'Replace the new cover art' : 'Upload new cover art'} accept="image/jpeg,image/png,image/webp" pending={uploading === 'artwork'} disabled={busy}
@@ -272,7 +285,8 @@ function ChangeForm({detail, draft, sameRecordingRequired, onStarted}: {detail: 
       <p className="rounded-md border border-amber-400/20 bg-amber-400/5 p-3 text-xs text-amber-200">{SAME_SONG_NOTE}{sameRecordingRequired ? ' That applies to this release now.' : ''}</p>
       {tracks.map((row) => {
         const track = detail.tracks.find((candidate) => candidate.id === row.trackId)!
-        const replaced = audio.some((entry) => entry.trackId === row.trackId)
+        const replacement = audio.find((entry) => entry.trackId === row.trackId)
+        const replaced = Boolean(replacement)
         const otherArtists = artistList.filter((artist) => artist.id !== release.primary_artist_id)
         const updateContributor = (index: number, patch: Partial<TrackContributor>) => updateTrack(row.trackId, {contributors: row.contributors.map((contributor, at) => at === index ? {...contributor, ...patch} : contributor)})
         return <div key={row.trackId} className="grid gap-4 rounded-md border border-white/10 bg-[#141417] p-5 sm:grid-cols-2">
@@ -282,8 +296,18 @@ function ChangeForm({detail, draft, sameRecordingRequired, onStarted}: {detail: 
           <Field id={`cr-track-genre-${row.trackId}`} label="Genre"><Input id={`cr-track-genre-${row.trackId}`} value={row.genre} onChange={(event) => updateTrack(row.trackId, {genre: event.target.value})} /></Field>
           <Field id={`cr-track-language-${row.trackId}`} label="Language code"><Input id={`cr-track-language-${row.trackId}`} maxLength={3} placeholder="en" value={row.languageCode} onChange={(event) => updateTrack(row.trackId, {languageCode: event.target.value})} /></Field>
           <Field id={`cr-track-preview-${row.trackId}`} label="Preview starts at"><Input id={`cr-track-preview-${row.trackId}`} placeholder="Automatic" value={row.previewStart} onChange={(event) => updateTrack(row.trackId, {previewStart: event.target.value})} /></Field>
+          <Field id={`cr-track-preview-length-${row.trackId}`} label="Preview length"><select id={`cr-track-preview-length-${row.trackId}`} className={selectClass} value={row.previewLength} onChange={(event) => updateTrack(row.trackId, {previewLength: Number(event.target.value)})}>
+            {PREVIEW_LENGTH_OPTIONS.map((seconds) => <option key={seconds} value={seconds}>{seconds} seconds</option>)}
+          </select></Field>
+          <p className="text-xs text-zinc-500 sm:col-span-2">Previews play {row.previewLength} seconds from the start you choose (minutes:seconds).</p>
+          {(replacement?.assetId ?? track.listen_asset_id) && <div className="sm:col-span-2">
+            {replacement && <p className="mb-2 text-xs text-sky-300">Playing your new upload: the preview will be cut from it once MeJay approves.</p>}
+            <PreviewPicker key={replacement?.assetId ?? track.listen_asset_id} audioUrl={providerAudioUrl((replacement?.assetId ?? track.listen_asset_id)!)}
+              durationMs={replacement ? null : track.duration_ms} songTitle={row.title || track.title}
+              startMs={parsePreviewStart(row.previewStart) ?? null} lengthMs={row.previewLength * 1000}
+              onChange={(ms) => updateTrack(row.trackId, {previewStart: formatPreviewStart(ms)})} />
+          </div>}
           <div className="flex items-end pb-2"><Label className="flex items-center gap-2"><Switch checked={row.explicit} onCheckedChange={(explicit) => updateTrack(row.trackId, {explicit})} />Explicit</Label></div>
-          <p className="text-xs text-zinc-500 sm:col-span-2">Previews play {PREVIEW_SECONDS} seconds from the start you choose (minutes:seconds).</p>
           {otherArtists.length > 0 && <div className="sm:col-span-2"><p className="text-xs font-semibold uppercase text-zinc-500">Featured artists on your account</p>
             <div className="mt-2 flex flex-wrap gap-3">{otherArtists.map((artist) => <Label key={artist.id} className="flex items-center gap-2 text-sm"><Checkbox checked={row.featuredArtistIds.includes(artist.id)}
               onCheckedChange={(checked) => updateTrack(row.trackId, {featuredArtistIds: checked === true ? [...row.featuredArtistIds, artist.id] : row.featuredArtistIds.filter((id) => id !== artist.id)})} />{artist.name}</Label>)}</div>
