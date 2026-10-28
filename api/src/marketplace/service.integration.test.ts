@@ -2112,6 +2112,26 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
         expect((await pool.query('SELECT storage_key FROM download_entitlement_files WHERE entitlement_id = $1', [fixture.entitlement.id])).rows).toEqual(filesBefore)
       })
 
+      it('lets a scheduled pre-order turn on previews before release, only once staff approve', async () => {
+        const owner = await scheduledPreorder('ChangePreviewTiming')
+        const clipId = await addClip(owner, null)
+        const store = new StoreService(db() as never)
+        const trackPreview = async () => (await store.getRelease(owner.release.id) as {tracks: Array<{preview_asset_id: string | null}>}).tracks[0].preview_asset_id
+        expect(await trackPreview()).toBeNull()
+
+        const saved = await changes().saveDraft(owner.userId, owner.release.id, {release: {previewTiming: 'before_release'}, tracks: [], audioReplacements: []}) as {request: {id: string; diff: Array<{key: string; before: unknown; after: unknown}>}}
+        expect(saved.request.diff).toEqual([expect.objectContaining({key: 'release.previewTiming', before: 'after_release', after: 'before_release'})])
+        await changes().submit(owner.userId, owner.release.id)
+        // Still hidden while the request waits for review.
+        expect(await trackPreview()).toBeNull()
+
+        await changes().command(reviewerUserId, saved.request.id, {action: 'start_review'})
+        await changes().command(reviewerUserId, saved.request.id, {action: 'approve', confirmSameRecording: false})
+        expect((await pool.query('SELECT preview_timing, status FROM releases WHERE id = $1', [owner.release.id])).rows[0]).toEqual({preview_timing: 'before_release', status: 'SCHEDULED'})
+        expect(await trackPreview()).toBe(clipId)
+        await expect(store.getAsset(clipId)).resolves.toMatchObject({kind: 'audio_preview'})
+      })
+
       it('requires a same-song confirmation for audio on a live release, and rejection changes nothing', async () => {
         await resetIsrcState()
         const live = await prepareLiveRelease('ChangeLive')

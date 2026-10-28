@@ -533,6 +533,7 @@ export type ReleaseFieldChanges = Partial<{
   phonographicCopyrightHolder: string | null
   requestedReleaseAt: string
   releaseTimezone: string | null
+  previewTiming: 'before_release' | 'after_release'
   additionalArtists: Array<{role: 'primary' | 'featured'; artistId?: string | null; name: string}>
 }>
 

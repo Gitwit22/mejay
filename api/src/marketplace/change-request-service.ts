@@ -24,7 +24,7 @@ const id = z.string().trim().min(1).max(128)
 const releaseChangesSchema = releaseDraftSchema.pick({
   title: true, versionTitle: true, labelName: true, catalogNumber: true, genre: true, subgenre: true, upc: true,
   originalReleaseDate: true, additionalArtists: true, copyrightYear: true, copyrightHolder: true,
-  phonographicCopyrightYear: true, phonographicCopyrightHolder: true, releaseTimezone: true,
+  phonographicCopyrightYear: true, phonographicCopyrightHolder: true, releaseTimezone: true, previewTiming: true,
 }).extend({
   /** A new release date and time; only before the release is live. */
   requestedReleaseAt: z.string().datetime({offset: true}).optional(),
@@ -101,6 +101,8 @@ const RELEASE_FIELDS: Array<{field: keyof z.infer<typeof releaseChangesSchema>; 
   {field: 'phonographicCopyrightHolder', column: 'phonographic_copyright_holder', label: '℗ holder'},
   {field: 'requestedReleaseAt', column: 'requested_release_at', label: 'Release date'},
   {field: 'releaseTimezone', column: 'release_timezone', label: 'Release timezone'},
+  // Whether previews play during pre-orders. The store reads it live, so no preview clip needs rebuilding.
+  {field: 'previewTiming', column: 'preview_timing', label: 'Previews'},
 ]
 const TRACK_FIELDS: Array<{field: 'title' | 'versionTitle' | 'explicit' | 'languageCode' | 'genre' | 'previewStartMs'; column: string; label: string}> = [
   {field: 'title', column: 'title', label: 'Title'},

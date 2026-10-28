@@ -69,6 +69,7 @@ describe('request changes to an approved release', () => {
     const title = await screen.findByLabelText('Release title')
     expect(title).toHaveValue('Night Drive')
     expect(screen.queryByText('Release date', {selector: 'h2'})).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Before release too (during pre-orders)')).not.toBeInTheDocument()
     expect(screen.getByText(/MeJay must confirm a replacement is the same song/)).toBeInTheDocument()
     fireEvent.change(title, {target: {value: 'Night Drive (Deluxe)'}})
     fireEvent.change(screen.getByLabelText('Genre', {selector: '#cr-track-genre-track-1'}), {target: {value: 'Deep House'}})
@@ -80,6 +81,28 @@ describe('request changes to an approved release', () => {
     expect(input.release).not.toHaveProperty('requestedReleaseAt')
     expect(input.tracks).toEqual([expect.objectContaining({trackId: 'track-1', genre: 'Deep House', credits: {featuredArtistIds: [], contributors: [{name: 'Pen Writer', role: 'writer', publisherName: null}]}})])
     expect(input.audioReplacements).toEqual([])
+  })
+
+  it('lets a scheduled release ask for previews before release, and hides the option once live', async () => {
+    const scheduled = detail('SCHEDULED')
+    scheduled.release.preorders_enabled = true
+    scheduled.release.preview_timing = 'after_release'
+    vi.mocked(getProviderRelease).mockResolvedValue(scheduled)
+    renderPage()
+    const before = await screen.findByLabelText('Before release too (during pre-orders)')
+    expect(screen.getByLabelText('After release only')).toBeChecked()
+    fireEvent.click(before)
+    expect(screen.queryByText(/pre-orders are off for this release/)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Save draft'}))
+    await waitFor(() => expect(saveReleaseChangeRequest).toHaveBeenCalled())
+    expect(vi.mocked(saveReleaseChangeRequest).mock.calls[0][1].release).toMatchObject({previewTiming: 'before_release'})
+  })
+
+  it('warns that previews before release need pre-orders', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail('SCHEDULED'))
+    renderPage()
+    fireEvent.click(await screen.findByLabelText('Before release too (during pre-orders)'))
+    expect(screen.getByText(/pre-orders are off for this release/)).toBeInTheDocument()
   })
 
   it('shows submitted changes with a withdraw option, and locks them once MeJay starts reviewing', async () => {

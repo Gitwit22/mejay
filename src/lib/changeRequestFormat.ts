@@ -5,6 +5,9 @@ export const SAME_SONG_NOTE = 'From 1 day before release, and after release, MeJ
 
 export const CONTRIBUTOR_ROLE_LABELS: Record<ContributorRole, string> = {writer: 'Writer', composer: 'Composer', producer: 'Producer', featured_artist: 'Featured artist', remixer: 'Remixer', other: 'Other'}
 
+/** Plain-language names for the release's preview timing setting. */
+export const PREVIEW_TIMING_LABELS: Record<'before_release' | 'after_release', string> = {after_release: 'After release only', before_release: 'Before release too (during pre-orders)'}
+
 /** One side of a change-request diff line, as plain text. */
 export function formatChangeValue(value: unknown): string {
   if (value === null || value === undefined || value === '') return 'Not set'
@@ -28,6 +31,7 @@ export function formatChangeValue(value: unknown): string {
     }
     return JSON.stringify(value)
   }
+  if (value === 'before_release' || value === 'after_release') return PREVIEW_TIMING_LABELS[value]
   if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) return new Date(value).toLocaleString()
   return String(value)
 }

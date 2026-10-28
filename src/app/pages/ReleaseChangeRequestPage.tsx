@@ -30,7 +30,7 @@ import {
   type TrackFieldChanges,
 } from '@/lib/providerApi'
 import {releaseEditState} from '@/lib/releaseEditState'
-import {CONTRIBUTOR_ROLE_LABELS, formatChangeValue as formatValue, SAME_SONG_NOTE} from '@/lib/changeRequestFormat'
+import {CONTRIBUTOR_ROLE_LABELS, formatChangeValue as formatValue, PREVIEW_TIMING_LABELS, SAME_SONG_NOTE} from '@/lib/changeRequestFormat'
 import {browserTimeZone, formatPreviewStart, formatReleaseTime, listTimeZones, meetsReleaseLead, parsePreviewStart, PREVIEW_SECONDS, RELEASE_LEAD_MESSAGE, utcToZonedLocal, zonedLocalToUtcIso} from '@/lib/releaseTime'
 
 const ROLE_LABELS = CONTRIBUTOR_ROLE_LABELS
@@ -39,7 +39,7 @@ const selectClass = 'h-10 w-full rounded-md border border-white/10 bg-zinc-950 p
 type ReleaseForm = {
   title: string; versionTitle: string; genre: string; subgenre: string; labelName: string; catalogNumber: string; upc: string
   originalReleaseDate: string; copyrightYear: string; copyrightHolder: string; phonographicCopyrightYear: string; phonographicCopyrightHolder: string
-  local: string; timeZone: string
+  local: string; timeZone: string; previewTiming: 'before_release' | 'after_release'
 }
 type TrackForm = {trackId: string; title: string; versionTitle: string; explicit: boolean; languageCode: string; genre: string; previewStart: string; featuredArtistIds: string[]; contributors: TrackContributor[]}
 
@@ -58,6 +58,7 @@ function releaseForm(release: ProviderReleaseDetail['release'], saved?: ReleaseC
     phonographicCopyrightYear: pick('phonographicCopyrightYear', release.phonographic_copyright_year)?.toString() ?? '',
     phonographicCopyrightHolder: text(pick('phonographicCopyrightHolder', release.phonographic_copyright_holder)),
     local: utcToZonedLocal(pick('requestedReleaseAt', release.scheduled_release_at ?? release.requested_release_at ?? null), timeZone), timeZone,
+    previewTiming: pick('previewTiming', release.preview_timing ?? 'after_release'),
   }
 }
 
@@ -180,7 +181,7 @@ function ChangeForm({detail, draft, sameRecordingRequired, onStarted}: {detail: 
       labelName: orNull(form.labelName), catalogNumber: orNull(form.catalogNumber), upc: orNull(form.upc), originalReleaseDate: orNull(form.originalReleaseDate),
       copyrightYear: yearOrNull(form.copyrightYear), copyrightHolder: orNull(form.copyrightHolder),
       phonographicCopyrightYear: yearOrNull(form.phonographicCopyrightYear), phonographicCopyrightHolder: orNull(form.phonographicCopyrightHolder),
-      additionalArtists: additionalArtists ?? [],
+      additionalArtists: additionalArtists ?? [], previewTiming: form.previewTiming,
       ...(dateChanged && instant ? {requestedReleaseAt: instant, releaseTimezone: form.timeZone} : {}),
     },
     tracks: tracks.map((row) => ({
@@ -258,6 +259,15 @@ function ChangeForm({detail, draft, sameRecordingRequired, onStarted}: {detail: 
         </select>
       </div>
     </section>}
+
+    {!live && <fieldset className="space-y-2 rounded-md border border-white/10 p-4">
+      <legend className="px-1 text-lg font-semibold">Previews</legend>
+      <p className="text-xs text-zinc-400">When store visitors can play the {PREVIEW_SECONDS}-second previews. Once the release is out, previews always play.</p>
+      {(['after_release', 'before_release'] as const).map((timing) => <label key={timing} className="flex items-center gap-2 text-sm">
+        <input type="radio" name="cr-preview-timing" checked={form.previewTiming === timing} onChange={() => setForm({...form, previewTiming: timing})} />{PREVIEW_TIMING_LABELS[timing]}
+      </label>)}
+      {form.previewTiming === 'before_release' && !release.preorders_enabled && <p className="text-xs text-amber-300">Previews before release only play while the release is open for pre-order, and pre-orders are off for this release.</p>}
+    </fieldset>}
 
     <section className="space-y-3">
       <h2 className="text-lg font-semibold">Cover art</h2>
