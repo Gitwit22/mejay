@@ -9,6 +9,7 @@ import {Label} from '@/components/ui/label'
 import {exchangeGuestAccess, getGuestOrderStatus, guestDownloadUrl, recoverGuestAccess, type GuestAccess} from '@/lib/marketplaceCommerceApi'
 import {usePlanStore} from '@/stores/planStore'
 import {ACCOUNT_INVITE, PREORDER_CHARGE_NOTICE, preorderLabel, SCHEDULER_NOTE} from '@/lib/releaseTime'
+import {SPAM_FOLDER_HINT} from '@/lib/emailCopy'
 
 function Shell({children}: {children: React.ReactNode}) {
   return <div className="min-h-screen bg-[#0a0a0b] px-4 py-10 text-zinc-100 sm:px-8">
@@ -58,7 +59,11 @@ export function PurchaseCompletePage() {
         <p className="font-semibold text-amber-300">{preorderLabel(order.releaseAt, order.releaseTimezone)}</p>
         <p>{PREORDER_CHARGE_NOTICE}</p>
         <p>We'll email your download link{order.maskedEmail ? ` to ${order.maskedEmail}` : ''} on release day. {SCHEDULER_NOTE}</p>
-      </div> : <p className="flex items-center gap-2 text-sm text-zinc-300"><Mail className="h-4 w-4" />Your download link is on its way{order.maskedEmail ? ` to ${order.maskedEmail}` : ''}. It works for 7 days without signing in.</p>}
+        <p className="text-xs text-zinc-400">When it arrives, it may be in your spam or junk folder. First emails from us often land there.</p>
+      </div> : <div className="space-y-1">
+        <p className="flex items-center gap-2 text-sm text-zinc-300"><Mail className="h-4 w-4" />Your download link is on its way{order.maskedEmail ? ` to ${order.maskedEmail}` : ''}. It works for 7 days without signing in.</p>
+        <p className="text-xs text-zinc-400">{SPAM_FOLDER_HINT}</p>
+      </div>}
     </section>}
     <AccountInvite />
     <RecoveryForm />
@@ -125,7 +130,7 @@ function RecoveryForm() {
       <Input id="recover-email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" />
       <Button type="submit" variant="outline" disabled={!email.trim() || recover.isPending}>{recover.isPending ? 'Sending…' : 'Email me new links'}</Button>
     </div>
-    {recover.isSuccess && <p role="status" className="text-sm text-emerald-300">{recover.data.message}</p>}
+    {recover.isSuccess && <div role="status" className="space-y-1"><p className="text-sm text-emerald-300">{recover.data.message}</p><p className="text-xs text-zinc-500">{SPAM_FOLDER_HINT}</p></div>}
     {recover.isError && <p role="alert" className="text-sm text-red-300">{recover.error.message}</p>}
   </form>
 }

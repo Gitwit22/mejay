@@ -6,6 +6,7 @@ import {usePlanStore} from '@/stores/planStore'
 import {setOnboarded, setStarterPromptPending} from '@/lib/starterPacksPrefs'
 import {apiFetch} from '@/lib/api'
 import {parseAccountIntent} from '@/lib/marketplace'
+import {SPAM_FOLDER_HINT} from '@/lib/emailCopy'
 
 type Mode = 'password' | 'code' | 'setPassword'
 type CodeStep = 'email' | 'code'
@@ -126,7 +127,7 @@ export default function LoginPage() {
       if (typeof data?.devCode === 'string' && data.devCode.trim()) {
         toast({title: 'Dev code', description: `Code: ${data.devCode}`})
       } else {
-        toast({title: 'Check your email', description: 'Enter the 6-digit code we sent you.'})
+        toast({title: 'Check your email', description: `Enter the 6-digit code we sent you. ${SPAM_FOLDER_HINT}`})
       }
 
       setCodeStep('code')
@@ -448,6 +449,7 @@ export default function LoginPage() {
             <div className="text-sm text-muted-foreground">
               Code sent to <span className="text-foreground font-medium">{email}</span>
             </div>
+            <p className="text-xs text-muted-foreground">{SPAM_FOLDER_HINT}</p>
             <label className="block text-sm font-medium" htmlFor="code">6-digit code</label>
             <input
               id="code"
