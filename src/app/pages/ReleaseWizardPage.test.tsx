@@ -3,7 +3,7 @@ import {fireEvent, render, screen, waitFor} from '@testing-library/react'
 import {MemoryRouter, Route, Routes} from 'react-router-dom'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {createProviderPricing, generateProviderIsrc, getMarketplacePricingPolicy, getProviderRelease, getReleaseCertification, listProviderArtists, replaceProviderSplits, replaceTrackCredits, updateProviderRelease, updateProviderTrack, withdrawProviderRelease, type ProviderReleaseDetail} from '@/lib/providerApi'
+import {createProviderPricing, generateProviderIsrc, getMarketplacePricingPolicy, getProviderRelease, getReleaseCertification, listProviderArtists, replaceProviderSplits, replaceTrackCredits, updateProviderRelease, updateProviderTrack, withdrawProviderRelease, type ProviderReleaseDetail, type ReleaseCertificationState} from '@/lib/providerApi'
 import ReleaseWizardPage from './ReleaseWizardPage'
 
 // Radix checkboxes measure themselves; jsdom has no ResizeObserver.
@@ -50,6 +50,19 @@ function renderStep(step: string) {
     <Routes><Route path="/app/artist/releases/:releaseId/edit/:step" element={<ReleaseWizardPage />} /></Routes>
   </MemoryRouter></QueryClientProvider>)
 }
+
+/** A complete certification response, like the API's; any step that reaches Rights Certification can render it. */
+function certification(overrides: Partial<ReleaseCertificationState> = {}): ReleaseCertificationState {
+  return {
+    version: 'v', policy: 'MeJay accepts original music.', statements: [], requiredKeys: [], tracksWithoutIsrc: 0, rightsStatus: 'NOT_CERTIFIED',
+    thirdPartyMaterial: null, draft: null, materials: [], problems: ['rights certification'], history: [], ...overrides,
+  }
+}
+
+// Each test starts from a complete certification response, so one test's override never leaks into the next.
+beforeEach(() => {
+  vi.mocked(getReleaseCertification).mockReset().mockResolvedValue(certification())
+})
 
 describe('release wizard: UPC and ISRCs', () => {
   beforeEach(() => {
@@ -289,7 +302,10 @@ describe('release wizard: locked while in review', () => {
 
   it('reminds the artist to confirm the certification again after an edit', async () => {
     vi.mocked(getProviderRelease).mockResolvedValue(detail())
-    vi.mocked(getReleaseCertification).mockResolvedValue({draft: null, history: [{id: 'cert-1'}], previous: {version: 'v', thirdPartyMaterial: 'none', accepted: [], certifiedAt: '2026-10-22T00:00:00.000Z'}} as never)
+    vi.mocked(getReleaseCertification).mockResolvedValue(certification({
+      history: [{id: 'cert-1', certification_version: 'v', third_party_material: 'none', rights_status: 'CERTIFIED_ORIGINAL', certified_at: '2026-10-22T00:00:00.000Z'}],
+      previous: {version: 'v', thirdPartyMaterial: 'none', accepted: [], certifiedAt: '2026-10-22T00:00:00.000Z'},
+    }))
     renderStep('release-information')
     expect(await screen.findByText('Confirm the rights certification again before you resubmit.')).toBeInTheDocument()
     expect(screen.getByRole('link', {name: 'Go to certification'})).toHaveAttribute('href', '/app/artist/releases/release-1/edit/certification')
