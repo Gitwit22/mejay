@@ -109,6 +109,33 @@ describe('request changes to an approved release', () => {
     expect(vi.mocked(saveReleaseChangeRequest).mock.calls[0][1].tracks).toEqual([expect.objectContaining({trackId: 'track-1', previewLengthMs: 25_000, previewStartMs: null})])
   })
 
+  it('picks the preview section on the current song and sends it with the request', async () => {
+    const live = detail()
+    live.tracks = [{...track, preview_start_ms: 60_000, preview_length_ms: 15_000, listen_asset_id: 'mp3-1'} as never]
+    vi.mocked(getProviderRelease).mockResolvedValue(live)
+    renderPage()
+    const section = await screen.findByRole('slider', {name: 'Preview section of Night Drive'})
+    expect(document.querySelector('audio')).toHaveAttribute('src', expect.stringContaining('/api/marketplace/assets/mp3-1/audio'))
+    fireEvent.keyDown(section, {key: 'ArrowLeft'})
+    expect(screen.getByLabelText('Preview starts at')).toHaveValue('0:59')
+    fireEvent.click(screen.getByRole('button', {name: 'Save draft'}))
+    await waitFor(() => expect(saveReleaseChangeRequest).toHaveBeenCalled())
+    expect(vi.mocked(saveReleaseChangeRequest).mock.calls[0][1].tracks).toEqual([expect.objectContaining({previewStartMs: 59_000, previewLengthMs: 15_000})])
+  })
+
+  it('plays the replacement upload in the picker once one is part of the request', async () => {
+    const live = detail()
+    live.tracks = [{...track, listen_asset_id: 'mp3-1'} as never]
+    vi.mocked(getProviderRelease).mockResolvedValue(live)
+    vi.mocked(getReleaseChangeRequest).mockResolvedValue({request: request({audio_replacements: [{trackId: 'track-1', assetId: 'staged-1'}]}), sameRecordingRequired: false})
+    renderPage()
+    await screen.findByText(/Playing your new upload/)
+    expect(document.querySelector('audio')).toHaveAttribute('src', expect.stringContaining('/api/marketplace/assets/staged-1/audio'))
+    fireEvent.click(screen.getByRole('button', {name: 'Keep the current audio'}))
+    await waitFor(() => expect(document.querySelector('audio')).toHaveAttribute('src', expect.stringContaining('/api/marketplace/assets/mp3-1/audio')))
+    expect(screen.queryByText(/Playing your new upload/)).not.toBeInTheDocument()
+  })
+
   it('lists preview length and start changes in seconds and minutes', async () => {
     const diff = [
       {key: 'track.track-1.previewLengthMs', label: 'Preview length', trackId: 'track-1', trackTitle: 'Night Drive', kind: 'value' as const, before: 15_000, after: 25_000},

@@ -4,6 +4,7 @@ import {ArrowLeft, Clock, Lock, Plus, ShieldCheck, Trash2, Upload, XCircle} from
 import {Link, useParams} from 'react-router-dom'
 
 import {AdditionalArtistsField} from '@/app/components/provider/AdditionalArtistsField'
+import {PreviewPicker} from '@/app/components/provider/PreviewPicker'
 import {ReleaseDateTimePicker} from '@/app/components/provider/ReleaseDateTimePicker'
 import {Button} from '@/components/ui/button'
 import {Checkbox} from '@/components/ui/checkbox'
@@ -16,6 +17,7 @@ import {
   getProviderRelease,
   getReleaseChangeRequest,
   listProviderArtists,
+  providerAudioUrl,
   saveReleaseChangeRequest,
   submitReleaseChangeRequest,
   uploadProviderAsset,
@@ -283,7 +285,8 @@ function ChangeForm({detail, draft, sameRecordingRequired, onStarted}: {detail: 
       <p className="rounded-md border border-amber-400/20 bg-amber-400/5 p-3 text-xs text-amber-200">{SAME_SONG_NOTE}{sameRecordingRequired ? ' That applies to this release now.' : ''}</p>
       {tracks.map((row) => {
         const track = detail.tracks.find((candidate) => candidate.id === row.trackId)!
-        const replaced = audio.some((entry) => entry.trackId === row.trackId)
+        const replacement = audio.find((entry) => entry.trackId === row.trackId)
+        const replaced = Boolean(replacement)
         const otherArtists = artistList.filter((artist) => artist.id !== release.primary_artist_id)
         const updateContributor = (index: number, patch: Partial<TrackContributor>) => updateTrack(row.trackId, {contributors: row.contributors.map((contributor, at) => at === index ? {...contributor, ...patch} : contributor)})
         return <div key={row.trackId} className="grid gap-4 rounded-md border border-white/10 bg-[#141417] p-5 sm:grid-cols-2">
@@ -297,6 +300,13 @@ function ChangeForm({detail, draft, sameRecordingRequired, onStarted}: {detail: 
             {PREVIEW_LENGTH_OPTIONS.map((seconds) => <option key={seconds} value={seconds}>{seconds} seconds</option>)}
           </select></Field>
           <p className="text-xs text-zinc-500 sm:col-span-2">Previews play {row.previewLength} seconds from the start you choose (minutes:seconds).</p>
+          {(replacement?.assetId ?? track.listen_asset_id) && <div className="sm:col-span-2">
+            {replacement && <p className="mb-2 text-xs text-sky-300">Playing your new upload: the preview will be cut from it once MeJay approves.</p>}
+            <PreviewPicker key={replacement?.assetId ?? track.listen_asset_id} audioUrl={providerAudioUrl((replacement?.assetId ?? track.listen_asset_id)!)}
+              durationMs={replacement ? null : track.duration_ms} songTitle={row.title || track.title}
+              startMs={parsePreviewStart(row.previewStart) ?? null} lengthMs={row.previewLength * 1000}
+              onChange={(ms) => updateTrack(row.trackId, {previewStart: formatPreviewStart(ms)})} />
+          </div>}
           <div className="flex items-end pb-2"><Label className="flex items-center gap-2"><Switch checked={row.explicit} onCheckedChange={(explicit) => updateTrack(row.trackId, {explicit})} />Explicit</Label></div>
           {otherArtists.length > 0 && <div className="sm:col-span-2"><p className="text-xs font-semibold uppercase text-zinc-500">Featured artists on your account</p>
             <div className="mt-2 flex flex-wrap gap-3">{otherArtists.map((artist) => <Label key={artist.id} className="flex items-center gap-2 text-sm"><Checkbox checked={row.featuredArtistIds.includes(artist.id)}

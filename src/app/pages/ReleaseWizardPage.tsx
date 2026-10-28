@@ -9,6 +9,7 @@ import {RecertifyNotice, ReleaseLockBanner} from '@/app/components/provider/Rele
 import {flushPendingSaves, PendingSavesProvider, usePendingSave, type PendingSaveRegistry} from '@/app/components/provider/pendingStepSaves'
 import {releaseEditState} from '@/lib/releaseEditState'
 import {AdditionalArtistsField} from '@/app/components/provider/AdditionalArtistsField'
+import {PreviewPicker} from '@/app/components/provider/PreviewPicker'
 import {creditName, creditsInput, formatArtistCredit, rowsFromCredits, titleHasFeature, type AdditionalArtistRow} from '@/lib/artistCredit'
 
 import {Button} from '@/components/ui/button'
@@ -26,6 +27,7 @@ import {
   createProviderTrack,
   getProviderRelease,
   listProviderArtists,
+  providerAudioUrl,
   replaceProviderSplits,
   submitProviderRelease,
   type ProviderReleaseDetail,
@@ -331,6 +333,10 @@ function TrackMetadataForm({track, artistId, releaseId}: {track: ProviderTrack; 
         {PREVIEW_LENGTH_OPTIONS.map((seconds) => <option key={seconds} value={seconds}>{seconds} seconds</option>)}
       </select>
     </div>
+    {track.listen_asset_id && <div className="sm:col-span-2">
+      <PreviewPicker audioUrl={providerAudioUrl(track.listen_asset_id)} durationMs={track.duration_ms} songTitle={title || track.title}
+        startMs={previewStartMs ?? null} lengthMs={previewLength * 1000} onChange={(ms) => setPreviewStart(formatPreviewStart(ms))} />
+    </div>}
     {save.isError && <p className="text-sm text-red-400 sm:col-span-2">{save.error.message}</p>}
     <Button className="sm:col-span-2" disabled={save.isPending || Boolean(previewProblem)}>Save track metadata</Button></form>
 }

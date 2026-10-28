@@ -101,6 +101,21 @@ export const MAX_PREVIEW_SECONDS = 30
 const LEGACY_PREVIEW_SECONDS = 10
 export const PREVIEW_LENGTH_OPTIONS = Array.from({length: MAX_PREVIEW_SECONDS - MIN_PREVIEW_SECONDS + 1}, (_, index) => MIN_PREVIEW_SECONDS + index)
 
+/** Where an automatic preview starts; mirrors previewWindow in api/src/audio/transcode.ts (0:30 for songs of 1:30 or more). */
+export function automaticPreviewStartMs(durationMs: number): number {
+  return durationMs >= 90_000 ? 30_000 : 0
+}
+
+/** Latest start that still fits the whole preview inside the song. */
+export function latestPreviewStartMs(durationMs: number, lengthMs: number): number {
+  return Math.max(0, Math.floor((durationMs - lengthMs) / 1000) * 1000)
+}
+
+/** A start snapped to whole seconds (the start field takes minutes:seconds) and kept inside the song. */
+export function clampPreviewStartMs(startMs: number, durationMs: number, lengthMs: number): number {
+  return Math.min(Math.max(0, Math.round(startMs / 1000) * 1000), latestPreviewStartMs(durationMs, lengthMs))
+}
+
 /** A track's preview length in seconds. */
 export function previewSeconds(track: {preview_length_ms?: number | null}): number {
   return track.preview_length_ms ? track.preview_length_ms / 1000 : LEGACY_PREVIEW_SECONDS

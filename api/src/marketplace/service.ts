@@ -1,5 +1,5 @@
 import {bootstrapProviderAccount} from './onboarding'
-import {MARKETPLACE_STORAGE_PREFIX} from './storage-keys'
+import {isMarketplaceStorageKey, MARKETPLACE_STORAGE_PREFIX} from './storage-keys'
 import {userHasArtistPortalAccess} from '../account/artist-access'
 import {buildGeneratedIsrc, externalIsrcProblem, type IsrcGenerationConfig} from './isrc'
 import type {PrivateBucket} from '../services/r2'
@@ -502,6 +502,15 @@ export class MarketplaceService {
             AND clip.processing_status = 'ready' AND ${PREVIEW_MATCHES_SETTING_SQL('clip', 't')}) THEN 'ready'
           WHEN EXISTS (SELECT 1 FROM audio_processing_jobs job WHERE job.track_id = t.id AND job.status IN ('queued', 'processing')) THEN 'processing'
           ELSE 'waiting' END AS preview_status,
+        -- What the artist's preview picker plays: the MeJay MP3 of the latest master when it exists
+        -- (small enough to draw a waveform from), otherwise the master itself.
+        (SELECT COALESCE(
+            (SELECT delivery.id FROM marketplace_assets delivery WHERE delivery.track_id = t.id AND delivery.kind = 'audio_delivery'
+               AND delivery.processing_status = 'ready' AND delivery.metadata->>'sourceAssetId' = master.id
+             ORDER BY delivery.created_at DESC LIMIT 1),
+            master.id)
+         FROM marketplace_assets master WHERE master.track_id = t.id AND master.kind = 'audio' AND master.processing_status = 'ready'
+         ORDER BY master.created_at DESC LIMIT 1) AS listen_asset_id,
         COALESCE((SELECT json_agg(json_build_object('name', c.name, 'role', c.role, 'publisherName', c.publisher_name) ORDER BY c.created_at, c.id)
           FROM track_contributors c WHERE c.track_id = t.id), '[]'::json) AS contributors,
         COALESCE((SELECT json_agg(fa.artist_id ORDER BY fa.artist_id) FROM track_artists fa
@@ -748,6 +757,21 @@ export class MarketplaceService {
       await audit(db, {providerId: context.providerId, actorUserId: userId, entityType: 'track', entityId: id, action: 'track.created', after: row})
       return row
     })
+  }
+
+  /**
+   * The owner's own song audio for the preview picker: an uploaded master (including a 'staged'
+   * change-request replacement) or MeJay's MP3 of one. Other providers' files, preview clips and
+   * every other kind are reported as not found.
+   */
+  async getOwnAudio(userId: string, assetId: string): Promise<{storageKey: string; mimeType: string; fileName: string}> {
+    const context = await providerContext(this.database, userId, false)
+    const asset = await this.database.prepare(
+      `SELECT storage_key, mime_type, kind, metadata->>'fileName' AS file_name FROM marketplace_assets
+       WHERE id = ?1 AND provider_profile_id = ?2 AND kind IN ('audio', 'audio_delivery') AND processing_status IN ('ready', 'staged')`,
+    ).bind(assetId, context.providerId).first<{storage_key: string; mime_type: string; kind: string; file_name: string | null}>()
+    if (!asset || !isMarketplaceStorageKey(asset.storage_key)) throw new MarketplaceError(404, 'not_found', 'Audio was not found')
+    return {storageKey: asset.storage_key, mimeType: asset.mime_type, fileName: (asset.file_name || `${asset.kind}-${assetId}`).replace(/["\r\n]/g, '_')}
   }
 
   async updateTrack(userId: string, trackId: string, input: TrackDraftInput): Promise<unknown> {

@@ -195,6 +195,28 @@ describe('release wizard: song previews', () => {
     await waitFor(() => expect(updateProviderTrack).toHaveBeenLastCalledWith('track-1', expect.objectContaining({previewStartMs: null})))
   })
 
+  it('picks the preview section on the real song, keeping the start field and save in step', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail({tracks: [{...track, preview_start_ms: 60_000, preview_length_ms: 15_000, listen_asset_id: 'mp3-1'}]}))
+    renderStep('track-metadata')
+    const section = await screen.findByRole('slider', {name: 'Preview section of Night Drive'})
+    expect(document.querySelector('audio')).toHaveAttribute('src', expect.stringContaining('/api/marketplace/assets/mp3-1/audio'))
+    fireEvent.keyDown(section, {key: 'ArrowRight', shiftKey: true})
+    expect(screen.getByLabelText('Preview starts at')).toHaveValue('1:05')
+    expect(section).toHaveAttribute('aria-valuetext', 'Preview 1:05 to 1:20')
+    // Typing still works and moves the section.
+    fireEvent.change(screen.getByLabelText('Preview starts at'), {target: {value: '2:00'}})
+    expect(section).toHaveAttribute('aria-valuetext', 'Preview 2:00 to 2:15')
+    fireEvent.click(screen.getByRole('button', {name: 'Save track metadata'}))
+    await waitFor(() => expect(updateProviderTrack).toHaveBeenCalledWith('track-1', expect.objectContaining({previewStartMs: 120_000, previewLengthMs: 15_000})))
+  })
+
+  it('shows no picker until the song is uploaded', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail({tracks: [{...track, listen_asset_id: null}]}))
+    renderStep('track-metadata')
+    await screen.findByLabelText('Preview starts at')
+    expect(screen.queryByRole('slider')).not.toBeInTheDocument()
+  })
+
   it('lets the artist choose 5 to 30 seconds of preview, checking the start against that length', async () => {
     vi.mocked(getProviderRelease).mockResolvedValue(detail({tracks: [{...track, preview_start_ms: 160_000, preview_length_ms: 15_000}]}))
     renderStep('track-metadata')

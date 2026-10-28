@@ -158,6 +158,8 @@ export type ProviderTrack = {
   preview_start_ms?: number | null
   /** How long the store preview plays (ms), 5 to 30 seconds. */
   preview_length_ms?: number
+  /** The song file the preview picker plays: MeJay's MP3 of the latest master, or the master itself. */
+  listen_asset_id?: string | null
   /** Whether MeJay has made the preview clip for the current setting. */
   preview_status?: 'ready' | 'processing' | 'waiting'
 }
@@ -310,6 +312,11 @@ export function listProviderIsrcs(): Promise<ProviderIsrc[]> {
 /** CSV of the account's ISRCs; opened as a normal download so the session cookie applies. */
 export function providerIsrcExportUrl(): string {
   return apiUrl('/api/marketplace/isrcs/export')
+}
+
+/** One of the account's own song files (master, staged replacement or MeJay MP3), for the preview picker. */
+export function providerAudioUrl(assetId: string): string {
+  return apiUrl(`/api/marketplace/assets/${encodeURIComponent(assetId)}/audio`)
 }
 
 /** Business details editable from portal Settings; the page address and review status are not. */

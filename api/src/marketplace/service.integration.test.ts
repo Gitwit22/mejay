@@ -2179,6 +2179,48 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
         expect((await pool.query('SELECT preview_length_ms, preview_start_ms FROM tracks WHERE id = $1', [owner.track.id])).rows[0]).toEqual({preview_length_ms: 20_000, preview_start_ms: 180_000})
       })
 
+      it("lets only the owner play their song files, giving the preview picker MeJay's MP3 when it exists", async () => {
+        await resetIsrcState()
+        const live = await prepareLiveRelease('OwnAudio')
+        const master = (await pool.query<{id: string}>(`SELECT id FROM marketplace_assets WHERE track_id = $1 AND kind = 'audio' AND processing_status = 'ready'`, [live.track.id])).rows[0].id
+        const listen = async () => (await service.getRelease(live.userId, live.release.id) as {tracks: Array<{listen_asset_id: string | null}>}).tracks[0].listen_asset_id
+        const derived = async (kind: 'audio_delivery' | 'audio_preview', sourceAssetId: string) => {
+          const id = crypto.randomUUID()
+          await pool.query(
+            `INSERT INTO marketplace_assets (id, provider_profile_id, track_id, kind, storage_key, mime_type, byte_size, processing_status, metadata)
+             VALUES ($1, $2, $3, $4, $5, 'audio/mpeg', 1000, 'ready', $6)`,
+            [id, live.provider.id, live.track.id, kind, `mejay-artist/${live.provider.id}/${kind}/${live.track.id}/${id}.mp3`, JSON.stringify({sourceAssetId, fileName: 'song.mp3'})],
+          )
+          return id
+        }
+        await pool.query(`DELETE FROM marketplace_assets WHERE track_id = $1 AND kind = 'audio_delivery'`, [live.track.id])
+        // This file's fixture keeps uploads under a test path; real uploads live under MeJay's prefix.
+        await pool.query(`UPDATE marketplace_assets SET storage_key = $2 WHERE id = $1`, [master, `mejay-artist/${live.provider.id}/audio/${live.track.id}/${master}.wav`])
+        // Before MeJay makes the MP3 the picker plays the master; an MP3 of some other upload does not count.
+        expect(await listen()).toBe(master)
+        await derived('audio_delivery', crypto.randomUUID())
+        expect(await listen()).toBe(master)
+        const delivery = await derived('audio_delivery', master)
+        expect(await listen()).toBe(delivery)
+
+        await expect(service.getOwnAudio(live.userId, delivery)).resolves.toMatchObject({mimeType: 'audio/mpeg', fileName: 'song.mp3'})
+        await expect(service.getOwnAudio(live.userId, master)).resolves.toMatchObject({storageKey: expect.stringMatching(/^mejay-artist\//)})
+        const draft = await changes().saveDraft(live.userId, live.release.id, {release: {}, tracks: [], audioReplacements: []}) as {request: {id: string}}
+        const staged = await stagedAudio(live, draft.request.id)
+        await expect(service.getOwnAudio(live.userId, staged)).resolves.toMatchObject({mimeType: 'audio/wav'})
+
+        // Not other providers' songs, and not preview clips or other kinds through this route.
+        const other = await createProviderFixture('OwnAudioOther')
+        await expect(service.getOwnAudio(other.userId, master)).rejects.toMatchObject({code: 'not_found'})
+        await expect(service.getOwnAudio(other.userId, staged)).rejects.toMatchObject({code: 'not_found'})
+        await expect(service.getOwnAudio(live.userId, await derived('audio_preview', master))).rejects.toMatchObject({code: 'not_found'})
+        const artwork = (await pool.query<{id: string}>(`SELECT id FROM marketplace_assets WHERE release_id = $1 AND kind = 'artwork' LIMIT 1`, [live.release.id])).rows[0]
+        if (artwork) await expect(service.getOwnAudio(live.userId, artwork.id)).rejects.toMatchObject({code: 'not_found'})
+        // A failed upload is never played.
+        await pool.query(`UPDATE marketplace_assets SET processing_status = 'failed' WHERE id = $1`, [staged])
+        await expect(service.getOwnAudio(live.userId, staged)).rejects.toMatchObject({code: 'not_found'})
+      })
+
       it('requires a same-song confirmation for audio on a live release, and rejection changes nothing', async () => {
         await resetIsrcState()
         const live = await prepareLiveRelease('ChangeLive')
