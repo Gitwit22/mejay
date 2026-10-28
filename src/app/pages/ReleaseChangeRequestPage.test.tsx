@@ -98,6 +98,30 @@ describe('request changes to an approved release', () => {
     expect(vi.mocked(saveReleaseChangeRequest).mock.calls[0][1].release).toMatchObject({previewTiming: 'before_release'})
   })
 
+  it('sends a new preview length and shows preview changes as times', async () => {
+    renderPage()
+    const length = await screen.findByLabelText('Preview length')
+    expect(length).toHaveValue('10')
+    fireEvent.change(length, {target: {value: '25'}})
+    expect(screen.getByText('Previews play 25 seconds from the start you choose (minutes:seconds).')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Save draft'}))
+    await waitFor(() => expect(saveReleaseChangeRequest).toHaveBeenCalled())
+    expect(vi.mocked(saveReleaseChangeRequest).mock.calls[0][1].tracks).toEqual([expect.objectContaining({trackId: 'track-1', previewLengthMs: 25_000, previewStartMs: null})])
+  })
+
+  it('lists preview length and start changes in seconds and minutes', async () => {
+    const diff = [
+      {key: 'track.track-1.previewLengthMs', label: 'Preview length', trackId: 'track-1', trackTitle: 'Night Drive', kind: 'value' as const, before: 15_000, after: 25_000},
+      {key: 'track.track-1.previewStartMs', label: 'Preview start', trackId: 'track-1', trackTitle: 'Night Drive', kind: 'value' as const, before: null, after: 65_000},
+    ]
+    vi.mocked(getReleaseChangeRequest).mockResolvedValue({request: request({status: 'submitted', diff}), sameRecordingRequired: false})
+    renderPage()
+    expect(await screen.findByText('15 seconds')).toBeInTheDocument()
+    expect(screen.getByText('25 seconds')).toBeInTheDocument()
+    expect(screen.getByText('Automatic')).toBeInTheDocument()
+    expect(screen.getByText('1:05')).toBeInTheDocument()
+  })
+
   it('warns that previews before release need pre-orders', async () => {
     vi.mocked(getProviderRelease).mockResolvedValue(detail('SCHEDULED'))
     renderPage()

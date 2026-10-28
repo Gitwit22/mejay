@@ -8,7 +8,7 @@ import {Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Dia
 import {Label} from '@/components/ui/label'
 import {Textarea} from '@/components/ui/textarea'
 import {toast} from '@/hooks/use-toast'
-import {formatChangeValue, SAME_SONG_NOTE} from '@/lib/changeRequestFormat'
+import {formatChangeItemValue, SAME_SONG_NOTE} from '@/lib/changeRequestFormat'
 import {commandChangeRequest, getChangeRequestReview, listChangeRequests, reviewAssetUrl, type ChangeRequestCommand, type ChangeRequestReview} from '@/lib/marketplaceAdminApi'
 import type {ChangeDiffItem} from '@/lib/providerApi'
 
@@ -108,6 +108,6 @@ function DiffRow({item}: {item: ChangeDiffItem}) {
   }
   return <li className="grid gap-1 p-3 text-sm sm:grid-cols-[12rem_1fr]">
     <span className="text-zinc-400">{label}</span>
-    <span><span className="text-zinc-500 line-through">{formatChangeValue(item.before)}</span> → <span className="text-zinc-100">{formatChangeValue(item.after)}</span></span>
+    <span><span className="text-zinc-500 line-through">{formatChangeItemValue(item, item.before)}</span> → <span className="text-zinc-100">{formatChangeItemValue(item, item.after)}</span></span>
   </li>
 }

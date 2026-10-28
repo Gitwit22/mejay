@@ -31,7 +31,7 @@ const releaseChangesSchema = releaseDraftSchema.pick({
 }).partial().strict()
 
 const trackChangesSchema = trackDraftSchema.pick({
-  title: true, versionTitle: true, explicit: true, languageCode: true, genre: true, previewStartMs: true,
+  title: true, versionTitle: true, explicit: true, languageCode: true, genre: true, previewStartMs: true, previewLengthMs: true,
 }).partial().extend({
   trackId: id,
   credits: trackCreditsSchema.optional(),
@@ -104,13 +104,14 @@ const RELEASE_FIELDS: Array<{field: keyof z.infer<typeof releaseChangesSchema>; 
   // Whether previews play during pre-orders. The store reads it live, so no preview clip needs rebuilding.
   {field: 'previewTiming', column: 'preview_timing', label: 'Previews'},
 ]
-const TRACK_FIELDS: Array<{field: 'title' | 'versionTitle' | 'explicit' | 'languageCode' | 'genre' | 'previewStartMs'; column: string; label: string}> = [
+const TRACK_FIELDS: Array<{field: 'title' | 'versionTitle' | 'explicit' | 'languageCode' | 'genre' | 'previewStartMs' | 'previewLengthMs'; column: string; label: string}> = [
   {field: 'title', column: 'title', label: 'Title'},
   {field: 'versionTitle', column: 'version_title', label: 'Version'},
   {field: 'explicit', column: 'explicit', label: 'Explicit'},
   {field: 'languageCode', column: 'language_code', label: 'Language'},
   {field: 'genre', column: 'genre', label: 'Genre'},
   {field: 'previewStartMs', column: 'preview_start_ms', label: 'Preview start'},
+  {field: 'previewLengthMs', column: 'preview_length_ms', label: 'Preview length'},
 ]
 
 function normalize(value: unknown): unknown {
@@ -319,7 +320,7 @@ export class ReleaseChangeRequestService {
       for (const change of input.tracks) {
         const track = current.tracks.get(change.trackId)
         if (!track) throw new MarketplaceError(404, 'not_found', 'Track was not found on this release')
-        if (change.previewStartMs !== undefined) resolvePreviewStart(track, {previewStartMs: change.previewStartMs})
+        if (change.previewStartMs !== undefined || change.previewLengthMs !== undefined) resolvePreviewStart(track, {previewStartMs: change.previewStartMs, previewLengthMs: change.previewLengthMs})
         for (const artistId of change.credits?.featuredArtistIds ?? []) await assertOwned(db, 'artists', artistId, context.providerId)
       }
       if (new Set(input.tracks.map((change) => change.trackId)).size !== input.tracks.length) {
@@ -571,7 +572,7 @@ async function applyChanges(db: Database, current: CurrentState, request: Change
     const trackValues: unknown[] = []
     for (const {field, column} of TRACK_FIELDS) {
       if (!keys.has(`track.${track.id}.${field}`)) continue
-      const value = field === 'previewStartMs' ? resolvePreviewStart(track, {previewStartMs: change.previewStartMs}) : normalize(change[field])
+      const value = field === 'previewStartMs' ? resolvePreviewStart(track, {previewStartMs: change.previewStartMs, previewLengthMs: change.previewLengthMs}) : normalize(change[field])
       trackValues.push(value)
       trackSets.push(`${column} = ?${trackValues.length}`)
     }

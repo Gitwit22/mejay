@@ -38,7 +38,7 @@ import {
   setProviderTrackPrice,
   clearProviderTrackPrice,
 } from '@/lib/providerApi'
-import {browserTimeZone, formatPreviewStart, formatReleaseTime, listTimeZones, meetsReleaseLead, parsePreviewStart, PREVIEW_SECONDS, RELEASE_LEAD_MESSAGE, SCHEDULER_NOTE, utcToZonedLocal, zonedLocalToUtcIso} from '@/lib/releaseTime'
+import {browserTimeZone, formatPreviewStart, formatReleaseTime, listTimeZones, meetsReleaseLead, parsePreviewStart, PREVIEW_LENGTH_OPTIONS, previewSeconds, RELEASE_LEAD_MESSAGE, SCHEDULER_NOTE, utcToZonedLocal, zonedLocalToUtcIso} from '@/lib/releaseTime'
 
 const steps: Array<{id: ReleaseDraftStep; label: string}> = [
   {id: 'release-information', label: 'Release Information'},
@@ -263,7 +263,7 @@ export function ReleaseScheduleFields({value, onChange, problem}: {value: Releas
     </div>}
     <div className="space-y-2 border-t border-white/10 pt-4">
       <p className="text-sm font-medium">Song previews</p>
-      <p className="text-xs text-zinc-500">Fans hear a {PREVIEW_SECONDS}-second clip that fades in and out. Choose where each song's clip starts in Track Metadata.</p>
+      <p className="text-xs text-zinc-500">Fans hear a short clip that fades in and out. Choose where each song's clip starts and how long it plays in Track Metadata.</p>
       <div className="flex flex-col gap-2 text-sm sm:flex-row sm:gap-5">
         <label className="flex items-center gap-2"><input type="radio" name="preview-timing" checked={value.previewTiming === 'after_release'} onChange={() => onChange({...value, previewTiming: 'after_release'})} />After release only</label>
         <label className="flex items-center gap-2"><input type="radio" name="preview-timing" checked={value.previewTiming === 'before_release'} onChange={() => onChange({...value, previewTiming: 'before_release'})} />Before release too (during pre-orders)</label>
@@ -304,17 +304,18 @@ function TrackMetadataForm({track, artistId, releaseId}: {track: ProviderTrack; 
   const queryClient = useQueryClient()
   const [title, setTitle] = useState(track.title), [genre, setGenre] = useState(track.genre || ''), [language, setLanguage] = useState(track.language_code || ''), [explicit, setExplicit] = useState(track.explicit), [instrumental, setInstrumental] = useState(track.instrumental || false)
   const [previewStart, setPreviewStart] = useState(formatPreviewStart(track.preview_start_ms))
+  const [previewLength, setPreviewLength] = useState(previewSeconds(track))
   const previewStartMs = parsePreviewStart(previewStart)
   const previewProblem = previewStartMs === undefined ? 'Use minutes:seconds, like 1:05, or leave blank for automatic.'
-    : previewStartMs !== null && track.duration_ms && previewStartMs > track.duration_ms - PREVIEW_SECONDS * 1000 ? `Start at least ${PREVIEW_SECONDS} seconds before the end of the song.` : null
+    : previewStartMs !== null && track.duration_ms && previewStartMs > track.duration_ms - previewLength * 1000 ? `Start at least ${previewLength} seconds before the end of the song.` : null
   const unsaved = title !== track.title || genre !== (track.genre || '') || language !== (track.language_code || '') || explicit !== track.explicit
-    || instrumental !== (track.instrumental || false) || previewStart !== formatPreviewStart(track.preview_start_ms)
+    || instrumental !== (track.instrumental || false) || previewStart !== formatPreviewStart(track.preview_start_ms) || previewLength !== previewSeconds(track)
   usePendingSave(`track-metadata:${track.id}`, unsaved, async () => {
     if (!title.trim()) throw new Error('Enter a title for every track.')
     if (previewProblem) throw new Error(`${track.title}: ${previewProblem}`)
     await save.mutateAsync()
   })
-  const save = useMutation({mutationFn: () => updateProviderTrack(track.id, {title, primaryArtistId: artistId, discNumber: track.disc_number, trackNumber: track.track_number, durationMs: track.duration_ms, explicit, languageCode: language || null, genre: genre || null, instrumental, previewStartMs: previewStartMs ?? null}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', releaseId]}); toast({title: `${title} saved`})}})
+  const save = useMutation({mutationFn: () => updateProviderTrack(track.id, {title, primaryArtistId: artistId, discNumber: track.disc_number, trackNumber: track.track_number, durationMs: track.duration_ms, explicit, languageCode: language || null, genre: genre || null, instrumental, previewStartMs: previewStartMs ?? null, previewLengthMs: previewLength * 1000}), onSuccess: async () => {await queryClient.invalidateQueries({queryKey: ['provider', 'release', releaseId]}); toast({title: `${title} saved`})}})
   return <form onSubmit={(event) => {event.preventDefault(); if (!previewProblem) save.mutate()}} className="grid gap-4 rounded-md border border-white/10 bg-[#141417] p-5 sm:grid-cols-2"><Field label="Title"><Input value={title} onChange={(event) => setTitle(event.target.value)} required /></Field><Field label="Genre"><Input value={genre} onChange={(event) => setGenre(event.target.value)} /></Field><Field label="Language code"><Input value={language} onChange={(event) => setLanguage(event.target.value)} placeholder="en" maxLength={3} /></Field><div className="flex items-end gap-6 pb-2"><Label className="flex items-center gap-2"><Switch checked={explicit} onCheckedChange={setExplicit} />Explicit</Label><Label className="flex items-center gap-2"><Switch checked={instrumental} onCheckedChange={setInstrumental} />Instrumental</Label></div>
     <div className="space-y-2 sm:col-span-2">
       <Label htmlFor={`preview-start-${track.id}`}>Preview starts at</Label>
@@ -322,7 +323,13 @@ function TrackMetadataForm({track, artistId, releaseId}: {track: ProviderTrack; 
         <Input id={`preview-start-${track.id}`} className="w-28" inputMode="numeric" placeholder="Automatic" value={previewStart} aria-invalid={Boolean(previewProblem)} aria-describedby={`preview-start-help-${track.id}`} onChange={(event) => setPreviewStart(event.target.value)} />
         <PreviewStatus status={track.preview_status} />
       </div>
-      <p id={`preview-start-help-${track.id}`} className={`text-xs ${previewProblem ? 'text-red-400' : 'text-zinc-500'}`}>{previewProblem ?? `Fans hear ${PREVIEW_SECONDS} seconds from this point (minutes:seconds), fading in and out. Leave blank to start 30 seconds in automatically.`}</p>
+      <p id={`preview-start-help-${track.id}`} className={`text-xs ${previewProblem ? 'text-red-400' : 'text-zinc-500'}`}>{previewProblem ?? `Fans hear ${previewLength} seconds from this point (minutes:seconds), fading in and out. Leave blank to start 30 seconds in automatically.`}</p>
+    </div>
+    <div className="space-y-2">
+      <Label htmlFor={`preview-length-${track.id}`}>Preview length</Label>
+      <select id={`preview-length-${track.id}`} className="h-10 w-full rounded-md border border-white/10 bg-zinc-950 px-3 text-sm" value={previewLength} onChange={(event) => setPreviewLength(Number(event.target.value))}>
+        {PREVIEW_LENGTH_OPTIONS.map((seconds) => <option key={seconds} value={seconds}>{seconds} seconds</option>)}
+      </select>
     </div>
     {save.isError && <p className="text-sm text-red-400 sm:col-span-2">{save.error.message}</p>}
     <Button className="sm:col-span-2" disabled={save.isPending || Boolean(previewProblem)}>Save track metadata</Button></form>

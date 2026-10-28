@@ -154,8 +154,10 @@ export type ProviderTrack = {
   recording_location?: string | null
   contributors?: TrackContributor[]
   featured_artist_ids?: string[]
-  /** Where the 10-second store preview starts (ms); null = automatic. */
+  /** Where the store preview starts (ms); null = automatic. */
   preview_start_ms?: number | null
+  /** How long the store preview plays (ms), 5 to 30 seconds. */
+  preview_length_ms?: number
   /** Whether MeJay has made the preview clip for the current setting. */
   preview_status?: 'ready' | 'processing' | 'waiting'
 }
@@ -463,6 +465,7 @@ export function updateProviderTrack(trackId: string, input: {
   recordingYear?: number | null
   recordingLocation?: string | null
   previewStartMs?: number | null
+  previewLengthMs?: number
 }): Promise<ProviderTrack> {
   return request(`/api/marketplace/tracks/${encodeURIComponent(trackId)}`, {
     method: 'PATCH', headers: {'content-type': 'application/json'}, body: JSON.stringify(input),
@@ -545,6 +548,7 @@ export type TrackFieldChanges = {
   languageCode?: string | null
   genre?: string | null
   previewStartMs?: number | null
+  previewLengthMs?: number
   credits?: {featuredArtistIds: string[]; contributors: TrackContributor[]}
 }
 

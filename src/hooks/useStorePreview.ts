@@ -3,7 +3,7 @@ import {useEffect, useRef, useState} from 'react'
 import {toast} from '@/hooks/use-toast'
 import {recordStorePreview, storeAssetUrl} from '@/lib/musicStoreApi'
 
-/** One shared audio element for public 10-second preview clips (store and artist pages); the clips fade in and out themselves. */
+/** One shared audio element for public preview clips (store and artist pages); the clips fade in and out themselves. */
 export type PreviewController = {
   playingId: string | null
   toggle: (trackId: string, assetId: string | null) => void

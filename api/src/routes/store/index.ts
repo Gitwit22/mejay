@@ -78,7 +78,7 @@ export async function getCatalogAsset(context: Context): Promise<Response> {
       })
     }
 
-    // Audio is only ever a MeJay-made 10-second preview clip (getAsset refuses masters), so the
+    // Audio is only ever a MeJay-made preview clip (5 to 30 seconds) (getAsset refuses masters), so the
     // whole small file is served, with byte ranges for players that seek.
     if (asset.kind === 'audio_preview') {
       const requestedRange = context.request.headers.get('range')

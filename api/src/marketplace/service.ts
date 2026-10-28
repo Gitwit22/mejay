@@ -29,7 +29,7 @@ import {inspectUpload, validateInspectedUpload, isTruncatedJpegHeader} from './u
 import {slugifyArtistName} from './artist-profile'
 import {releaseCertificationProblems, snapshotReleaseCertification, type RequestMeta} from './release-submission-service'
 import {requestedReleaseProblem} from './release-schedule'
-import {maxPreviewStartMs} from '../audio/transcode'
+import {LEGACY_PREVIEW_LENGTH_MS, maxPreviewStartMs} from '../audio/transcode'
 import {formatArtistCredit} from './artist-credit'
 
 type Statement = {
@@ -759,16 +759,17 @@ export class MarketplaceService {
         'SELECT * FROM tracks WHERE id = ?1 AND provider_profile_id = ?2',
       ).bind(trackId, context.providerId).first<Record<string, unknown>>()
       const previewStartMs = resolvePreviewStart(before, input)
+      const previewLengthMs = resolvePreviewLength(before, input)
       const row = await inserted<any>(db.prepare(
         `UPDATE tracks SET title = ?1, version_title = ?2, disc_number = ?3, track_number = ?4,
           duration_ms = ?5, explicit = ?6, language_code = ?7, genre = ?8, instrumental = ?9,
-          recording_year = ?10, recording_location = ?11, preview_start_ms = ?14, updated_at = CURRENT_TIMESTAMP
+          recording_year = ?10, recording_location = ?11, preview_start_ms = ?14, preview_length_ms = ?15, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?12 AND provider_profile_id = ?13 RETURNING *`,
       ).bind(
         input.title, input.versionTitle ?? null, input.discNumber, input.trackNumber,
         input.durationMs ?? null, input.explicit, input.languageCode ?? null, input.genre ?? null,
         input.instrumental, input.recordingYear ?? null, input.recordingLocation ?? null,
-        trackId, context.providerId, previewStartMs,
+        trackId, context.providerId, previewStartMs, previewLengthMs,
       ))
       await db.prepare(
         'UPDATE track_artists SET is_primary = FALSE WHERE track_id = ?1 AND provider_profile_id = ?2 AND is_primary = TRUE',
@@ -1350,26 +1351,37 @@ export function resolveDraftSchedule(
 
 /**
  * SQL: the preview clip `clip` was made for track `track`'s current preview setting (start choice,
- * null = automatic) from its latest audio upload. Clips made before artists could choose a start do
- * not match, so they are regenerated.
+ * null = automatic, and length) from its latest audio upload. Clips made before artists could choose
+ * a start do not match, so they are regenerated. Clips made before artists could choose a length
+ * were 10 seconds, so they still match songs left at 10 seconds.
  */
 export function PREVIEW_MATCHES_SETTING_SQL(clip: string, track: string): string {
   return `(${clip}.metadata ? 'previewSetting'
     AND ${clip}.metadata->>'previewSetting' IS NOT DISTINCT FROM ${track}.preview_start_ms::text
+    AND COALESCE((${clip}.metadata->>'previewLengthMs')::integer, ${LEGACY_PREVIEW_LENGTH_MS}) = ${track}.preview_length_ms
     AND ${clip}.metadata->>'sourceAssetId' = (SELECT latest.id FROM marketplace_assets latest WHERE latest.track_id = ${track}.id
       AND latest.kind = 'audio' AND latest.processing_status = 'ready' ORDER BY latest.created_at DESC LIMIT 1))`
 }
 
-/** Preview start to store for a track save: omitted keeps it; it must leave a full 10-second clip. */
-export function resolvePreviewStart(before: Record<string, unknown> | null, input: Pick<TrackDraftInput, 'previewStartMs' | 'durationMs'>): number | null {
-  if (input.previewStartMs === undefined) return (before?.preview_start_ms as number | null | undefined) ?? null
-  if (input.previewStartMs === null) return null
+/** Preview length to store for a track save: omitted keeps the stored length. */
+export function resolvePreviewLength(before: Record<string, unknown> | null, input: Pick<TrackDraftInput, 'previewLengthMs'>): number {
+  return input.previewLengthMs ?? (before?.preview_length_ms as number | null | undefined) ?? LEGACY_PREVIEW_LENGTH_MS
+}
+
+/**
+ * Preview start to store for a track save: omitted keeps it. It must leave a full clip of the
+ * song's preview length, checked again when only the length changes.
+ */
+export function resolvePreviewStart(before: Record<string, unknown> | null, input: Pick<TrackDraftInput, 'previewStartMs' | 'previewLengthMs' | 'durationMs'>): number | null {
+  const start = input.previewStartMs === undefined ? (before?.preview_start_ms as number | null | undefined) ?? null : input.previewStartMs
+  if (start === null || (input.previewStartMs === undefined && input.previewLengthMs === undefined)) return start
+  const lengthMs = resolvePreviewLength(before, input)
   const duration = input.durationMs ?? (before?.duration_ms as number | null | undefined) ?? null
-  if (duration && input.previewStartMs > maxPreviewStartMs(duration)) {
-    const latest = Math.floor(maxPreviewStartMs(duration) / 1000)
-    throw new MarketplaceError(422, 'preview_start_too_late', `The preview must start early enough to play 10 seconds. The latest start for this song is ${Math.floor(latest / 60)}:${String(latest % 60).padStart(2, '0')}.`)
+  if (duration && start > maxPreviewStartMs(duration, lengthMs)) {
+    const latest = Math.floor(maxPreviewStartMs(duration, lengthMs) / 1000)
+    throw new MarketplaceError(422, 'preview_start_too_late', `The preview must start early enough to play ${lengthMs / 1000} seconds. The latest start for this song is ${Math.floor(latest / 60)}:${String(latest % 60).padStart(2, '0')}.`)
   }
-  return input.previewStartMs
+  return start
 }
 
 /**

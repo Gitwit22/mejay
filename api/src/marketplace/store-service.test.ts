@@ -47,7 +47,7 @@ describe('public music store policy', () => {
     const service = new StoreService({prepare: (sql: string) => {queries.push(sql); return statement}} as never)
 
     await expect(service.recordPreview('asset-1', null)).resolves.toBeUndefined()
-    // Never the uploaded master: only the MeJay-made 10-second clip.
+    // Never the uploaded master: only the MeJay-made preview clip.
     expect(queries[0]).toContain("asset.kind = 'audio_preview'")
     expect(queries[0]).not.toContain("asset.kind = 'audio'")
     expect(queries[0]).toContain("release.status = 'LIVE'")

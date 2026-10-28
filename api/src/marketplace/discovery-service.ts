@@ -33,7 +33,7 @@ const releaseJoins = `
     ORDER BY asset.created_at DESC LIMIT 1
   ) artwork ON TRUE
   LEFT JOIN tracks track ON track.release_id = r.id
-  -- Only MeJay-made 10-second clips are public (the store's asset route refuses masters).
+  -- Only MeJay-made preview clips are public (the store's asset route refuses masters).
   LEFT JOIN marketplace_assets preview ON preview.track_id = track.id
     AND preview.kind = 'audio_preview' AND preview.processing_status = 'ready'`
 

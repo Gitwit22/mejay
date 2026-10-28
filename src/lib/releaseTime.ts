@@ -94,7 +94,17 @@ export function isPreorder(release: {availability?: string | null}): boolean {
   return release.availability === 'preorder'
 }
 
-export const PREVIEW_SECONDS = 10
+/** Store preview length bounds the artist chooses within; the API enforces the same. */
+export const MIN_PREVIEW_SECONDS = 5
+export const MAX_PREVIEW_SECONDS = 30
+/** Songs from before artists could choose a length play 10 seconds. */
+const LEGACY_PREVIEW_SECONDS = 10
+export const PREVIEW_LENGTH_OPTIONS = Array.from({length: MAX_PREVIEW_SECONDS - MIN_PREVIEW_SECONDS + 1}, (_, index) => MIN_PREVIEW_SECONDS + index)
+
+/** A track's preview length in seconds. */
+export function previewSeconds(track: {preview_length_ms?: number | null}): number {
+  return track.preview_length_ms ? track.preview_length_ms / 1000 : LEGACY_PREVIEW_SECONDS
+}
 
 /** "1:05" → 65000 ms; blank → null (automatic); anything else → undefined (invalid). */
 export function parsePreviewStart(value: string): number | null | undefined {

@@ -156,7 +156,7 @@ describe('release wizard: song previews', () => {
   it('lets the artist allow previews before release and saves the choice', async () => {
     vi.mocked(getProviderRelease).mockResolvedValue(detail())
     renderStep('release-information')
-    expect(await screen.findByText(/Fans hear a 10-second clip that fades in and out/)).toBeInTheDocument()
+    expect(await screen.findByText(/Fans hear a short clip that fades in and out/)).toBeInTheDocument()
     expect(screen.getByLabelText('After release only')).toBeChecked()
     fireEvent.click(screen.getByLabelText('Before release too (during pre-orders)'))
     expect(screen.getByText(/Turn on pre-orders above to use this/)).toBeInTheDocument()
@@ -180,6 +180,21 @@ describe('release wizard: song previews', () => {
     fireEvent.change(input, {target: {value: ''}})
     fireEvent.click(screen.getByRole('button', {name: 'Save track metadata'}))
     await waitFor(() => expect(updateProviderTrack).toHaveBeenLastCalledWith('track-1', expect.objectContaining({previewStartMs: null})))
+  })
+
+  it('lets the artist choose 5 to 30 seconds of preview, checking the start against that length', async () => {
+    vi.mocked(getProviderRelease).mockResolvedValue(detail({tracks: [{...track, preview_start_ms: 160_000, preview_length_ms: 15_000}]}))
+    renderStep('track-metadata')
+    const length = await screen.findByLabelText('Preview length')
+    expect(length).toHaveValue('15')
+    expect([...(length as HTMLSelectElement).options].map((option) => option.value)).toEqual(Array.from({length: 26}, (_, index) => String(index + 5)))
+    expect(screen.getByText(/Fans hear 15 seconds from this point/)).toBeInTheDocument()
+    fireEvent.change(length, {target: {value: '30'}})
+    expect(screen.getByText('Start at least 30 seconds before the end of the song.')).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Save track metadata'})).toBeDisabled()
+    fireEvent.change(length, {target: {value: '20'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Save track metadata'}))
+    await waitFor(() => expect(updateProviderTrack).toHaveBeenCalledWith('track-1', expect.objectContaining({previewStartMs: 160_000, previewLengthMs: 20_000})))
   })
 })
 

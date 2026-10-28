@@ -1812,14 +1812,15 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       await expect(retryFailedConfirmations(db() as never, emailEnv)).resolves.toBe(0)
     })
 
-    /** A finished clip for a track, as the converter would store it. */
-    async function addClip(owner: {provider: {id: string}; track: {id: string}}, setting: number | null) {
+    /** A finished clip for a track, as the converter would store it; `lengthMs` defaults to the track's current length, null leaves it out like clips made before lengths existed. */
+    async function addClip(owner: {provider: {id: string}; track: {id: string}}, setting: number | null, lengthMs?: number | null) {
       const source = await pool.query<{id: string}>(`SELECT id FROM marketplace_assets WHERE track_id = $1 AND kind = 'audio' ORDER BY created_at DESC LIMIT 1`, [owner.track.id])
+      const length = lengthMs === undefined ? (await pool.query<{preview_length_ms: number}>('SELECT preview_length_ms FROM tracks WHERE id = $1', [owner.track.id])).rows[0].preview_length_ms : lengthMs
       const clipId = crypto.randomUUID()
       await pool.query(
         `INSERT INTO marketplace_assets (id, provider_profile_id, track_id, kind, storage_key, mime_type, byte_size, processing_status, metadata)
          VALUES ($1, $2, $3, 'audio_preview', $4, 'audio/mpeg', 160000, 'ready', $5)`,
-        [clipId, owner.provider.id, owner.track.id, `mejay-artist/${owner.provider.id}/audio_preview/${owner.track.id}/${clipId}.mp3`, JSON.stringify({sourceAssetId: source.rows[0].id, previewSetting: setting})],
+        [clipId, owner.provider.id, owner.track.id, `mejay-artist/${owner.provider.id}/audio_preview/${owner.track.id}/${clipId}.mp3`, JSON.stringify({sourceAssetId: source.rows[0].id, previewSetting: setting, ...(length === null ? {} : {previewLengthMs: length})})],
       )
       await pool.query(`UPDATE audio_processing_jobs SET status = 'succeeded' WHERE track_id = $1 AND status IN ('queued', 'processing')`, [owner.track.id])
       return clipId
@@ -1858,6 +1859,32 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       expect(await wakeConverterIfQueued(db() as never, {CONVERTER_URL: 'https://converter.test/', CONVERTER_TRIGGER_SECRET: 'secret'}, fetchSpy as never)).toBe(true)
       expect(fetchSpy).toHaveBeenCalledWith('https://converter.test/jobs/run', expect.objectContaining({method: 'POST', headers: {authorization: 'Bearer secret'}}))
       await addClip(owner, 50000)
+      expect((await service.getRelease(owner.userId, owner.release.id) as {tracks: Array<{preview_status: string}>}).tracks[0].preview_status).toBe('ready')
+    })
+
+    it('defaults new songs to 15-second previews and rebuilds a clip once when the artist picks another length', async () => {
+      await pool.query(`UPDATE audio_processing_jobs SET status = 'succeeded' WHERE status IN ('queued', 'processing')`)
+      const owner = await scheduledPreorder('ClipLength')
+      const track = async () => (await pool.query('SELECT preview_length_ms FROM tracks WHERE id = $1', [owner.track.id])).rows[0].preview_length_ms
+      const jobsFor = async () => (await pool.query(`SELECT status, preview_length_ms FROM audio_processing_jobs WHERE track_id = $1 ORDER BY created_at`, [owner.track.id])).rows
+      expect(await track()).toBe(15_000)
+
+      // A clip made before lengths existed was 10 seconds: it still matches a song left at 10 seconds.
+      await pool.query('UPDATE tracks SET preview_length_ms = 10000 WHERE id = $1', [owner.track.id])
+      await addClip(owner, null, null)
+      await ensurePreviewJobs(db() as never, 500)
+      expect(await jobsFor()).toEqual([])
+
+      // A new length queues exactly one job carrying it; a failed file is not retried for the same length.
+      await pool.query('UPDATE tracks SET preview_length_ms = 20000 WHERE id = $1', [owner.track.id])
+      await ensurePreviewJobs(db() as never, 500)
+      await ensurePreviewJobs(db() as never, 500)
+      expect(await jobsFor()).toEqual([{status: 'queued', preview_length_ms: 20_000}])
+      await pool.query(`UPDATE audio_processing_jobs SET status = 'failed' WHERE track_id = $1`, [owner.track.id])
+      await ensurePreviewJobs(db() as never, 500)
+      expect(await jobsFor()).toHaveLength(1)
+      expect((await service.getRelease(owner.userId, owner.release.id) as {tracks: Array<{preview_status: string}>}).tracks[0].preview_status).toBe('waiting')
+      await addClip(owner, null)
       expect((await service.getRelease(owner.userId, owner.release.id) as {tracks: Array<{preview_status: string}>}).tracks[0].preview_status).toBe('ready')
     })
 
@@ -1902,8 +1929,14 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       await service.updateTrack(fixture.userId, fixture.track.id, {...trackInput, previewStartMs: 95_000})
       await service.updateTrack(fixture.userId, fixture.track.id, trackInput)
       expect((await pool.query('SELECT preview_start_ms FROM tracks WHERE id = $1', [fixture.track.id])).rows[0].preview_start_ms).toBe(95_000)
+      // New songs play 15 seconds, so the latest start on a 3:00 song is 2:45.
       await expect(service.updateTrack(fixture.userId, fixture.track.id, {...trackInput, previewStartMs: 175_000}))
-        .rejects.toMatchObject({code: 'preview_start_too_late', message: expect.stringContaining('2:50')})
+        .rejects.toMatchObject({code: 'preview_start_too_late', message: expect.stringContaining('play 15 seconds. The latest start for this song is 2:45')})
+      await expect(service.updateTrack(fixture.userId, fixture.track.id, {...trackInput, previewStartMs: 160_000, previewLengthMs: 25_000}))
+        .rejects.toMatchObject({code: 'preview_start_too_late', message: expect.stringContaining('2:35')})
+      await service.updateTrack(fixture.userId, fixture.track.id, {...trackInput, previewStartMs: 150_000, previewLengthMs: 25_000})
+      await service.updateTrack(fixture.userId, fixture.track.id, trackInput)
+      expect((await pool.query('SELECT preview_start_ms, preview_length_ms FROM tracks WHERE id = $1', [fixture.track.id])).rows[0]).toEqual({preview_start_ms: 150_000, preview_length_ms: 25_000})
       await service.updateTrack(fixture.userId, fixture.track.id, {...trackInput, previewStartMs: null})
       expect((await pool.query('SELECT preview_start_ms FROM tracks WHERE id = $1', [fixture.track.id])).rows[0].preview_start_ms).toBeNull()
 
@@ -2130,6 +2163,20 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
         expect((await pool.query('SELECT preview_timing, status FROM releases WHERE id = $1', [owner.release.id])).rows[0]).toEqual({preview_timing: 'before_release', status: 'SCHEDULED'})
         expect(await trackPreview()).toBe(clipId)
         await expect(store.getAsset(clipId)).resolves.toMatchObject({kind: 'audio_preview'})
+      })
+
+      it('changes a song\'s preview length through review, re-checking the start against it', async () => {
+        const owner = await scheduledPreorder('ChangePreviewLength')
+        await pool.query('UPDATE tracks SET duration_ms = 200000, preview_start_ms = 180000 WHERE id = $1', [owner.track.id])
+        await expect(changes().saveDraft(owner.userId, owner.release.id, {release: {}, tracks: [{trackId: owner.track.id, previewLengthMs: 30_000}], audioReplacements: []}))
+          .rejects.toMatchObject({code: 'preview_start_too_late'})
+        const saved = await changes().saveDraft(owner.userId, owner.release.id, {release: {}, tracks: [{trackId: owner.track.id, previewLengthMs: 20_000}], audioReplacements: []}) as {request: {id: string; diff: Array<{key: string; before: unknown; after: unknown}>}}
+        expect(saved.request.diff).toEqual([expect.objectContaining({key: `track.${owner.track.id}.previewLengthMs`, before: 15_000, after: 20_000})])
+        await changes().submit(owner.userId, owner.release.id)
+        expect((await pool.query('SELECT preview_length_ms FROM tracks WHERE id = $1', [owner.track.id])).rows[0].preview_length_ms).toBe(15_000)
+        await changes().command(reviewerUserId, saved.request.id, {action: 'start_review'})
+        await changes().command(reviewerUserId, saved.request.id, {action: 'approve', confirmSameRecording: false})
+        expect((await pool.query('SELECT preview_length_ms, preview_start_ms FROM tracks WHERE id = $1', [owner.track.id])).rows[0]).toEqual({preview_length_ms: 20_000, preview_start_ms: 180_000})
       })
 
       it('requires a same-song confirmation for audio on a live release, and rejection changes nothing', async () => {

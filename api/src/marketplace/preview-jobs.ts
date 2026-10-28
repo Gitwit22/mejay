@@ -1,4 +1,5 @@
 import {enqueueAudioJob} from '../audio/jobs'
+import {LEGACY_PREVIEW_LENGTH_MS} from '../audio/transcode'
 import {PREVIEW_MATCHES_SETTING_SQL} from './service'
 
 type Statement = {
@@ -13,8 +14,8 @@ type Database = {prepare: (sql: string) => Statement}
 export type ConverterEnv = {CONVERTER_URL?: string; CONVERTER_TRIGGER_SECRET?: string}
 
 /**
- * Keeps every track's 10-second store preview current. Queues a conversion for each track whose
- * latest ready upload has no clip for the track's current preview start, unless one is already
+ * Keeps every track's store preview current. Queues a conversion for each track whose latest ready
+ * upload has no clip for the track's current preview start and length, unless one is already
  * queued or running, or the same file already failed for that same setting (a broken file is not
  * retried forever). Idempotent: repeated runs queue nothing new.
  */
@@ -33,7 +34,8 @@ export async function ensurePreviewJobs(db: Database, limit = 25): Promise<{queu
        AND NOT EXISTS (
          SELECT 1 FROM audio_processing_jobs job WHERE job.source_asset_id = source.id AND (
            job.status IN ('queued', 'processing')
-           OR (job.status = 'failed' AND job.preview_start_ms IS NOT DISTINCT FROM t.preview_start_ms)))
+           OR (job.status = 'failed' AND job.preview_start_ms IS NOT DISTINCT FROM t.preview_start_ms
+             AND COALESCE(job.preview_length_ms, ${LEGACY_PREVIEW_LENGTH_MS}) = t.preview_length_ms)))
      ORDER BY t.updated_at DESC
      LIMIT ?1`,
   ).bind(limit).all<{source_asset_id: string}>()

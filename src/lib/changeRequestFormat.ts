@@ -1,4 +1,5 @@
-import type {ContributorRole, TrackContributor} from './providerApi'
+import type {ChangeDiffItem, ContributorRole, TrackContributor} from './providerApi'
+import {formatPreviewStart} from './releaseTime'
 
 /** Shown to artists replacing audio, and to staff confirming the replacement. */
 export const SAME_SONG_NOTE = 'From 1 day before release, and after release, MeJay must confirm a replacement is the same song (for example a new mix or master).'
@@ -7,6 +8,13 @@ export const CONTRIBUTOR_ROLE_LABELS: Record<ContributorRole, string> = {writer:
 
 /** Plain-language names for the release's preview timing setting. */
 export const PREVIEW_TIMING_LABELS: Record<'before_release' | 'after_release', string> = {after_release: 'After release only', before_release: 'Before release too (during pre-orders)'}
+
+/** One side of a diff line, reading preview start and length (stored in ms) as times. */
+export function formatChangeItemValue(item: Pick<ChangeDiffItem, 'key'>, value: unknown): string {
+  if (item.key.endsWith('.previewStartMs')) return typeof value === 'number' ? formatPreviewStart(value) : 'Automatic'
+  if (item.key.endsWith('.previewLengthMs') && typeof value === 'number') return `${value / 1000} seconds`
+  return formatChangeValue(value)
+}
 
 /** One side of a change-request diff line, as plain text. */
 export function formatChangeValue(value: unknown): string {
