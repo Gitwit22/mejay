@@ -40,6 +40,9 @@ export type FinanceOrderRow = {
   transfer_status: ReportingOrderMoney['transferStatus']
   dispute_status: ReportingOrderMoney['disputeStatus']
   livemode: boolean | null
+  /** Checkout email for guests, otherwise the buyer's account email. */
+  buyer_email: string | null
+  guest_checkout: boolean
   /** platform_revenue credits minus debits from the immutable ledger (sale less refunds). */
   platform_revenue_net_minor: number
 }
@@ -100,6 +103,8 @@ export type FinanceSummary = {
     transferStatus: string
     disputeStatus: string
     livemode: boolean | null
+    buyerEmail: string | null
+    guestCheckout: boolean
   }>
 }
 
@@ -231,6 +236,8 @@ export function buildFinanceSummary(filters: FinanceFilters, rows: FinanceOrderR
         transferStatus: row.transfer_status,
         disputeStatus: row.dispute_status,
         livemode: row.livemode,
+        buyerEmail: row.buyer_email ?? null,
+        guestCheckout: Boolean(row.guest_checkout),
       })
     }
   }
@@ -300,11 +307,14 @@ export class MarketplaceFinanceService {
            purchase_order.refunded_amount_minor,
            COALESCE(purchase_order.platform_fee_bps, attempt.platform_fee_bps) AS platform_fee_bps,
            purchase_order.payment_status, purchase_order.transfer_status, purchase_order.dispute_status,
-           purchase_order.livemode
+           purchase_order.livemode,
+           LOWER(COALESCE(purchase_order.buyer_email, buyer.email)) AS buyer_email,
+           (purchase_order.buyer_user_id IS NULL) AS guest_checkout
          FROM marketplace_orders purchase_order
          JOIN marketplace_order_items item ON item.order_id = purchase_order.id
          LEFT JOIN provider_profiles provider ON provider.id = purchase_order.provider_profile_id
          LEFT JOIN marketplace_checkout_attempts attempt ON attempt.id = purchase_order.checkout_attempt_id
+         LEFT JOIN users buyer ON buyer.id = purchase_order.buyer_user_id
          WHERE (?1::timestamptz IS NULL OR purchase_order.paid_at >= ?1::timestamptz)
            AND (?2::timestamptz IS NULL OR purchase_order.paid_at < ?2::timestamptz)
            AND (?3 = '' OR purchase_order.provider_profile_id = ?3)

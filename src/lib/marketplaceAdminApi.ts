@@ -302,6 +302,9 @@ export type MarketplaceFinanceSummary = {
     transferStatus: string
     disputeStatus: string
     livemode: boolean | null
+    /** Checkout email for guests, otherwise the buyer's account email. */
+    buyerEmail?: string | null
+    guestCheckout?: boolean
   }>
 }
 
@@ -442,4 +445,31 @@ export function commandChangeRequest(changeRequestId: string, command: ChangeReq
 /** Staff-only private file (artwork, audio or rights document); opened in a new tab with the staff session. */
 export function reviewAssetUrl(assetId: string): string {
   return apiUrl(`/api/marketplace-admin/assets/${encodeURIComponent(assetId)}`)
+}
+
+export type CustomerPurchase = {
+  order_id: string; paid_at: string | null; purchase_type: string | null; payment_status: string
+  gross_amount_minor: number; currency: string; release_title: string; song_title: string | null; artist_name: string
+  buyer_email: string | null; guest_checkout: boolean; delivery_status: string | null; access_status: string | null
+  download_count: number; last_downloaded_at: string | null
+  last_email: {kind: string; status: string; sent_at: string | null} | null
+}
+
+export type CustomerAccount = {
+  id: string; email: string; display_name: string | null; account_intent: string; created_at: string
+  has_password: boolean; last_session_at: string | null
+  plan: {access_type: string; has_full_access: boolean; subscription_status: string | null; billing_cadence: string | null; current_period_end: string | null} | null
+  marketplace_role: string | null
+  provider: {id: string; display_name: string | null; status: string; member_role: string} | null
+}
+
+export type CustomerLookup = {
+  query: string
+  matches: string[]
+  customer: {email: string; account: CustomerAccount | null; purchases: CustomerPurchase[]} | null
+}
+
+/** Find a customer by email or part of one (marketplace admins only). */
+export function lookupCustomer(query: string): Promise<CustomerLookup> {
+  return request(`/api/marketplace-admin/customers?q=${encodeURIComponent(query)}`)
 }

@@ -8,6 +8,7 @@ import {discoveryFeaturesSchema, providerAdminCommandSchema, releaseAdminCommand
 import {CommerceService} from '../../marketplace/commerce-service'
 import {MarketplaceFinanceService, normalizeFinanceFilters} from '../../marketplace/finance-service'
 import {BuyerAccessService} from '../../marketplace/buyer-access-service'
+import {CustomerLookupService} from '../../marketplace/customer-lookup-service'
 import type {OrderEmailEnv} from '../../marketplace/order-email'
 import {MarketplaceError} from '../../marketplace/service'
 import {changeRequestReviewCommandSchema, ReleaseChangeRequestService} from '../../marketplace/change-request-service'
@@ -289,3 +290,10 @@ export const createOrderDownloadLink = (context: BuyerAccessContext) => buyerAcc
 /** Admin: correct a guest order's email and send the download links there. */
 export const changeOrderBuyerEmail = (context: BuyerAccessContext) => buyerAccessRoute(context, async (service, userId, orderId) =>
   service.changeBuyerEmail(userId, orderId, await readJson(context.request), context.env))
+
+/** Admin: find a customer by email (or part of one): their account and every purchase. */
+export const lookupCustomer = (context: FinanceContext): Promise<Response> => financeRoute(context, 'customer lookup', async (_service, userId) => {
+  const query = new URL(context.request.url).searchParams.get('q')
+  const data = await new CustomerLookupService(context.env.DB).lookup(userId, query)
+  return json({ok: true, data}, {headers: {'cache-control': 'no-store'}})
+})
