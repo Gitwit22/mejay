@@ -16,6 +16,8 @@ export type CustomerAccount = {
   last_session_at: string | null
   plan: {access_type: string; has_full_access: boolean; subscription_status: string | null; billing_cadence: string | null; current_period_end: string | null} | null
   marketplace_role: string | null
+  /** Free access given by MeJay staff (not a purchase). Null when there is none. */
+  free_access: {granted_by_email: string | null; updated_at: string} | null
   provider: {id: string; display_name: string | null; status: string; member_role: string} | null
 }
 
@@ -84,10 +86,14 @@ export class CustomerLookupService {
          (SELECT MAX(session.created_at) FROM sessions session WHERE session.user_id = account.id) AS last_session_at,
          plan.access_type, plan.has_full_access, plan.subscription_status, plan.billing_cadence, plan.current_period_end,
          staff.role AS marketplace_role,
+         COALESCE(platform_grant.full_site_access, FALSE) AS free_access, platform_grant.updated_at AS free_access_updated_at,
+         granter.email AS free_access_granted_by,
          provider.id AS provider_id, provider.display_name AS provider_name, provider.status AS provider_status, member.role AS member_role
        FROM users account
        LEFT JOIN entitlements plan ON plan.user_id = account.id
        LEFT JOIN marketplace_staff staff ON staff.user_id = account.id
+       LEFT JOIN platform_access_grants platform_grant ON platform_grant.user_id = account.id
+       LEFT JOIN users granter ON granter.id = platform_grant.granted_by_user_id
        LEFT JOIN provider_members member ON member.user_id = account.id
        LEFT JOIN provider_profiles provider ON provider.id = member.provider_profile_id
        WHERE LOWER(account.email) = ?1 LIMIT 1`,
@@ -129,6 +135,9 @@ export class CustomerLookupService {
           current_period_end: account.current_period_end as string | null,
         } : null,
         marketplace_role: account.marketplace_role as string | null,
+        free_access: account.free_access
+          ? {granted_by_email: (account.free_access_granted_by as string | null) ?? null, updated_at: account.free_access_updated_at as string}
+          : null,
         provider: account.provider_id ? {id: String(account.provider_id), display_name: account.provider_name as string | null, status: String(account.provider_status), member_role: String(account.member_role)} : null,
       } : null,
       purchases: purchases.map((purchase) => ({

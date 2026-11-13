@@ -23,6 +23,8 @@ import {processEmailJobs, retryFailedConfirmations, sendAccessRecovery} from './
 import {exchangeEmailLink, issueEmailLink, resolveSessionDownload} from './guest-access'
 import {BuyerAccessService} from './buyer-access-service'
 import {CustomerLookupService} from './customer-lookup-service'
+import {setCustomerFullAccess} from '../routes/marketplace-admin'
+import {onRequest as accountMe} from '../routes/account/me'
 import {claimGuestPurchases} from './commerce-service'
 import {claimStorePurchases, downloadGuestFile, recoverGuestAccess} from '../routes/store/commerce'
 import {signVerifiedToken} from '../routes/_auth'
@@ -1748,6 +1750,89 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       // The finance list now shows each order's buyer.
       const summary = await new MarketplaceFinanceService(db() as never).getSummary(adminUserId, {})
       expect(summary.transactions.find((row) => row.orderId === orderId)).toMatchObject({buyerEmail: guestEmail, guestCheckout: true})
+    })
+
+    it('lets an admin give an account free full access and take it away, without touching its paid plan', async () => {
+      const tag = crypto.randomUUID().slice(0, 8)
+      const signIn = async (userId: string) => {
+        const token = crypto.randomUUID()
+        await pool.query(`INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, CURRENT_TIMESTAMP + INTERVAL '1 hour')`, [
+          createHash('sha256').update(`session:${token}:dev-session-pepper`).digest('hex'), userId,
+        ])
+        return `mejay_session=${token}`
+      }
+      const setAccess = async (cookie: string, userId: string, body: unknown) => {
+        const response = await setCustomerFullAccess({
+          request: new Request(`https://api.test/api/marketplace-admin/customers/${userId}/full-access`, {method: 'POST', headers: {cookie, 'content-type': 'application/json'}, body: JSON.stringify(body)}),
+          env: {DB: db()}, params: {userId},
+        })
+        return {status: response.status, body: await response.json() as {ok: boolean; error?: string; data?: unknown}}
+      }
+      const me = async (cookie: string) => {
+        const response = await accountMe({request: new Request('https://api.test/api/account/me', {headers: {cookie}}), env: {DB: db()} as never})
+        return (await response.json() as {entitlements: {accessType: string; hasFullAccess: boolean; subscriptionStatus?: string}}).entitlements
+      }
+
+      const customerId = crypto.randomUUID()
+      const customerEmail = `comp-${tag}@example.test`
+      await pool.query(`INSERT INTO users (id, email, account_intent) VALUES ($1, $2, 'consumer')`, [customerId, customerEmail])
+      const adminCookie = await signIn(adminUserId)
+      const reviewerCookie = await signIn(reviewerUserId)
+      const customerCookie = await signIn(customerId)
+      expect(await me(customerCookie)).toMatchObject({accessType: 'free', hasFullAccess: false})
+
+      // Only marketplace admins, only signed in, only a real account, only a well-formed command.
+      expect(await setAccess('', customerId, {grant: true})).toMatchObject({status: 401})
+      expect(await setAccess(reviewerCookie, customerId, {grant: true})).toMatchObject({status: 403, body: {error: 'marketplace_admin_required'}})
+      expect(await setAccess(adminCookie, crypto.randomUUID(), {grant: true})).toMatchObject({status: 404, body: {error: 'customer_not_found'}})
+      expect(await setAccess(adminCookie, customerId, {grant: 'yes'})).toMatchObject({status: 400, body: {error: 'invalid_request'}})
+      expect(await me(customerCookie)).toMatchObject({hasFullAccess: false})
+
+      // Granting unlocks the app; a repeat click changes nothing and writes no second audit row.
+      expect(await setAccess(adminCookie, customerId, {grant: true})).toMatchObject({status: 200, body: {ok: true, data: {full_site_access: true, changed: true}}})
+      expect(await setAccess(adminCookie, customerId, {grant: true})).toMatchObject({status: 200, body: {data: {changed: false}}})
+      expect(await me(customerCookie)).toMatchObject({accessType: 'full_program', hasFullAccess: true})
+      const grantRow = await pool.query('SELECT source, granted_by_user_id FROM platform_access_grants WHERE user_id = $1', [customerId])
+      expect(grantRow.rows).toEqual([{source: 'marketplace_admin', granted_by_user_id: adminUserId}])
+      expect((await pool.query('SELECT COUNT(*)::integer AS count FROM entitlements WHERE user_id = $1', [customerId])).rows[0].count).toBe(0)
+
+      // The lookup shows the free access and who gave it.
+      const lookup = new CustomerLookupService(db() as never)
+      expect((await lookup.lookup(adminUserId, customerEmail)).customer?.account?.free_access).toEqual({granted_by_email: 'admin@example.test', updated_at: expect.anything()})
+
+      // A paid subscriber who is also comped keeps the paid plan when the comp is removed.
+      await pool.query(
+        `INSERT INTO entitlements (user_id, access_type, has_full_access, subscription_status) VALUES ($1, 'pro', 1, 'active')`, [customerId],
+      )
+      expect(await setAccess(adminCookie, customerId, {grant: false})).toMatchObject({status: 200, body: {data: {full_site_access: false, changed: true}}})
+      expect(await me(customerCookie)).toMatchObject({accessType: 'pro', hasFullAccess: true, subscriptionStatus: 'active'})
+      expect((await pool.query('SELECT COUNT(*)::integer AS count FROM platform_access_grants WHERE user_id = $1', [customerId])).rows[0].count).toBe(0)
+      expect((await lookup.lookup(adminUserId, customerEmail)).customer?.account?.free_access).toBeNull()
+      await pool.query('DELETE FROM entitlements WHERE user_id = $1', [customerId])
+      expect(await me(customerCookie)).toMatchObject({accessType: 'free', hasFullAccess: false})
+
+      const audit = await pool.query(
+        `SELECT actor_user_id, action, before_data, after_data FROM marketplace_audit_events WHERE entity_type = 'user' AND entity_id = $1 ORDER BY occurred_at`, [customerId],
+      )
+      expect(audit.rows).toEqual([
+        {actor_user_id: adminUserId, action: 'user.full_access_granted', before_data: {full_site_access: false}, after_data: {full_site_access: true}},
+        {actor_user_id: adminUserId, action: 'user.full_access_revoked', before_data: {full_site_access: true}, after_data: {full_site_access: false}},
+      ])
+
+      // Removing free access keeps an artist-portal grant on the same row.
+      await setAccess(adminCookie, customerId, {grant: true})
+      await pool.query('UPDATE platform_access_grants SET artist_portal_access = TRUE WHERE user_id = $1', [customerId])
+      await setAccess(adminCookie, customerId, {grant: false})
+      expect((await pool.query('SELECT full_site_access, artist_portal_access FROM platform_access_grants WHERE user_id = $1', [customerId])).rows)
+        .toEqual([{full_site_access: false, artist_portal_access: true}])
+
+      // The protected owner's access cannot be removed.
+      const ownerId = crypto.randomUUID()
+      await pool.query(`INSERT INTO users (id, email, account_intent) VALUES ($1, $2, 'provider')`, [ownerId, `owner-${tag}@example.test`])
+      await pool.query(`INSERT INTO marketplace_staff (user_id, role, protected_owner) VALUES ($1, 'admin', TRUE)`, [ownerId])
+      await pool.query(`INSERT INTO platform_access_grants (user_id, full_site_access, artist_portal_access, source) VALUES ($1, TRUE, TRUE, 'bootstrap')`, [ownerId])
+      expect(await setAccess(adminCookie, ownerId, {grant: false})).toMatchObject({status: 403, body: {error: 'protected_owner'}})
+      expect((await pool.query('SELECT full_site_access, source FROM platform_access_grants WHERE user_id = $1', [ownerId])).rows).toEqual([{full_site_access: true, source: 'bootstrap'}])
     })
 
     it('unlocks pre-orders and queues one release-day email per purchase, however often the scheduler runs', async () => {
