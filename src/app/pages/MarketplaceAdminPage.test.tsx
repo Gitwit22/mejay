@@ -3,7 +3,7 @@ import {fireEvent, render, screen, waitFor, within} from '@testing-library/react
 import {MemoryRouter} from 'react-router-dom'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {downloadMarketplaceFinanceCsv, getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview, getMarketplaceFinance, getMarketplaceFinanceOrder, lookupCustomer, type FinanceOrderDetail} from '@/lib/marketplaceAdminApi'
+import {downloadMarketplaceFinanceCsv, getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview, getMarketplaceFinance, getMarketplaceFinanceOrder, lookupCustomer, setCustomerFullAccess, type CustomerAccount, type FinanceOrderDetail} from '@/lib/marketplaceAdminApi'
 import MarketplaceAdminPage from './MarketplaceAdminPage'
 
 vi.mock('@/lib/marketplaceAdminApi', async (importOriginal) => ({
@@ -17,6 +17,7 @@ vi.mock('@/lib/marketplaceAdminApi', async (importOriginal) => ({
   getMarketplaceFinanceOrder: vi.fn(),
   downloadMarketplaceFinanceCsv: vi.fn(),
   lookupCustomer: vi.fn(),
+  setCustomerFullAccess: vi.fn(),
 }))
 
 describe('MarketplaceAdminPage industry reporting', () => {
@@ -208,7 +209,7 @@ describe('MarketplaceAdminPage industry reporting', () => {
         query, matches: [query],
         customer: {
           email: query,
-          account: {id: 'user-9', email: query, display_name: 'Bryan', account_intent: 'consumer', created_at: '2026-10-01T00:00:00.000Z', has_password: false, last_session_at: null, plan: null, marketplace_role: null, provider: null},
+          account: {id: 'user-9', email: query, display_name: 'Bryan', account_intent: 'consumer', created_at: '2026-10-01T00:00:00.000Z', has_password: false, last_session_at: null, plan: null, marketplace_role: null, free_access: null, provider: null},
           purchases: [{order_id: 'order-mia', paid_at: '2026-11-03T09:06:00.000Z', purchase_type: 'preorder', payment_status: 'paid', gross_amount_minor: 300, currency: 'USD', release_title: 'MIA', song_title: null, artist_name: 'John Blaze', buyer_email: query, guest_checkout: false, delivery_status: 'available', access_status: 'active', download_count: 0, last_downloaded_at: null, last_email: {kind: 'release_day', status: 'failed', sent_at: null}}],
         },
       })
@@ -225,6 +226,47 @@ describe('MarketplaceAdminPage industry reporting', () => {
     expect(screen.getByText(/last email release day failed/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Open order for MIA'}))
     await waitFor(() => expect(getMarketplaceFinanceOrder).toHaveBeenCalledWith('order-mia'))
+  })
+
+  it('gives a customer free access after confirming, and shows who gave it', async () => {
+    const email = 'comp.me@example.com'
+    let freeAccess: CustomerAccount['free_access'] = null
+    vi.mocked(lookupCustomer).mockImplementation(async (query) => ({
+      query, matches: [email],
+      customer: {
+        email,
+        account: {id: 'user-comp', email, display_name: null, account_intent: 'consumer', created_at: '2026-10-01T00:00:00.000Z', has_password: true, last_session_at: null,
+          plan: {access_type: 'pro', has_full_access: true, subscription_status: 'active', billing_cadence: 'monthly', current_period_end: null},
+          marketplace_role: null, free_access: freeAccess, provider: null},
+        purchases: [],
+      },
+    }))
+    vi.mocked(setCustomerFullAccess).mockImplementation(async (userId, grant) => {
+      freeAccess = grant ? {granted_by_email: 'owner@example.com', updated_at: '2026-11-13T12:00:00.000Z'} : null
+      return {user_id: userId, full_site_access: grant, changed: true}
+    })
+    const confirm = vi.spyOn(window, 'confirm')
+    renderFinance()
+    fireEvent.click(await screen.findByRole('button', {name: 'Find a customer by email'}))
+    fireEvent.change(await screen.findByRole('searchbox', {name: 'Customer email'}), {target: {value: email}})
+
+    // Cancelling the confirmation changes nothing.
+    confirm.mockReturnValueOnce(false)
+    fireEvent.click(await screen.findByRole('button', {name: 'Give free access'}))
+    expect(setCustomerFullAccess).not.toHaveBeenCalled()
+
+    confirm.mockReturnValueOnce(true)
+    fireEvent.click(screen.getByRole('button', {name: 'Give free access'}))
+    await waitFor(() => expect(setCustomerFullAccess).toHaveBeenCalledWith('user-comp', true))
+    // The lookup reloads and shows the grant next to the paid plan, which is unchanged.
+    expect(await screen.findByText(/by owner@example\.com/)).toBeInTheDocument()
+    expect(screen.getByText('pro · active · monthly')).toBeInTheDocument()
+
+    confirm.mockReturnValueOnce(true)
+    fireEvent.click(screen.getByRole('button', {name: 'Remove free access'}))
+    await waitFor(() => expect(setCustomerFullAccess).toHaveBeenLastCalledWith('user-comp', false))
+    expect(await screen.findByRole('button', {name: 'Give free access'})).toBeInTheDocument()
+    confirm.mockRestore()
   })
 
   it('exports the filtered orders as CSV', async () => {

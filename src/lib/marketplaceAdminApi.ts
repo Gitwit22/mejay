@@ -460,6 +460,8 @@ export type CustomerAccount = {
   has_password: boolean; last_session_at: string | null
   plan: {access_type: string; has_full_access: boolean; subscription_status: string | null; billing_cadence: string | null; current_period_end: string | null} | null
   marketplace_role: string | null
+  /** Free access given by MeJay staff (not a purchase). Null when there is none. */
+  free_access: {granted_by_email: string | null; updated_at: string} | null
   provider: {id: string; display_name: string | null; status: string; member_role: string} | null
 }
 
@@ -472,4 +474,11 @@ export type CustomerLookup = {
 /** Find a customer by email or part of one (marketplace admins only). */
 export function lookupCustomer(query: string): Promise<CustomerLookup> {
   return request(`/api/marketplace-admin/customers?q=${encodeURIComponent(query)}`)
+}
+
+/** Give an account free full access to MeJay, or take it away (marketplace admins only). */
+export function setCustomerFullAccess(userId: string, grant: boolean): Promise<{user_id: string; full_site_access: boolean; changed: boolean}> {
+  return request(`/api/marketplace-admin/customers/${encodeURIComponent(userId)}/full-access`, {
+    method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({grant}),
+  })
 }

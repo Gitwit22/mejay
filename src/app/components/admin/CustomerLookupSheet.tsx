@@ -1,12 +1,14 @@
 import {useEffect, useState} from 'react'
-import {useQuery} from '@tanstack/react-query'
+import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {ChevronRight, Search, UserRound} from 'lucide-react'
 
 import {FinanceOrderDialog} from '@/app/components/admin/FinanceOrderDialog'
+import {Button} from '@/components/ui/button'
 import {Input} from '@/components/ui/input'
 import {Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle} from '@/components/ui/sheet'
 import {Skeleton} from '@/components/ui/skeleton'
-import {lookupCustomer, type CustomerAccount, type CustomerPurchase} from '@/lib/marketplaceAdminApi'
+import {toast} from '@/hooks/use-toast'
+import {lookupCustomer, setCustomerFullAccess, type CustomerAccount, type CustomerPurchase} from '@/lib/marketplaceAdminApi'
 
 const money = (minor: number, currency = 'USD') => new Intl.NumberFormat('en-US', {style: 'currency', currency}).format(minor / 100)
 const day = (value: string | null | undefined) => value ? new Date(value).toLocaleDateString('en-US', {month: 'short', day: 'numeric', year: 'numeric'}) : '-'
@@ -100,6 +102,7 @@ function Customer({email, account, purchases, onOpenOrder}: {email: string; acco
         <dt className="text-zinc-500">Sign-in</dt><dd>{account.has_password ? 'Password' : 'Email code'}</dd>
         <dt className="text-zinc-500">MeJay plan</dt><dd className="capitalize">{account.plan ? `${words(account.plan.access_type)}${account.plan.subscription_status ? ` · ${words(account.plan.subscription_status)}` : ''}${account.plan.billing_cadence ? ` · ${account.plan.billing_cadence}` : ''}` : 'Free'}</dd>
         {account.plan?.current_period_end && <><dt className="text-zinc-500">Renews / ends</dt><dd>{day(account.plan.current_period_end)}</dd></>}
+        <dt className="text-zinc-500">Free access</dt><dd><FreeAccess account={account} /></dd>
         {account.provider && <><dt className="text-zinc-500">Artist account</dt><dd>{account.provider.display_name || 'Unnamed'}<span className="text-zinc-500"> · {words(account.provider.status)} · {account.provider.member_role}</span></dd></>}
         {account.marketplace_role && <><dt className="text-zinc-500">MeJay staff</dt><dd className="capitalize">{account.marketplace_role}</dd></>}
       </dl> : <p className="text-zinc-400">No MeJay account. Purchases below were made as a guest with this email.</p>}
@@ -128,4 +131,37 @@ function Customer({email, account, purchases, onOpenOrder}: {email: string; acco
       {purchases.length > 0 && <p className="mt-2 text-xs text-zinc-500">Tap a purchase to open it. Buyer access (download link, email fix) is inside.</p>}
     </section>
   </>
+}
+
+/**
+ * Free full access given by MeJay staff. It sits beside any paid plan: giving it never touches billing,
+ * and taking it away leaves a paid subscription or Full Program purchase as it was.
+ */
+function FreeAccess({account}: {account: CustomerAccount}) {
+  const queryClient = useQueryClient()
+  const granted = Boolean(account.free_access)
+  const change = useMutation({
+    mutationFn: (grant: boolean) => setCustomerFullAccess(account.id, grant),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({queryKey: ['marketplace-admin', 'customers']})
+      toast(result.full_site_access
+        ? {title: 'Free access given', description: `${account.email} now has full MeJay access at no charge.`}
+        : {title: 'Free access removed', description: `${account.email} keeps any plan they pay for.`})
+    },
+    onError: (error: Error) => toast({title: 'Access not changed', description: error.message, variant: 'destructive'}),
+  })
+  const toggle = () => {
+    const question = granted
+      ? `Remove free access for ${account.email}? Anything they pay for stays.`
+      : `Give ${account.email} full MeJay access for free? They are not charged and can use everything until you remove it.`
+    if (window.confirm(question)) change.mutate(!granted)
+  }
+  return <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+    <span>{granted
+      ? <>Yes<span className="text-zinc-500"> · {account.free_access?.granted_by_email ? `by ${account.free_access.granted_by_email} · ` : ''}{day(account.free_access?.updated_at)}</span></>
+      : 'No'}</span>
+    <Button type="button" size="sm" variant="outline" className="h-7" disabled={change.isPending} onClick={toggle}>
+      {granted ? 'Remove free access' : 'Give free access'}
+    </Button>
+  </div>
 }

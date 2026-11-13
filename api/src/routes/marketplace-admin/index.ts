@@ -9,6 +9,7 @@ import {CommerceService} from '../../marketplace/commerce-service'
 import {MarketplaceFinanceService, normalizeFinanceFilters} from '../../marketplace/finance-service'
 import {BuyerAccessService} from '../../marketplace/buyer-access-service'
 import {CustomerLookupService} from '../../marketplace/customer-lookup-service'
+import {CustomerAccessService} from '../../marketplace/customer-access-service'
 import type {OrderEmailEnv} from '../../marketplace/order-email'
 import {MarketplaceError} from '../../marketplace/service'
 import {changeRequestReviewCommandSchema, ReleaseChangeRequestService} from '../../marketplace/change-request-service'
@@ -297,3 +298,21 @@ export const lookupCustomer = (context: FinanceContext): Promise<Response> => fi
   const data = await new CustomerLookupService(context.env.DB).lookup(userId, query)
   return json({ok: true, data}, {headers: {'cache-control': 'no-store'}})
 })
+
+/** Admin: give an account free full access to MeJay, or take it away. Body: {grant: boolean}. */
+export const setCustomerFullAccess = async (context: AdminContext): Promise<Response> => {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+  const userId = await getSessionUserId(context.request, context.env)
+  if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+  const targetUserId = context.params.userId?.trim()
+  if (!targetUserId) return json({ok: false, error: 'missing_parameter'}, {status: 400})
+  try {
+    const data = await new CustomerAccessService(context.env.DB).setFullAccess(userId, targetUserId, await readJson(context.request))
+    return json({ok: true, data})
+  } catch (error) {
+    if (error instanceof ZodError) return json({ok: false, error: 'invalid_request', issues: error.issues}, {status: 400})
+    if (error instanceof MarketplaceError) return json({ok: false, error: error.code, message: error.message}, {status: error.status})
+    console.error('[marketplace-admin] customer full access failed', error)
+    return json({ok: false, error: 'server_error'}, {status: 500})
+  }
+}
