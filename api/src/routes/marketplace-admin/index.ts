@@ -7,6 +7,8 @@ import type {PrivateBucket} from '../../services/r2'
 import {discoveryFeaturesSchema, providerAdminCommandSchema, releaseAdminCommandSchema, splitDisputeSchema} from '../../marketplace/admin-schemas'
 import {CommerceService} from '../../marketplace/commerce-service'
 import {MarketplaceFinanceService, normalizeFinanceFilters} from '../../marketplace/finance-service'
+import {BuyerAccessService} from '../../marketplace/buyer-access-service'
+import type {OrderEmailEnv} from '../../marketplace/order-email'
 import {MarketplaceError} from '../../marketplace/service'
 import {changeRequestReviewCommandSchema, ReleaseChangeRequestService} from '../../marketplace/change-request-service'
 import {deleteDiscardedUploads} from '../marketplace'
@@ -261,3 +263,29 @@ export const commandChangeRequest = (context: AdminContext) => adminChangeReques
   await deleteDiscardedUploads(context.env, result.discardedStorageKeys, 'change-request-review')
   return result.request
 })
+
+type BuyerAccessContext = {request: Request; env: EnvWithDb & OrderEmailEnv; params: Record<string, string | undefined>}
+
+async function buyerAccessRoute(context: BuyerAccessContext, run: (service: BuyerAccessService, userId: string, orderId: string) => Promise<unknown>): Promise<Response> {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+  const userId = await getSessionUserId(context.request, context.env)
+  if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+  const orderId = context.params.orderId?.trim()
+  if (!orderId) return json({ok: false, error: 'missing_parameter'}, {status: 400})
+  try {
+    return json({ok: true, data: await run(new BuyerAccessService(context.env.DB), userId, orderId)}, {headers: {'cache-control': 'no-store'}})
+  } catch (error) {
+    if (error instanceof ZodError) return json({ok: false, error: 'invalid_email', message: 'Enter a valid email address.'}, {status: 400})
+    if (error instanceof MarketplaceError) return json({ok: false, error: error.code, message: error.message}, {status: error.status})
+    console.error('[marketplace-admin] buyer access failed', error)
+    return json({ok: false, error: 'server_error'}, {status: 500})
+  }
+}
+
+/** Admin: a fresh download link to give a buyer directly when email does not reach them. */
+export const createOrderDownloadLink = (context: BuyerAccessContext) => buyerAccessRoute(context, (service, userId, orderId) =>
+  service.createDownloadLink(userId, orderId, context.env))
+
+/** Admin: correct a guest order's email and send the download links there. */
+export const changeOrderBuyerEmail = (context: BuyerAccessContext) => buyerAccessRoute(context, async (service, userId, orderId) =>
+  service.changeBuyerEmail(userId, orderId, await readJson(context.request), context.env))

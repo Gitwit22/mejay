@@ -21,6 +21,7 @@ import {onRequest as stripeWebhook} from '../routes/stripe-webhook'
 import {createHash, createHmac} from 'node:crypto'
 import {processEmailJobs, retryFailedConfirmations, sendAccessRecovery} from './email-jobs'
 import {exchangeEmailLink, issueEmailLink, resolveSessionDownload} from './guest-access'
+import {BuyerAccessService} from './buyer-access-service'
 import {claimGuestPurchases} from './commerce-service'
 import {claimStorePurchases, downloadGuestFile, recoverGuestAccess} from '../routes/store/commerce'
 import {signVerifiedToken} from '../routes/_auth'
@@ -1676,6 +1677,44 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       expect((await files()).rows[0].source_asset_id).toBe(tagged)
       // Send this release's email now so it does not leak into the next test's queue.
       expect(await processEmailJobs(db() as never, emailEnv)).toMatchObject({sent: 1})
+    })
+
+    it('lets an admin hand a buyer a download link directly, and fix a mistyped guest email', async () => {
+      const typo = `bryan.robinsom-${crypto.randomUUID().slice(0, 6)}@example.test`
+      const {release, orderId, entitlement, emails} = await guestPreorder('BuyerAccess', typo)
+      const access = new BuyerAccessService(db() as never)
+      // Admins only, and not while the pre-order is still held.
+      await expect(access.createDownloadLink(reviewerUserId, orderId, emailEnv)).rejects.toMatchObject({code: 'marketplace_admin_required'})
+      await expect(access.createDownloadLink(adminUserId, orderId, emailEnv)).rejects.toMatchObject({code: 'preorder_held'})
+      await makeReleaseDue(release.release.id)
+      await adminService().publishDueReleases()
+      await processEmailJobs(db() as never, emailEnv)
+
+      // A direct link opens this order's downloads with no sign-in and no email.
+      const link = await access.createDownloadLink(adminUserId, orderId, emailEnv)
+      expect(link.url).toMatch(/^https:\/\/app\.test\/download#token=[A-Za-z0-9_-]{40,64}$/)
+      const opened = await exchangeEmailLink(db() as never, link.url.split('#token=')[1])
+      expect(opened).toMatchObject({state: 'available', files: [expect.objectContaining({fileName: expect.any(String)})]})
+      expect((await pool.query(`SELECT action FROM marketplace_audit_events WHERE entity_id = $1 AND action = 'order.download_link_created'`, [orderId])).rowCount).toBe(1)
+
+      // Correcting the email updates the order and its download, then sends the links to the new address.
+      const fixed = typo.replace('robinsom', 'robinson')
+      emails.length = 0
+      await expect(access.changeBuyerEmail(adminUserId, orderId, {email: 'not-an-email'}, emailEnv)).rejects.toBeTruthy()
+      const changed = await access.changeBuyerEmail(adminUserId, orderId, {email: fixed.toUpperCase()}, emailEnv)
+      expect(changed).toEqual({email: fixed, email_status: 'sent'})
+      expect((await pool.query('SELECT buyer_email FROM marketplace_orders WHERE id = $1', [orderId])).rows[0].buyer_email).toBe(fixed)
+      expect((await pool.query('SELECT buyer_email FROM download_entitlements WHERE id = $1', [entitlement.id])).rows[0].buyer_email).toBe(fixed)
+      expect(emails).toHaveLength(1)
+      expect(emails[0]).toMatchObject({to: fixed})
+      const audits = await pool.query(`SELECT before_data, after_data FROM marketplace_audit_events WHERE entity_id = $1 AND action = 'order.buyer_email_changed'`, [orderId])
+      // The order keeps the checkout email as Stripe sent it (here upper case); the audit records it unchanged.
+      expect(audits.rows).toEqual([{before_data: {email: typo.toUpperCase()}, after_data: {email: fixed}}])
+
+      // Orders bought with a MeJay account keep their sign-in email.
+      await pool.query('UPDATE marketplace_orders SET buyer_user_id = $1 WHERE id = $2', [adminUserId, orderId])
+      await expect(access.changeBuyerEmail(adminUserId, orderId, {email: 'other@example.test'}, emailEnv)).rejects.toMatchObject({code: 'order_has_account'})
+      await pool.query('UPDATE marketplace_orders SET buyer_user_id = NULL WHERE id = $1', [orderId])
     })
 
     it('unlocks pre-orders and queues one release-day email per purchase, however often the scheduler runs', async () => {
