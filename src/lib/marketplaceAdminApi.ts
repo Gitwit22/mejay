@@ -354,6 +354,18 @@ export function getMarketplaceFinanceOrder(orderId: string): Promise<FinanceOrde
   return request(`/api/marketplace-admin/finance/orders/${encodeURIComponent(orderId)}`)
 }
 
+/** A fresh 7-day download link for one order, for an admin to give the buyer directly (no email). */
+export function createOrderDownloadLink(orderId: string): Promise<{url: string; expiresAt: string}> {
+  return request(`/api/marketplace-admin/finance/orders/${encodeURIComponent(orderId)}/download-link`, {method: 'POST'})
+}
+
+/** Correct a guest order's email and email the download links to it. */
+export function changeOrderBuyerEmail(orderId: string, email: string): Promise<{email: string; email_status: 'sent' | 'none' | 'failed'}> {
+  return request(`/api/marketplace-admin/finance/orders/${encodeURIComponent(orderId)}/buyer-email`, {
+    method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({email}),
+  })
+}
+
 export type ReleaseReview = {
   role: 'reviewer' | 'admin'
   release: Record<string, unknown> & {
