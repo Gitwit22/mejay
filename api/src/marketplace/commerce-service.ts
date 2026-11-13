@@ -4,6 +4,7 @@ import {MarketplaceError} from './service'
 import {stripeRequest, StripeRequestError} from '../services/stripe'
 import {formatReleaseTime} from './release-schedule'
 import {formatArtistCredit, parseCredits, releaseCreditsJsonSql} from './artist-credit'
+import {downloadAssetSql, downloadFileName, extensionForMime} from './download-asset'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -147,14 +148,6 @@ type OrderRow = {
   dispute_status?: string
 }
 
-function extensionForMime(mimeType: string): string {
-  return mimeType.includes('flac') ? 'flac' : 'wav'
-}
-
-function safeFileName(value: string, fallback: string): string {
-  const cleaned = value.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim()
-  return cleaned || fallback
-}
 
 function parseSnapshot(value: CheckoutSnapshot | string): CheckoutSnapshot {
   return typeof value === 'string' ? JSON.parse(value) as CheckoutSnapshot : value
@@ -314,11 +307,7 @@ export class CommerceService {
         asset.metadata->>'fileName' AS file_name,
         entry.id AS split_entry_id, entry.payee_name, entry.payee_email, entry.role AS payee_role, entry.share_bps
        FROM tracks track
-       JOIN LATERAL (
-         SELECT source.id, source.storage_key, source.mime_type, source.byte_size, source.metadata
-         FROM marketplace_assets source WHERE source.track_id = track.id AND source.kind = 'audio'
-           AND source.processing_status = 'ready' ORDER BY source.created_at DESC LIMIT 1
-       ) asset ON TRUE
+       JOIN LATERAL (${downloadAssetSql('track.id')}) asset ON TRUE
        JOIN revenue_split_sets split_set ON split_set.track_id = track.id AND split_set.active = TRUE
        JOIN revenue_split_entries entry ON entry.split_set_id = split_set.id
       LEFT JOIN isrc_assignments isrc ON isrc.track_id = track.id AND isrc.revoked_at IS NULL
@@ -329,7 +318,6 @@ export class CommerceService {
     for (const row of trackRows) {
       let track = tracksById.get(row.track_id)
       if (!track) {
-        const fallback = `${String(row.track_number).padStart(2, '0')} - ${row.track_title}.${extensionForMime(row.mime_type)}`
         track = {
           id: row.track_id,
           title: row.track_title,
@@ -341,7 +329,7 @@ export class CommerceService {
             storageKey: row.storage_key,
             mimeType: row.mime_type,
             byteSize: Number(row.byte_size),
-            fileName: safeFileName(row.file_name ?? fallback, fallback),
+            fileName: downloadFileName(row.file_name, {track_number: row.track_number, title: row.track_title}, row.mime_type),
           },
           splits: [],
         }
