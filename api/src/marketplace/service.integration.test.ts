@@ -22,6 +22,7 @@ import {createHash, createHmac} from 'node:crypto'
 import {processEmailJobs, retryFailedConfirmations, sendAccessRecovery} from './email-jobs'
 import {exchangeEmailLink, issueEmailLink, resolveSessionDownload} from './guest-access'
 import {BuyerAccessService} from './buyer-access-service'
+import {CustomerLookupService} from './customer-lookup-service'
 import {claimGuestPurchases} from './commerce-service'
 import {claimStorePurchases, downloadGuestFile, recoverGuestAccess} from '../routes/store/commerce'
 import {signVerifiedToken} from '../routes/_auth'
@@ -1715,6 +1716,38 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       await pool.query('UPDATE marketplace_orders SET buyer_user_id = $1 WHERE id = $2', [adminUserId, orderId])
       await expect(access.changeBuyerEmail(adminUserId, orderId, {email: 'other@example.test'}, emailEnv)).rejects.toMatchObject({code: 'order_has_account'})
       await pool.query('UPDATE marketplace_orders SET buyer_user_id = NULL WHERE id = $1', [orderId])
+    })
+
+    it('finds a customer by email or part of one, with their account and every purchase', async () => {
+      const tag = crypto.randomUUID().slice(0, 6)
+      const guestEmail = `lookup.robinsom-${tag}@example.test`
+      const {orderId} = await guestPreorder('CustomerLookup', guestEmail)
+      const lookup = new CustomerLookupService(db() as never)
+      await expect(lookup.lookup(reviewerUserId, guestEmail)).rejects.toMatchObject({code: 'marketplace_admin_required'})
+      await expect(lookup.lookup(adminUserId, 'ab')).rejects.toMatchObject({code: 'query_too_short'})
+
+      // Part of an email (e.g. a typo you half remember) lists matching emails, nothing more.
+      const partial = await lookup.lookup(adminUserId, `ROBINSOM-${tag}`)
+      expect(partial).toMatchObject({matches: [guestEmail], customer: null})
+      // LIKE wildcards are matched literally, not as "anything".
+      expect((await lookup.lookup(adminUserId, '%%%')).matches).toEqual([])
+
+      // A full guest email: no account, the purchase with its delivery and email state.
+      const guest = await lookup.lookup(adminUserId, guestEmail.toUpperCase())
+      expect(guest.customer).toMatchObject({email: guestEmail, account: null})
+      expect(guest.customer!.purchases).toEqual([expect.objectContaining({
+        order_id: orderId, buyer_email: guestEmail, guest_checkout: true, purchase_type: 'preorder', delivery_status: 'held', download_count: 0,
+      })])
+
+      // An account email: the account (with staff role) even with no purchases.
+      const staff = await lookup.lookup(adminUserId, 'admin@example.test')
+      expect(staff.customer).toMatchObject({account: {id: adminUserId, email: 'admin@example.test', marketplace_role: 'admin', has_password: false}, purchases: []})
+      // An email nobody used: no customer.
+      expect((await lookup.lookup(adminUserId, `nobody-${tag}@example.test`)).customer).toBeNull()
+
+      // The finance list now shows each order's buyer.
+      const summary = await new MarketplaceFinanceService(db() as never).getSummary(adminUserId, {})
+      expect(summary.transactions.find((row) => row.orderId === orderId)).toMatchObject({buyerEmail: guestEmail, guestCheckout: true})
     })
 
     it('unlocks pre-orders and queues one release-day email per purchase, however often the scheduler runs', async () => {

@@ -94,6 +94,7 @@ describe('marketplace finance summary', () => {
       gross_amount_minor: 999, platform_fee_minor: 159, provider_proceeds_minor: 840, stripe_fee_minor: 59,
       refunded_amount_minor: 0, platform_fee_bps: 1000, payment_status: 'paid', transfer_status: 'transferred',
       dispute_status: 'none', livemode: false, platform_revenue_net_minor: 159,
+      buyer_email: 'fan@example.test', guest_checkout: true,
       ...overrides,
     }
   }
@@ -108,6 +109,8 @@ describe('marketplace finance summary', () => {
     ]
     const {totals, transactions} = buildFinanceSummary({}, rows, 2)
     expect(totals.orders).toBe(4)
+    // Each listed order shows who bought it, so staff don't have to open every order.
+    expect(transactions[0]).toMatchObject({buyerEmail: 'fan@example.test', guestCheckout: true})
     expect(totals.grossSalesMinor).toBe(3996)
     expect(totals.platformCommissionMinor + totals.processingFeesRecoveredMinor + totals.artistAllocationMinor).toBe(totals.grossSalesMinor)
     expect(totals.platformCommissionMinor).toBe(400)
@@ -123,7 +126,6 @@ describe('marketplace finance summary', () => {
     // Earnings after refunds: 840 + (840 - 421) + 840 + 0 (lost dispute).
     expect(totals.artistEarningsAfterAdjustmentsMinor).toBe(2099)
     expect(transactions).toHaveLength(4)
-    expect(transactions[0]).not.toHaveProperty('buyerEmail')
   })
 
   it('totals sales per artist account across every matching order, largest first', () => {

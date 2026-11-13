@@ -3,7 +3,7 @@ import {fireEvent, render, screen, waitFor, within} from '@testing-library/react
 import {MemoryRouter} from 'react-router-dom'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {downloadMarketplaceFinanceCsv, getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview, getMarketplaceFinance, getMarketplaceFinanceOrder, type FinanceOrderDetail} from '@/lib/marketplaceAdminApi'
+import {downloadMarketplaceFinanceCsv, getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview, getMarketplaceFinance, getMarketplaceFinanceOrder, lookupCustomer, type FinanceOrderDetail} from '@/lib/marketplaceAdminApi'
 import MarketplaceAdminPage from './MarketplaceAdminPage'
 
 vi.mock('@/lib/marketplaceAdminApi', async (importOriginal) => ({
@@ -16,6 +16,7 @@ vi.mock('@/lib/marketplaceAdminApi', async (importOriginal) => ({
   getMarketplaceFinance: vi.fn(),
   getMarketplaceFinanceOrder: vi.fn(),
   downloadMarketplaceFinanceCsv: vi.fn(),
+  lookupCustomer: vi.fn(),
 }))
 
 describe('MarketplaceAdminPage industry reporting', () => {
@@ -175,7 +176,7 @@ describe('MarketplaceAdminPage industry reporting', () => {
         pendingTransfers: {count: 1, amountMinor: 231}, failedTransfers: {count: 0, amountMinor: 0},
       },
       byProvider: [{providerId: 'provider-1', providerName: 'John Blaze', orders: 1, grossMinor: 300, platformCommissionMinor: 30, artistAllocationMinor: 231, artistEarningsMinor: 231, refundsMinor: 0, pendingPayoutMinor: 231, paidOutMinor: 0}],
-      transactions: [{orderId: 'order-mia', paidAt: '2026-10-28T11:03:15.000Z', providerId: 'provider-1', providerName: 'John Blaze', releaseTitle: 'MIA', artistName: 'John Blaze', grossMinor: 300, platformCommissionMinor: 30, stripeFeeMinor: null, artistAllocationMinor: 231, refundedMinor: 0, paymentStatus: 'paid', transferStatus: 'pending', disputeStatus: 'none', livemode: true}],
+      transactions: [{orderId: 'order-mia', paidAt: '2026-10-28T11:03:15.000Z', providerId: 'provider-1', providerName: 'John Blaze', releaseTitle: 'MIA', artistName: 'John Blaze', grossMinor: 300, platformCommissionMinor: 30, stripeFeeMinor: null, artistAllocationMinor: 231, refundedMinor: 0, paymentStatus: 'paid', transferStatus: 'pending', disputeStatus: 'none', livemode: true, buyerEmail: 'jonbutler422@gmail.com', guestCheckout: true}],
     })
     const queryClient = new QueryClient({defaultOptions: {queries: {retry: false}}})
     render(<QueryClientProvider client={queryClient}><MemoryRouter><MarketplaceAdminPage /></MemoryRouter></QueryClientProvider>)
@@ -191,6 +192,39 @@ describe('MarketplaceAdminPage industry reporting', () => {
     await waitFor(() => expect(getMarketplaceFinance).toHaveBeenLastCalledWith({providerId: 'provider-1'}))
     fireEvent.click(await screen.findByRole('button', {name: 'John Blaze (showing only)'}))
     await waitFor(() => expect(getMarketplaceFinance).toHaveBeenLastCalledWith({providerId: undefined}))
+  })
+
+  it('lists each order with the buyer email and whether they checked out as a guest', async () => {
+    renderFinance()
+    const row = await screen.findByRole('row', {name: 'Open order order-mia'})
+    expect(within(row).getByText('jonbutler422@gmail.com')).toBeInTheDocument()
+    expect(within(row).getByText('Guest')).toBeInTheDocument()
+  })
+
+  it('finds a customer by email from the header and opens their purchase', async () => {
+    vi.mocked(lookupCustomer).mockImplementation(async (query) => query === 'robinsom'
+      ? {query, matches: ['bryan.robinsom8508@gmail.com'], customer: null}
+      : {
+        query, matches: [query],
+        customer: {
+          email: query,
+          account: {id: 'user-9', email: query, display_name: 'Bryan', account_intent: 'consumer', created_at: '2026-10-01T00:00:00.000Z', has_password: false, last_session_at: null, plan: null, marketplace_role: null, provider: null},
+          purchases: [{order_id: 'order-mia', paid_at: '2026-11-03T09:06:00.000Z', purchase_type: 'preorder', payment_status: 'paid', gross_amount_minor: 300, currency: 'USD', release_title: 'MIA', song_title: null, artist_name: 'John Blaze', buyer_email: query, guest_checkout: false, delivery_status: 'available', access_status: 'active', download_count: 0, last_downloaded_at: null, last_email: {kind: 'release_day', status: 'failed', sent_at: null}}],
+        },
+      })
+    vi.mocked(getMarketplaceFinanceOrder).mockReturnValue(new Promise(() => {}))
+    renderFinance()
+    fireEvent.click(await screen.findByRole('button', {name: 'Find a customer by email'}))
+    const search = await screen.findByRole('searchbox', {name: 'Customer email'})
+    // Part of an email lists the matches; picking one loads that customer.
+    fireEvent.change(search, {target: {value: 'robinsom'}})
+    fireEvent.click(await screen.findByRole('button', {name: 'bryan.robinsom8508@gmail.com'}))
+    await waitFor(() => expect(lookupCustomer).toHaveBeenLastCalledWith('bryan.robinsom8508@gmail.com'))
+    expect(await screen.findByText('Bryan')).toBeInTheDocument()
+    expect(screen.getByText('1 purchase · $3.00 spent')).toBeInTheDocument()
+    expect(screen.getByText(/last email release day failed/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Open order for MIA'}))
+    await waitFor(() => expect(getMarketplaceFinanceOrder).toHaveBeenCalledWith('order-mia'))
   })
 
   it('exports the filtered orders as CSV', async () => {
