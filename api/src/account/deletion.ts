@@ -154,7 +154,7 @@ export class AccountDeletionService {
         after_data = NULL,
         metadata = '{}'::jsonb,
         anonymized_at = CURRENT_TIMESTAMP
-       WHERE anonymized_at IS NULL AND (actor_user_id = ?1 OR provider_profile_id = ?2)`,
+       WHERE anonymized_at IS NULL AND (actor_user_id = ?1 OR provider_profile_id = ?2 OR (entity_type = 'user' AND entity_id = ?1))`,
     ).bind(userId, providerId).run()
   }
 }

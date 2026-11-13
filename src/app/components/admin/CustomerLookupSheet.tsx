@@ -8,7 +8,7 @@ import {Input} from '@/components/ui/input'
 import {Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle} from '@/components/ui/sheet'
 import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
-import {lookupCustomer, setCustomerFullAccess, type CustomerAccount, type CustomerPurchase} from '@/lib/marketplaceAdminApi'
+import {changeCustomerEmail, lookupCustomer, setCustomerFullAccess, type CustomerAccount, type CustomerPurchase} from '@/lib/marketplaceAdminApi'
 
 const money = (minor: number, currency = 'USD') => new Intl.NumberFormat('en-US', {style: 'currency', currency}).format(minor / 100)
 const day = (value: string | null | undefined) => value ? new Date(value).toLocaleDateString('en-US', {month: 'short', day: 'numeric', year: 'numeric'}) : '-'
@@ -57,7 +57,7 @@ export function CustomerLookupSheet({open, onOpenChange}: {open: boolean; onOpen
             : result.isError ? <p role="alert" className="text-red-300">{result.error.message}</p>
             : result.data ? <>
               {result.data.customer
-                ? <Customer email={result.data.customer.email} account={result.data.customer.account} purchases={result.data.customer.purchases} onOpenOrder={setOpenOrderId} />
+                ? <Customer email={result.data.customer.email} account={result.data.customer.account} purchases={result.data.customer.purchases} onOpenOrder={setOpenOrderId} onEmailChanged={setQuery} />
                 : null}
               <Matches matches={result.data.matches.filter((email) => email !== result.data.customer?.email)} hasCustomer={Boolean(result.data.customer)} onPick={setQuery} />
             </> : null}
@@ -80,7 +80,7 @@ function Matches({matches, hasCustomer, onPick}: {matches: string[]; hasCustomer
   </section>
 }
 
-function Customer({email, account, purchases, onOpenOrder}: {email: string; account: CustomerAccount | null; purchases: CustomerPurchase[]; onOpenOrder: (orderId: string) => void}) {
+function Customer({email, account, purchases, onOpenOrder, onEmailChanged}: {email: string; account: CustomerAccount | null; purchases: CustomerPurchase[]; onOpenOrder: (orderId: string) => void; onEmailChanged: (email: string) => void}) {
   const paid = purchases.filter((purchase) => ['paid', 'partially_refunded'].includes(purchase.payment_status))
   const spent = paid.reduce((sum, purchase) => sum + purchase.gross_amount_minor, 0)
   return <>
@@ -96,6 +96,7 @@ function Customer({email, account, purchases, onOpenOrder}: {email: string; acco
     <section>
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">MeJay account</h3>
       {account ? <dl className="grid grid-cols-[9rem_1fr] gap-x-3 gap-y-1.5">
+        <dt className="text-zinc-500">Sign-in email</dt><dd><AccountEmail account={account} onChanged={onEmailChanged} /></dd>
         <dt className="text-zinc-500">Joined</dt><dd>{day(account.created_at)}</dd>
         <dt className="text-zinc-500">Last signed in</dt><dd>{day(account.last_session_at)}</dd>
         <dt className="text-zinc-500">Account type</dt><dd className="capitalize">{words(account.account_intent)}</dd>
@@ -164,4 +165,46 @@ function FreeAccess({account}: {account: CustomerAccount}) {
       {granted ? 'Remove free access' : 'Give free access'}
     </Button>
   </div>
+}
+
+/**
+ * Correct the email an account signs in with (e.g. a typo at sign-up, so sign-in codes never arrive).
+ * The account keeps its purchases, plan and sessions; MeJay emails go to the new address from now on.
+ */
+function AccountEmail({account, onChanged}: {account: CustomerAccount; onChanged: (email: string) => void}) {
+  const queryClient = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [email, setEmail] = useState(account.email)
+  const save = useMutation({
+    mutationFn: (next: string) => changeCustomerEmail(account.id, next),
+    onSuccess: (result) => {
+      setEditing(false)
+      void queryClient.invalidateQueries({queryKey: ['marketplace-admin', 'customers']})
+      if (!result.changed) {
+        toast({title: 'Email unchanged', description: `The account already uses ${result.email}.`})
+        return
+      }
+      toast({title: 'Email updated', description: `They now sign in with ${result.email}. Let them know; MeJay does not email them about this.`})
+      onChanged(result.email)
+    },
+    onError: (error: Error) => toast({title: 'Email not changed', description: error.message, variant: 'destructive'}),
+  })
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault()
+    const next = email.trim().toLowerCase()
+    if (!next) return
+    if (window.confirm(`Change the sign-in email from ${account.email} to ${next}? They sign in with the new email from now on, and MeJay emails go there.`)) save.mutate(next)
+  }
+  if (!editing) {
+    return <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <span className="min-w-0 break-all">{account.email}</span>
+      <Button type="button" size="sm" variant="outline" className="h-7" onClick={() => { setEmail(account.email); setEditing(true) }}>Change email</Button>
+    </div>
+  }
+  return <form className="flex flex-wrap items-center gap-2" onSubmit={submit}>
+    <Input type="email" required autoFocus autoCapitalize="none" autoCorrect="off" spellCheck={false} value={email} onChange={(event) => setEmail(event.target.value)}
+      aria-label="New sign-in email" className="h-8 max-w-xs" />
+    <Button type="submit" size="sm" className="h-8" disabled={save.isPending || !email.trim()}>{save.isPending ? 'Saving...' : 'Save'}</Button>
+    <Button type="button" size="sm" variant="ghost" className="h-8" onClick={() => setEditing(false)}>Cancel</Button>
+  </form>
 }

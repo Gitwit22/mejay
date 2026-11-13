@@ -1,8 +1,11 @@
 import {z} from 'zod'
 
+import {buyerEmailSchema} from './buyer-access-service'
 import {MarketplaceError, type Database} from './service'
 
 /**
+ * Admin account help from Find a customer.
+ *
  * Admin-granted free access ("comp"): a marketplace admin unlocks the full MeJay app for an account
  * without a payment. It is stored as `platform_access_grants.full_site_access`, which
  * /api/account/me already treats as full access. Stripe-owned `entitlements` rows are never touched,
@@ -21,7 +24,17 @@ export type FullAccessResult = {
   changed: boolean
 }
 
+export type AccountEmailResult = {
+  user_id: string
+  email: string
+  previous_email: string
+  /** False when the account already had this email. */
+  changed: boolean
+}
+
 type GrantRow = {full_site_access: boolean; artist_portal_access: boolean; source: string}
+
+const isUniqueViolation = (error: unknown) => typeof error === 'object' && error !== null && (error as {code?: string}).code === '23505'
 
 export class CustomerAccessService {
   constructor(private readonly database: Database) {}
@@ -86,5 +99,57 @@ export class CustomerAccessService {
 
       return {user_id: target, full_site_access: grant, changed: true}
     })
+  }
+
+  /**
+   * Correct an account's sign-in email (e.g. a typo made at sign-up, so codes never arrive). The account
+   * keeps its id, purchases, plan and sessions; order and download emails already follow the account
+   * email, so they go to the corrected address from now on. Stripe's copy of the email is not changed.
+   *
+   * Refused when another account uses the email, when the email has a pending staff invite (claiming
+   * it would hand this account a staff role), and for the protected owner.
+   */
+  async changeAccountEmail(adminUserId: string, targetUserId: string, rawCommand: unknown): Promise<AccountEmailResult> {
+    const {email} = buyerEmailSchema.parse(rawCommand)
+    const target = targetUserId.trim()
+    if (!target) throw new MarketplaceError(400, 'missing_parameter', 'An account is required.')
+
+    try {
+      return await this.database.transaction(async (db) => {
+        await this.requireAdmin(db, adminUserId)
+        const account = await db.prepare('SELECT id, email FROM users WHERE id = ?1 FOR UPDATE').bind(target).first<{id: string; email: string}>()
+        if (!account) throw new MarketplaceError(404, 'customer_not_found', 'That account no longer exists.')
+        const previous = account.email
+        if (previous.trim().toLowerCase() === email) return {user_id: target, email: previous, previous_email: previous, changed: false}
+
+        const owner = await db.prepare('SELECT protected_owner FROM marketplace_staff WHERE user_id = ?1').bind(target).first<{protected_owner: boolean}>()
+        if (owner?.protected_owner) throw new MarketplaceError(403, 'protected_owner', "The MeJay owner's email cannot be changed here.")
+        const taken = await db.prepare('SELECT id FROM users WHERE LOWER(email) = ?1 AND id <> ?2 LIMIT 1').bind(email, target).first<{id: string}>()
+        if (taken) throw new MarketplaceError(409, 'email_in_use', 'Another MeJay account already uses that email.')
+        const invite = await db.prepare(
+          'SELECT 1 AS found FROM marketplace_staff_invites WHERE email = ?1 AND claimed_at IS NULL AND revoked_at IS NULL',
+        ).bind(email).first<{found: number}>()
+        if (invite) throw new MarketplaceError(409, 'email_has_staff_invite', 'That email has a pending staff invite, so it cannot be moved onto this account.')
+
+        const now = new Date().toISOString()
+        await db.prepare('UPDATE users SET email = ?1, updated_at = ?2 WHERE id = ?3').bind(email, now, target).run()
+        // Sign-in codes are keyed by email: drop any sent to the old address or requested for the new one.
+        for (const address of [previous, email]) {
+          await db.prepare('DELETE FROM email_codes WHERE email = ?1').bind(address).run()
+          await db.prepare('DELETE FROM auth_codes WHERE email = ?1').bind(address).run()
+        }
+        await db.prepare(
+          `INSERT INTO marketplace_audit_events
+             (id, provider_profile_id, actor_user_id, entity_type, entity_id, action, before_data, after_data, metadata)
+           VALUES (?1, NULL, ?2, 'user', ?3, 'user.email_changed', ?4, ?5, ?6)`,
+        ).bind(crypto.randomUUID(), adminUserId, target, JSON.stringify({email: previous}), JSON.stringify({email}), JSON.stringify({})).run()
+
+        return {user_id: target, email, previous_email: previous, changed: true}
+      })
+    } catch (error) {
+      // Two changes racing onto the same address: the UNIQUE(email) constraint decides.
+      if (isUniqueViolation(error)) throw new MarketplaceError(409, 'email_in_use', 'Another MeJay account already uses that email.')
+      throw error
+    }
   }
 }

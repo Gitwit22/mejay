@@ -3,7 +3,7 @@ import {fireEvent, render, screen, waitFor, within} from '@testing-library/react
 import {MemoryRouter} from 'react-router-dom'
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {downloadMarketplaceFinanceCsv, getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview, getMarketplaceFinance, getMarketplaceFinanceOrder, lookupCustomer, setCustomerFullAccess, type CustomerAccount, type FinanceOrderDetail} from '@/lib/marketplaceAdminApi'
+import {downloadMarketplaceFinanceCsv, getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview, getMarketplaceFinance, getMarketplaceFinanceOrder, lookupCustomer, changeCustomerEmail, setCustomerFullAccess, type CustomerAccount, type FinanceOrderDetail} from '@/lib/marketplaceAdminApi'
 import MarketplaceAdminPage from './MarketplaceAdminPage'
 
 vi.mock('@/lib/marketplaceAdminApi', async (importOriginal) => ({
@@ -18,6 +18,7 @@ vi.mock('@/lib/marketplaceAdminApi', async (importOriginal) => ({
   downloadMarketplaceFinanceCsv: vi.fn(),
   lookupCustomer: vi.fn(),
   setCustomerFullAccess: vi.fn(),
+  changeCustomerEmail: vi.fn(),
 }))
 
 describe('MarketplaceAdminPage industry reporting', () => {
@@ -266,6 +267,50 @@ describe('MarketplaceAdminPage industry reporting', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Remove free access'}))
     await waitFor(() => expect(setCustomerFullAccess).toHaveBeenLastCalledWith('user-comp', false))
     expect(await screen.findByRole('button', {name: 'Give free access'})).toBeInTheDocument()
+    confirm.mockRestore()
+  })
+
+  it('corrects a customer sign-in email after confirming, then shows the account under the new email', async () => {
+    const typo = 'bryan.robinsom8508@gmail.com'
+    const fixed = 'bryan.robinson8508@gmail.com'
+    let current = typo
+    vi.mocked(lookupCustomer).mockImplementation(async (query) => ({
+      query, matches: [current],
+      customer: query === current ? {
+        email: current,
+        account: {id: 'user-9', email: current, display_name: 'Bryan', account_intent: 'consumer', created_at: '2026-10-01T00:00:00.000Z', has_password: false, last_session_at: null, plan: null, marketplace_role: null, free_access: null, provider: null},
+        purchases: [],
+      } : null,
+    }))
+    vi.mocked(changeCustomerEmail).mockImplementation(async (userId, email) => {
+      const previous = current
+      current = email
+      return {user_id: userId, email, previous_email: previous, changed: true}
+    })
+    const confirm = vi.spyOn(window, 'confirm')
+    renderFinance()
+    fireEvent.click(await screen.findByRole('button', {name: 'Find a customer by email'}))
+    const search = await screen.findByRole('searchbox', {name: 'Customer email'})
+    fireEvent.change(search, {target: {value: typo}})
+
+    fireEvent.click(await screen.findByRole('button', {name: 'Change email'}))
+    const input = screen.getByRole('textbox', {name: 'New sign-in email'})
+    expect(input).toHaveValue(typo)
+    fireEvent.change(input, {target: {value: ' Bryan.Robinson8508@gmail.com '}})
+
+    // Cancelling the confirmation saves nothing.
+    confirm.mockReturnValueOnce(false)
+    fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+    expect(changeCustomerEmail).not.toHaveBeenCalled()
+
+    confirm.mockReturnValueOnce(true)
+    fireEvent.click(screen.getByRole('button', {name: 'Save'}))
+    await waitFor(() => expect(changeCustomerEmail).toHaveBeenCalledWith('user-9', fixed))
+    // The search jumps to the corrected email and loads the same account there.
+    await waitFor(() => expect(search).toHaveValue(fixed))
+    await waitFor(() => expect(lookupCustomer).toHaveBeenLastCalledWith(fixed))
+    expect(await screen.findByRole('button', {name: 'Change email'})).toBeInTheDocument()
+    expect(screen.getByText('Bryan')).toBeInTheDocument()
     confirm.mockRestore()
   })
 

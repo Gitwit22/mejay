@@ -299,20 +299,33 @@ export const lookupCustomer = (context: FinanceContext): Promise<Response> => fi
   return json({ok: true, data}, {headers: {'cache-control': 'no-store'}})
 })
 
-/** Admin: give an account free full access to MeJay, or take it away. Body: {grant: boolean}. */
-export const setCustomerFullAccess = async (context: AdminContext): Promise<Response> => {
+async function customerAccessRoute(
+  context: AdminContext,
+  label: string,
+  invalid: {error: string; message?: string},
+  run: (service: CustomerAccessService, userId: string, targetUserId: string) => Promise<unknown>,
+): Promise<Response> {
   if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
   const userId = await getSessionUserId(context.request, context.env)
   if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
   const targetUserId = context.params.userId?.trim()
   if (!targetUserId) return json({ok: false, error: 'missing_parameter'}, {status: 400})
   try {
-    const data = await new CustomerAccessService(context.env.DB).setFullAccess(userId, targetUserId, await readJson(context.request))
-    return json({ok: true, data})
+    return json({ok: true, data: await run(new CustomerAccessService(context.env.DB), userId, targetUserId)})
   } catch (error) {
-    if (error instanceof ZodError) return json({ok: false, error: 'invalid_request', issues: error.issues}, {status: 400})
+    if (error instanceof ZodError) return json({ok: false, ...invalid, issues: error.issues}, {status: 400})
     if (error instanceof MarketplaceError) return json({ok: false, error: error.code, message: error.message}, {status: error.status})
-    console.error('[marketplace-admin] customer full access failed', error)
+    console.error(`[marketplace-admin] ${label} failed`, error)
     return json({ok: false, error: 'server_error'}, {status: 500})
   }
 }
+
+/** Admin: give an account free full access to MeJay, or take it away. Body: {grant: boolean}. */
+export const setCustomerFullAccess = (context: AdminContext): Promise<Response> =>
+  customerAccessRoute(context, 'customer full access', {error: 'invalid_request'}, async (service, userId, targetUserId) =>
+    service.setFullAccess(userId, targetUserId, await readJson(context.request)))
+
+/** Admin: correct an account's sign-in email. Body: {email}. */
+export const changeCustomerEmail = (context: AdminContext): Promise<Response> =>
+  customerAccessRoute(context, 'customer email change', {error: 'invalid_email', message: 'Enter a valid email address.'}, async (service, userId, targetUserId) =>
+    service.changeAccountEmail(userId, targetUserId, await readJson(context.request)))

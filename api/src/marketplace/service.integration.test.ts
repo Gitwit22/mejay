@@ -23,7 +23,7 @@ import {processEmailJobs, retryFailedConfirmations, sendAccessRecovery} from './
 import {exchangeEmailLink, issueEmailLink, resolveSessionDownload} from './guest-access'
 import {BuyerAccessService} from './buyer-access-service'
 import {CustomerLookupService} from './customer-lookup-service'
-import {setCustomerFullAccess} from '../routes/marketplace-admin'
+import {changeCustomerEmail, setCustomerFullAccess} from '../routes/marketplace-admin'
 import {onRequest as accountMe} from '../routes/account/me'
 import {claimGuestPurchases} from './commerce-service'
 import {claimStorePurchases, downloadGuestFile, recoverGuestAccess} from '../routes/store/commerce'
@@ -1833,6 +1833,73 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       await pool.query(`INSERT INTO platform_access_grants (user_id, full_site_access, artist_portal_access, source) VALUES ($1, TRUE, TRUE, 'bootstrap')`, [ownerId])
       expect(await setAccess(adminCookie, ownerId, {grant: false})).toMatchObject({status: 403, body: {error: 'protected_owner'}})
       expect((await pool.query('SELECT full_site_access, source FROM platform_access_grants WHERE user_id = $1', [ownerId])).rows).toEqual([{full_site_access: true, source: 'bootstrap'}])
+    })
+
+    it('lets an admin correct an account email (a sign-up typo) without losing the account, and scrubs it when the account is deleted', async () => {
+      const tag = crypto.randomUUID().slice(0, 8)
+      const signIn = async (userId: string) => {
+        const token = crypto.randomUUID()
+        await pool.query(`INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, CURRENT_TIMESTAMP + INTERVAL '1 hour')`, [
+          createHash('sha256').update(`session:${token}:dev-session-pepper`).digest('hex'), userId,
+        ])
+        return `mejay_session=${token}`
+      }
+      const changeEmail = async (cookie: string, userId: string, body: unknown) => {
+        const response = await changeCustomerEmail({
+          request: new Request(`https://api.test/api/marketplace-admin/customers/${userId}/email`, {method: 'POST', headers: {cookie, 'content-type': 'application/json'}, body: JSON.stringify(body)}),
+          env: {DB: db()}, params: {userId},
+        })
+        return {status: response.status, body: await response.json() as {ok: boolean; error?: string; data?: unknown}}
+      }
+      const typo = `bryan.robinsom-${tag}@example.test`
+      const fixed = `bryan.robinson-${tag}@example.test`
+      const customerId = crypto.randomUUID()
+      const otherId = crypto.randomUUID()
+      await pool.query(`INSERT INTO users (id, email, account_intent) VALUES ($1, $2, 'consumer'), ($3, $4, 'consumer')`, [customerId, typo, otherId, `taken-${tag}@example.test`])
+      await pool.query(`INSERT INTO email_codes (email, purpose, code_hash, expires_at) VALUES ($1, 'login', 'x', CURRENT_TIMESTAMP + INTERVAL '10 minutes'), ($2, 'login', 'y', CURRENT_TIMESTAMP + INTERVAL '10 minutes')`, [typo, fixed])
+      const adminCookie = await signIn(adminUserId)
+      const reviewerCookie = await signIn(reviewerUserId)
+      const customerCookie = await signIn(customerId)
+
+      expect(await changeEmail('', customerId, {email: fixed})).toMatchObject({status: 401})
+      expect(await changeEmail(reviewerCookie, customerId, {email: fixed})).toMatchObject({status: 403, body: {error: 'marketplace_admin_required'}})
+      expect(await changeEmail(adminCookie, customerId, {email: 'not-an-email'})).toMatchObject({status: 400, body: {error: 'invalid_email'}})
+      expect(await changeEmail(adminCookie, crypto.randomUUID(), {email: fixed})).toMatchObject({status: 404, body: {error: 'customer_not_found'}})
+      // Another account's email (any case) and an email with a pending staff invite are refused.
+      expect(await changeEmail(adminCookie, customerId, {email: `TAKEN-${tag}@example.test`})).toMatchObject({status: 409, body: {error: 'email_in_use'}})
+      await pool.query(`INSERT INTO marketplace_staff_invites (email, role) VALUES ($1, 'reviewer')`, [`invited-${tag}@example.test`])
+      expect(await changeEmail(adminCookie, customerId, {email: `invited-${tag}@example.test`})).toMatchObject({status: 409, body: {error: 'email_has_staff_invite'}})
+      expect((await pool.query('SELECT email FROM users WHERE id = $1', [customerId])).rows[0].email).toBe(typo)
+      // The same email (any case) is a no-op.
+      expect(await changeEmail(adminCookie, customerId, {email: typo.toUpperCase()})).toMatchObject({status: 200, body: {data: {changed: false, email: typo}}})
+
+      // The fix: saved lowercased, same account, still signed in, stale sign-in codes gone.
+      expect(await changeEmail(adminCookie, customerId, {email: ` ${fixed.toUpperCase()} `})).toMatchObject({
+        status: 200, body: {ok: true, data: {user_id: customerId, email: fixed, previous_email: typo, changed: true}},
+      })
+      expect((await pool.query('SELECT email FROM users WHERE id = $1', [customerId])).rows[0].email).toBe(fixed)
+      const me = await accountMe({request: new Request('https://api.test/api/account/me', {headers: {cookie: customerCookie}}), env: {DB: db()} as never})
+      expect(await me.json()).toMatchObject({ok: true, user: {id: customerId, email: fixed}})
+      expect((await pool.query('SELECT COUNT(*)::integer AS count FROM email_codes WHERE email = ANY($1)', [[typo, fixed]])).rows[0].count).toBe(0)
+      // The lookup now finds the account under the corrected email only.
+      const lookup = new CustomerLookupService(db() as never)
+      expect((await lookup.lookup(adminUserId, fixed)).customer?.account?.id).toBe(customerId)
+      expect((await lookup.lookup(adminUserId, typo)).customer).toBeNull()
+
+      const auditFor = () => pool.query(
+        `SELECT actor_user_id, action, before_data, after_data FROM marketplace_audit_events WHERE entity_type = 'user' AND entity_id = $1 AND action = 'user.email_changed'`, [customerId],
+      )
+      expect((await auditFor()).rows).toEqual([{actor_user_id: adminUserId, action: 'user.email_changed', before_data: {email: typo}, after_data: {email: fixed}}])
+
+      // The protected owner's email cannot be changed here.
+      const ownerId = crypto.randomUUID()
+      await pool.query(`INSERT INTO users (id, email, account_intent) VALUES ($1, $2, 'provider')`, [ownerId, `owner-email-${tag}@example.test`])
+      await pool.query(`INSERT INTO marketplace_staff (user_id, role, protected_owner) VALUES ($1, 'admin', TRUE)`, [ownerId])
+      expect(await changeEmail(adminCookie, ownerId, {email: `owner-new-${tag}@example.test`})).toMatchObject({status: 403, body: {error: 'protected_owner'}})
+
+      // Deleting the account scrubs both emails from the audit trail.
+      await new AccountDeletionService(new Database(connectionString!, pool) as never).deleteCurrentUser({userId: customerId, email: fixed, forfeitFullProgram: false})
+      expect((await auditFor()).rows).toEqual([{actor_user_id: adminUserId, action: 'user.email_changed', before_data: null, after_data: null}])
     })
 
     it('unlocks pre-orders and queues one release-day email per purchase, however often the scheduler runs', async () => {

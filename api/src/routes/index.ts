@@ -46,7 +46,7 @@ import {
   updateTrack,
   finalizeUpload,
 } from './marketplace'
-import {commandProvider as marketplaceAdminCommandProvider, commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview, recordSplitDispute, replaceDiscoveryFeatures, retryProviderPayouts, getFinanceSummary as marketplaceAdminFinance, exportFinance as marketplaceAdminFinanceExport, getFinanceOrder as marketplaceAdminFinanceOrder, getReleaseReview as marketplaceAdminReleaseReview, getReviewAsset as marketplaceAdminReviewAsset, listChangeRequests, getChangeRequestReview, commandChangeRequest, createOrderDownloadLink, changeOrderBuyerEmail, lookupCustomer, setCustomerFullAccess} from './marketplace-admin'
+import {commandProvider as marketplaceAdminCommandProvider, commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview, recordSplitDispute, replaceDiscoveryFeatures, retryProviderPayouts, getFinanceSummary as marketplaceAdminFinance, exportFinance as marketplaceAdminFinanceExport, getFinanceOrder as marketplaceAdminFinanceOrder, getReleaseReview as marketplaceAdminReleaseReview, getReviewAsset as marketplaceAdminReviewAsset, listChangeRequests, getChangeRequestReview, commandChangeRequest, createOrderDownloadLink, changeOrderBuyerEmail, lookupCustomer, setCustomerFullAccess, changeCustomerEmail} from './marketplace-admin'
 import {createIndustryReportingBatch, createIndustryReportingCorrection, exportIndustryReportingBatch, getIndustryReporting, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting} from './marketplace-admin/reporting'
 import {onRequest as stripeWebhook} from './stripe-webhook'
 import {getCatalogAsset, getCatalogRelease, getPublicArtist, listCatalog, recordCatalogPreview} from './store'
@@ -166,6 +166,7 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'get', path: '/api/marketplace-admin/finance/orders/:orderId', handler: marketplaceAdminFinanceOrder},
   {method: 'get', path: '/api/marketplace-admin/customers', handler: lookupCustomer},
   {method: 'post', path: '/api/marketplace-admin/customers/:userId/full-access', handler: setCustomerFullAccess},
+  {method: 'post', path: '/api/marketplace-admin/customers/:userId/email', handler: changeCustomerEmail},
   {method: 'post', path: '/api/marketplace-admin/finance/orders/:orderId/download-link', handler: createOrderDownloadLink},
   {method: 'post', path: '/api/marketplace-admin/finance/orders/:orderId/buyer-email', handler: changeOrderBuyerEmail},
   {method: 'get', path: '/api/marketplace-admin/releases/:releaseId/review', handler: marketplaceAdminReleaseReview},

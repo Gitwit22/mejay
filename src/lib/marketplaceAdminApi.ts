@@ -476,6 +476,13 @@ export function lookupCustomer(query: string): Promise<CustomerLookup> {
   return request(`/api/marketplace-admin/customers?q=${encodeURIComponent(query)}`)
 }
 
+/** Correct an account's sign-in email, e.g. a typo made at sign-up (marketplace admins only). */
+export function changeCustomerEmail(userId: string, email: string): Promise<{user_id: string; email: string; previous_email: string; changed: boolean}> {
+  return request(`/api/marketplace-admin/customers/${encodeURIComponent(userId)}/email`, {
+    method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({email}),
+  })
+}
+
 /** Give an account free full access to MeJay, or take it away (marketplace admins only). */
 export function setCustomerFullAccess(userId: string, grant: boolean): Promise<{user_id: string; full_site_access: boolean; changed: boolean}> {
   return request(`/api/marketplace-admin/customers/${encodeURIComponent(userId)}/full-access`, {
