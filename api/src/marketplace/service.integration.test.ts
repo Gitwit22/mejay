@@ -1645,6 +1645,39 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       await expect(commerce.getDownload(userId, entitlement.id, fileId)).rejects.toMatchObject({code: 'download_not_found'})
     })
 
+    it('delivers the tagged MP3 of the current master on release day, and leaves delivered files alone', async () => {
+      const {release, entitlement} = await guestPreorder('TaggedDelivery')
+      const track = release.track as {id: string}
+      const providerId = (release.provider as {id: string}).id
+      const files = () => pool.query('SELECT source_asset_id, storage_key, mime_type, file_name FROM download_entitlement_files WHERE entitlement_id = $1', [entitlement.id])
+      // No tagged MP3 yet: the buyer was sold the master as a fallback.
+      expect((await files()).rows[0]).toMatchObject({mime_type: 'audio/wav'})
+      const master = (await pool.query(`SELECT id FROM marketplace_assets WHERE track_id = $1 AND kind = 'audio' AND processing_status = 'ready'`, [track.id])).rows[0].id
+      const addMp3 = async (sourceAssetId: string, name: string) => {
+        const id = crypto.randomUUID()
+        await pool.query(
+          `INSERT INTO marketplace_assets (id, provider_profile_id, track_id, kind, storage_key, mime_type, byte_size, sha256, processing_status, metadata, created_at)
+           VALUES ($1, $2, $3, 'audio_delivery', $4, 'audio/mpeg', 1234, '${'a'.repeat(64)}', 'ready', $5::jsonb, CURRENT_TIMESTAMP + INTERVAL '1 second')`,
+          [id, providerId, track.id, `mejay-artist/${providerId}/audio_delivery/${track.id}/${id}.mp3`, JSON.stringify({fileName: name, sourceAssetId})],
+        )
+        return id
+      }
+      // An MP3 made from some other (older) master is never delivered.
+      await addMp3(crypto.randomUUID(), 'Stale.mp3')
+      const tagged = await addMp3(master, 'Artist feat. Guest - TaggedDelivery.mp3')
+
+      await makeReleaseDue(release.release.id)
+      await adminService().publishDueReleases()
+      expect((await files()).rows).toEqual([{source_asset_id: tagged, storage_key: expect.stringContaining(`${tagged}.mp3`), mime_type: 'audio/mpeg', file_name: 'Artist feat. Guest - TaggedDelivery.mp3'}])
+
+      // Once delivered, a newer file does not change what the buyer already has.
+      await addMp3(master, 'Newer.mp3')
+      await adminService().publishDueReleases()
+      expect((await files()).rows[0].source_asset_id).toBe(tagged)
+      // Send this release's email now so it does not leak into the next test's queue.
+      expect(await processEmailJobs(db() as never, emailEnv)).toMatchObject({sent: 1})
+    })
+
     it('unlocks pre-orders and queues one release-day email per purchase, however often the scheduler runs', async () => {
       const {release, entitlement, orderId, email, commerce} = await guestPreorder('ReleaseDay')
       await makeReleaseDue(release.release.id)
@@ -2175,10 +2208,13 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
         // The approved audio is now the source the preview sweep uses.
         await ensurePreviewJobs(db() as never)
         expect((await pool.query('SELECT 1 FROM audio_processing_jobs WHERE source_asset_id = $1', [audioId])).rowCount).toBe(1)
-        // Pre-order buyers are told about the new date and keep the files they paid for.
+        // Pre-order buyers are told about the new date, and their held download now delivers the approved audio.
         const jobs = await pool.query(`SELECT payload FROM marketplace_email_jobs WHERE entitlement_id = $1 AND kind = 'release_date_changed'`, [fixture.entitlement.id])
         expect(jobs.rows).toHaveLength(1)
-        expect((await pool.query('SELECT storage_key FROM download_entitlement_files WHERE entitlement_id = $1', [fixture.entitlement.id])).rows).toEqual(filesBefore)
+        const newAudio = (await pool.query('SELECT storage_key FROM marketplace_assets WHERE id = $1', [audioId])).rows[0]
+        const filesAfter = (await pool.query('SELECT source_asset_id, storage_key, file_name FROM download_entitlement_files WHERE entitlement_id = $1', [fixture.entitlement.id])).rows
+        expect(filesAfter).toEqual([{source_asset_id: audioId, storage_key: newAudio.storage_key, file_name: 'remaster.wav'}])
+        expect(filesAfter[0].storage_key).not.toBe(filesBefore[0].storage_key)
       })
 
       it('lets a scheduled pre-order turn on previews before release, only once staff approve', async () => {

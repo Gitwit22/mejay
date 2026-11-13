@@ -6,6 +6,8 @@
  * run repeatedly: unlocks only touch held rows, and emails are enqueued under unique dedupe keys.
  */
 
+import {downloadAssetSql, downloadFileName} from './download-asset'
+
 type Statement = {
   bind: (...values: unknown[]) => Statement
   first: <T = Record<string, unknown>>() => Promise<T | null>
@@ -52,6 +54,8 @@ export async function heldPreorderCount(db: Database, releaseId: string): Promis
  * per entitlement. Run it in the transaction that publishes the release; repeating it changes nothing.
  */
 export async function releaseHeldPreorders(db: Database, releaseId: string): Promise<{unlocked: number; queued: number}> {
+  // Deliver the current file (e.g. a replacement master approved, or its tagged MP3 finished, after purchase).
+  await refreshHeldPreorderFiles(db, {releaseId})
   const {results} = await db.prepare(
     `UPDATE download_entitlements entitlement SET delivery_status = 'available', delivery_available_at = CURRENT_TIMESTAMP,
        updated_at = CURRENT_TIMESTAMP
@@ -124,4 +128,32 @@ export async function requestPreorderCancellations(db: Database, releaseId: stri
     await enqueueEmailJob(db, {dedupeKey: `preorder_canceled:${order.entitlement_id}`, kind: 'preorder_canceled', orderId: order.id, entitlementId: order.entitlement_id})
   }
   return results.length
+}
+
+/**
+ * Point pre-orders that have not been delivered yet at the track's current download file. A held
+ * pre-order has never been downloadable, so its buyer should get the file MeJay delivers today (the
+ * tagged MP3 of the latest approved master), not whatever existed when they paid. Delivered purchases
+ * keep their files. `trackId` limits it to one track; otherwise every track of the release. Repeating
+ * it changes nothing.
+ */
+export async function refreshHeldPreorderFiles(db: Database, scope: {releaseId: string; trackId?: string}): Promise<number> {
+  const {results: tracks} = await db.prepare(
+    `SELECT track.id, track.title, track.track_number, asset.id AS asset_id, asset.storage_key, asset.mime_type, asset.byte_size,
+       asset.metadata->>'fileName' AS file_name
+     FROM tracks track JOIN LATERAL (${downloadAssetSql('track.id')}) asset ON TRUE
+     WHERE track.release_id = ?1 AND (?2 = '' OR track.id = ?2)`,
+  ).bind(scope.releaseId, scope.trackId ?? '').all<{id: string; title: string; track_number: number; asset_id: string; storage_key: string; mime_type: string; byte_size: number | string; file_name: string | null}>()
+  let updated = 0
+  for (const track of tracks) {
+    const {results} = await db.prepare(
+      `UPDATE download_entitlement_files file SET source_asset_id = ?1, storage_key = ?2, mime_type = ?3, byte_size = ?4, file_name = ?5
+       FROM download_entitlements entitlement
+       WHERE entitlement.id = file.entitlement_id AND entitlement.delivery_status = 'held'
+         AND file.track_id = ?6 AND file.source_asset_id IS DISTINCT FROM ?1
+       RETURNING file.id`,
+    ).bind(track.asset_id, track.storage_key, track.mime_type, Number(track.byte_size), downloadFileName(track.file_name, track, track.mime_type), track.id).all<{id: string}>()
+    updated += results.length
+  }
+  return updated
 }
