@@ -1,11 +1,13 @@
-import {useQuery} from '@tanstack/react-query'
-import {Copy, ExternalLink} from 'lucide-react'
+import {useState} from 'react'
+import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
+import {Copy, ExternalLink, Link2} from 'lucide-react'
 
 import {Button} from '@/components/ui/button'
+import {Input} from '@/components/ui/input'
 import {Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle} from '@/components/ui/dialog'
 import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
-import {getMarketplaceFinanceOrder, type FinanceOrderDetail} from '@/lib/marketplaceAdminApi'
+import {changeOrderBuyerEmail, createOrderDownloadLink, getMarketplaceFinanceOrder, type FinanceOrderDetail} from '@/lib/marketplaceAdminApi'
 
 const money = (minor: number | null | undefined, currency = 'USD') => minor === null || minor === undefined
   ? '-' : new Intl.NumberFormat('en-US', {style: 'currency', currency}).format(minor / 100)
@@ -18,7 +20,7 @@ const DELIVERY_LABELS: Record<string, string> = {
   available: 'Available to download',
 }
 
-/** Read-only view of one order: who bought what, the money split, Stripe references, delivery and emails. */
+/** One order: who bought what, the money split, Stripe references, delivery and emails, plus buyer-access help. */
 export function FinanceOrderDialog({orderId, onClose}: {orderId: string | null; onClose: () => void}) {
   return <Dialog open={orderId !== null} onOpenChange={(open) => { if (!open) onClose() }}>
     <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto border-white/10 bg-[#0f0f11] text-zinc-100">
@@ -87,6 +89,10 @@ function OrderView({data}: {data: FinanceOrderDetail}) {
         </li>)}</ul>}
     </Section>
 
+    <Section title="Buyer access">
+      <BuyerAccess data={data} />
+    </Section>
+
     <Section title="Buyer emails">
       {data.emails.length === 0 ? <p className="text-zinc-500">No emails recorded.</p>
         : <ul className="space-y-1">{data.emails.map((email, index) => <li key={index} className="flex justify-between gap-3">
@@ -115,6 +121,52 @@ function OrderView({data}: {data: FinanceOrderDetail}) {
           </table>
         </div>)}</div>}
     </Section>
+  </div>
+}
+
+/** Help a buyer whose email isn't reaching them: hand them a link directly, or fix a mistyped guest email. */
+function BuyerAccess({data}: {data: FinanceOrderDetail}) {
+  const {order} = data
+  const queryClient = useQueryClient()
+  const [link, setLink] = useState<{url: string; expiresAt: string} | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [email, setEmail] = useState(order.buyer_email ?? '')
+  const available = data.entitlements.some((entitlement) => entitlement.status === 'active' && entitlement.delivery_status === 'available')
+  const copy = (url: string) => navigator.clipboard?.writeText(url).then(() => toast({title: 'Download link copied', description: 'Send it to the buyer. It works for 7 days without signing in.'}))
+  const createLink = useMutation({
+    mutationFn: () => createOrderDownloadLink(order.id),
+    onSuccess: (result) => { setLink(result); void copy(result.url) },
+    onError: (error: Error) => toast({title: 'Link not created', description: error.message, variant: 'destructive'}),
+  })
+  const saveEmail = useMutation({
+    mutationFn: () => changeOrderBuyerEmail(order.id, email),
+    onSuccess: (result) => {
+      setEditing(false)
+      void queryClient.invalidateQueries({queryKey: ['marketplace-admin', 'finance']})
+      toast(result.email_status === 'failed'
+        ? {title: 'Email updated, but the download email did not send', description: 'Try again, or use "Copy download link".', variant: 'destructive'}
+        : {title: 'Email updated', description: result.email_status === 'sent' ? `Download links sent to ${result.email}.` : 'Saved. Downloads open on release day.'})
+    },
+    onError: (error: Error) => toast({title: 'Email not changed', description: error.message, variant: 'destructive'}),
+  })
+  return <div className="space-y-3">
+    <div className="flex flex-wrap items-center gap-2">
+      <Button type="button" size="sm" variant="outline" disabled={!available || createLink.isPending} onClick={() => createLink.mutate()}>
+        <Link2 className="mr-1.5 h-3.5 w-3.5" />{createLink.isPending ? 'Creating...' : 'Copy download link'}
+      </Button>
+      {order.guest_checkout && !editing && <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(true)}>Change email</Button>}
+    </div>
+    {!available && <p className="text-xs text-zinc-500">A link can be created once the download is available.</p>}
+    {link && <div className="flex items-center gap-2">
+      <Input readOnly value={link.url} aria-label="Download link" className="h-8 font-mono text-xs" onFocus={(event) => event.currentTarget.select()} />
+      <Button type="button" size="icon" variant="ghost" className="h-8 w-8" aria-label="Copy download link" onClick={() => void copy(link.url)}><Copy className="h-3.5 w-3.5" /></Button>
+    </div>}
+    {link && <p className="text-xs text-zinc-500">Works until {when(link.expiresAt)}. Anyone with this link can download this order, so send it only to the buyer.</p>}
+    {editing && <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => { event.preventDefault(); saveEmail.mutate() }}>
+      <Input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} aria-label="Buyer email" className="h-8 max-w-xs" />
+      <Button type="submit" size="sm" disabled={saveEmail.isPending || !email.trim()}>{saveEmail.isPending ? 'Saving...' : 'Save and send links'}</Button>
+      <Button type="button" size="sm" variant="ghost" onClick={() => { setEditing(false); setEmail(order.buyer_email ?? '') }}>Cancel</Button>
+    </form>}
   </div>
 }
 
