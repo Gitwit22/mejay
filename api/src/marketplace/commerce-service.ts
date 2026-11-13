@@ -147,11 +147,11 @@ type OrderRow = {
   dispute_status?: string
 }
 
-function extensionForMime(mimeType: string): string {
+export function extensionForMime(mimeType: string): string {
   return mimeType.includes('flac') ? 'flac' : 'wav'
 }
 
-function safeFileName(value: string, fallback: string): string {
+export function safeFileName(value: string, fallback: string): string {
   const cleaned = value.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim()
   return cleaned || fallback
 }

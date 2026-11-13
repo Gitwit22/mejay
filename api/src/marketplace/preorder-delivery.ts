@@ -6,6 +6,8 @@
  * run repeatedly: unlocks only touch held rows, and emails are enqueued under unique dedupe keys.
  */
 
+import {extensionForMime, safeFileName} from './commerce-service'
+
 type Statement = {
   bind: (...values: unknown[]) => Statement
   first: <T = Record<string, unknown>>() => Promise<T | null>
@@ -123,5 +125,31 @@ export async function requestPreorderCancellations(db: Database, releaseId: stri
     ).bind(order.id, releaseId, actorUserId).run()
     await enqueueEmailJob(db, {dedupeKey: `preorder_canceled:${order.entitlement_id}`, kind: 'preorder_canceled', orderId: order.id, entitlementId: order.entitlement_id})
   }
+  return results.length
+}
+
+/**
+ * Approved replacement audio: point pre-orders that have not been delivered yet at the new file.
+ * A held pre-order has never been downloadable, so its buyer should get the approved audio on
+ * release day, not the file that was current when they paid. Delivered purchases keep their files.
+ * Run it in the transaction that approves the replacement; repeating it changes nothing.
+ */
+export async function repointHeldPreorderAudio(db: Database, trackId: string, assetId: string): Promise<number> {
+  const asset = await db.prepare(
+    `SELECT asset.id, asset.storage_key, asset.mime_type, asset.byte_size, asset.metadata->>'fileName' AS file_name,
+       track.title AS track_title, track.track_number
+     FROM marketplace_assets asset JOIN tracks track ON track.id = asset.track_id
+     WHERE asset.id = ?1 AND asset.track_id = ?2 AND asset.kind = 'audio' AND asset.processing_status = 'ready'`,
+  ).bind(assetId, trackId).first<{id: string; storage_key: string; mime_type: string; byte_size: number | string; file_name: string | null; track_title: string; track_number: number}>()
+  if (!asset) return 0
+  // Same naming as checkout, so a re-pointed file looks like one bought after the change.
+  const fallback = `${String(asset.track_number).padStart(2, '0')} - ${asset.track_title}.${extensionForMime(asset.mime_type)}`
+  const {results} = await db.prepare(
+    `UPDATE download_entitlement_files file SET source_asset_id = ?1, storage_key = ?2, mime_type = ?3, byte_size = ?4, file_name = ?5
+     FROM download_entitlements entitlement
+     WHERE entitlement.id = file.entitlement_id AND entitlement.delivery_status = 'held'
+       AND file.track_id = ?6 AND file.source_asset_id IS DISTINCT FROM ?1
+     RETURNING file.id`,
+  ).bind(asset.id, asset.storage_key, asset.mime_type, Number(asset.byte_size), safeFileName(asset.file_name ?? fallback, fallback), trackId).all<{id: string}>()
   return results.length
 }

@@ -6,7 +6,7 @@ import {
   resolvePreviewStart, withCalendarDates, type Database,
 } from './service'
 import {trackCreditsSchema, writeTrackCredits, type TrackCreditsInput} from './release-submission-service'
-import {enqueueReleaseDateChange} from './preorder-delivery'
+import {enqueueReleaseDateChange, repointHeldPreorderAudio} from './preorder-delivery'
 import {requestedReleaseProblem} from './release-schedule'
 
 /**
@@ -503,11 +503,15 @@ export class ReleaseChangeRequestService {
       }
       const approvedAssetIds = [request.artwork_asset_id, ...request.audio_replacements.map((replacement) => replacement.assetId)].filter((value): value is string => Boolean(value))
       if (approvedAssetIds.length > 0) {
-        // Now the newest ready upload, so the store, previews and new purchases use it. Buyers keep the files they already have.
+        // Now the newest ready upload, so the store, previews and new purchases use it. Buyers who already
+        // have their download keep that file; pre-orders still waiting for release day get the new audio.
         await db.prepare(
           `UPDATE marketplace_assets SET processing_status = 'ready', created_at = ?1
            WHERE id = ANY(?2::text[]) AND processing_status = 'staged' AND metadata->>'changeRequestId' = ?3`,
         ).bind(now, approvedAssetIds, request.id).run()
+        for (const replacement of request.audio_replacements) {
+          await repointHeldPreorderAudio(db, replacement.trackId, replacement.assetId)
+        }
       }
       const discardedStorageKeys = await discardStagedAssets(db, request.id, approvedAssetIds)
       const updated = await db.prepare(

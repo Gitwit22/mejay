@@ -2175,10 +2175,13 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
         // The approved audio is now the source the preview sweep uses.
         await ensurePreviewJobs(db() as never)
         expect((await pool.query('SELECT 1 FROM audio_processing_jobs WHERE source_asset_id = $1', [audioId])).rowCount).toBe(1)
-        // Pre-order buyers are told about the new date and keep the files they paid for.
+        // Pre-order buyers are told about the new date, and their held download now delivers the approved audio.
         const jobs = await pool.query(`SELECT payload FROM marketplace_email_jobs WHERE entitlement_id = $1 AND kind = 'release_date_changed'`, [fixture.entitlement.id])
         expect(jobs.rows).toHaveLength(1)
-        expect((await pool.query('SELECT storage_key FROM download_entitlement_files WHERE entitlement_id = $1', [fixture.entitlement.id])).rows).toEqual(filesBefore)
+        const newAudio = (await pool.query('SELECT storage_key FROM marketplace_assets WHERE id = $1', [audioId])).rows[0]
+        const filesAfter = (await pool.query('SELECT source_asset_id, storage_key, file_name FROM download_entitlement_files WHERE entitlement_id = $1', [fixture.entitlement.id])).rows
+        expect(filesAfter).toEqual([{source_asset_id: audioId, storage_key: newAudio.storage_key, file_name: 'remaster.wav'}])
+        expect(filesAfter[0].storage_key).not.toBe(filesBefore[0].storage_key)
       })
 
       it('lets a scheduled pre-order turn on previews before release, only once staff approve', async () => {
