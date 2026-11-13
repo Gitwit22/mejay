@@ -6,7 +6,7 @@ import {
   resolvePreviewStart, withCalendarDates, type Database,
 } from './service'
 import {trackCreditsSchema, writeTrackCredits, type TrackCreditsInput} from './release-submission-service'
-import {enqueueReleaseDateChange, repointHeldPreorderAudio} from './preorder-delivery'
+import {enqueueReleaseDateChange, refreshHeldPreorderFiles} from './preorder-delivery'
 import {requestedReleaseProblem} from './release-schedule'
 
 /**
@@ -510,7 +510,7 @@ export class ReleaseChangeRequestService {
            WHERE id = ANY(?2::text[]) AND processing_status = 'staged' AND metadata->>'changeRequestId' = ?3`,
         ).bind(now, approvedAssetIds, request.id).run()
         for (const replacement of request.audio_replacements) {
-          await repointHeldPreorderAudio(db, replacement.trackId, replacement.assetId)
+          await refreshHeldPreorderFiles(db, {releaseId: request.release_id, trackId: replacement.trackId})
         }
       }
       const discardedStorageKeys = await discardStagedAssets(db, request.id, approvedAssetIds)
