@@ -26,6 +26,8 @@ type OrderRow = {
   artist_name: string
   /** Song title when the sale was a single song; absent for whole-release sales. */
   song_title?: string | null
+  /** Lowercased checkout email for guests, otherwise the buyer's account email. Only the provider report exposes it. */
+  buyer_email?: string | null
 }
 
 type AllocationRow = {
@@ -69,10 +71,11 @@ export type ProviderSalesReport = {
   downloads: DownloadRow[]
   refunds: Array<{orderId: string; saleDate: string; releaseId: string; releaseTitle: string; amountMinor: number; status: string}>
   /**
-   * One row per sale, newest first. orderId is MEJay's internal order reference (no buyer details);
+   * One row per sale, newest first. orderId is MEJay's internal order reference; buyerEmail is the
+   * customer's email (guest checkout email, else account email), shown only to the selling provider.
    * earningsMinor is the artist share after refunds and lost disputes.
    */
-  transactions: Array<{orderId: string; saleDate: string; releaseId: string; releaseTitle: string; songTitle: string | null; priceMinor: number; earningsMinor: number; status: string; payoutStatus: string}>
+  transactions: Array<{orderId: string; saleDate: string; releaseId: string; releaseTitle: string; songTitle: string | null; buyerEmail: string | null; priceMinor: number; earningsMinor: number; status: string; payoutStatus: string}>
   recipientLiabilities: Array<{name: string; email: string | null; role: string | null; allocatedMinor: number; refundAdjustmentMinor: number; owedMinor: number}>
 }
 
@@ -214,6 +217,7 @@ export function buildProviderSalesReport(
       releaseId: order.release_id,
       releaseTitle: order.release_title,
       songTitle: order.song_title ?? null,
+      buyerEmail: order.buyer_email ?? null,
       priceMinor: Number(order.gross_amount_minor),
       earningsMinor: reportingOrderAmounts(moneyFor(order)).earningsMinor,
       status: order.dispute_status === 'open' || order.dispute_status === 'lost' ? `dispute_${order.dispute_status}` : order.payment_status,
@@ -249,9 +253,11 @@ export class MarketplaceReportingService {
         orders.platform_fee_minor, orders.provider_proceeds_minor, orders.refunded_amount_minor,
         orders.payment_status, orders.transfer_status, orders.dispute_status,
         item.release_id, item.release_title, item.artist_name,
-        item.catalog_snapshot->>'track_title' AS song_title
+        item.catalog_snapshot->>'track_title' AS song_title,
+        LOWER(COALESCE(orders.buyer_email, buyer.email)) AS buyer_email
        FROM marketplace_orders orders
        JOIN marketplace_order_items item ON item.order_id = orders.id
+       LEFT JOIN users buyer ON buyer.id = orders.buyer_user_id
        WHERE orders.provider_profile_id = ?1 AND orders.payment_status <> 'failed'
          AND (?2::timestamptz IS NULL OR orders.paid_at >= ?2::timestamptz)
          AND orders.paid_at <= ?3::timestamptz

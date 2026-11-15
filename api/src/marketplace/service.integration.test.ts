@@ -930,7 +930,7 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
       await expect(commerce.createCheckout(buyerId, songProduct.rows[0].id, 'https://app.test')).rejects.toMatchObject({code: 'already_owned'})
 
       const report = await new MarketplaceReportingService(new Database(connectionString!, pool) as never).getProviderReport(fixture.userId, 'all')
-      expect(report.transactions.find((row) => row.orderId === orderId)).toMatchObject({songTitle: 'Song Track', releaseTitle: 'Song Release', priceMinor: 349, earningsMinor: 274})
+      expect(report.transactions.find((row) => row.orderId === orderId)).toMatchObject({songTitle: 'Song Track', releaseTitle: 'Song Release', buyerEmail: `song-${buyerId.slice(0, 8)}@example.test`, priceMinor: 349, earningsMinor: 274})
       const finance = await new MarketplaceFinanceService(new Database(connectionString!, pool) as never).getSummary(adminUserId, {providerId: fixture.provider.id})
       expect(finance.transactions[0]).toMatchObject({orderId, songTitle: 'Song Track', grossMinor: 349})
 

@@ -19,6 +19,7 @@ const orders = [
     release_id: 'release-1',
     release_title: 'Night Drive',
     artist_name: 'Example Artist',
+    buyer_email: 'fan@example.com',
   },
 ]
 const allocations = [
@@ -48,11 +49,16 @@ describe('provider sales reporting', () => {
     expect(report.salesByTerritory).toEqual([{countryCode: 'US', units: 1, grossMinor: 1000, earningsMinor: 720}])
     expect(report.refunds[0]).toMatchObject({orderId: 'order-1', amountMinor: 200, status: 'partially_refunded'})
     expect(report.transactions).toEqual([expect.objectContaining({orderId: 'order-1', releaseId: 'release-1', priceMinor: 1000, earningsMinor: 720, status: 'partially_refunded'})])
-    expect(report.transactions[0]).not.toHaveProperty('buyerEmail')
+    expect(report.transactions[0]).toMatchObject({buyerEmail: 'fan@example.com'})
     expect(report.recipientLiabilities).toEqual([
       {name: 'Artist', email: 'artist@example.com', role: 'artist', allocatedMinor: 600, refundAdjustmentMinor: 120, owedMinor: 480},
       {name: 'Producer', email: 'producer@example.com', role: 'producer', allocatedMinor: 300, refundAdjustmentMinor: 60, owedMinor: 240},
     ])
+  })
+
+  it('reports a null buyer email when the order has none', () => {
+    const report = buildProviderSalesReport(period, [{...orders[0], buyer_email: null}], allocations, [])
+    expect(report.transactions[0].buyerEmail).toBeNull()
   })
 
   it('groups missing payment territory as Unknown', () => {
@@ -81,5 +87,10 @@ describe('recipient earnings reporting', () => {
     expect(report.recipientEmail).toBe('artist@example.com')
     expect(report.summary).toEqual({allocatedMinor: 600, refundAdjustmentMinor: 120, owedMinor: 480})
     expect(report.rows).toEqual([expect.objectContaining({allocationId: 'allocation-artist', trackTitle: 'Getaway', allocatedMinor: 600, refundAdjustmentMinor: 120, owedMinor: 480})])
+  })
+
+  it('never exposes buyer emails to split recipients', () => {
+    const report = buildRecipientEarningsReport(period, 'artist@example.com', orders, allocations)
+    expect(JSON.stringify(report)).not.toContain('fan@example.com')
   })
 })

@@ -37,7 +37,7 @@ export type ProviderSalesReport = {
   downloads: Array<{release_id: string; release_title: string; track_id: string | null; track_title: string; download_count: number}>
   refunds: Array<{orderId: string; saleDate: string; releaseId: string; releaseTitle: string; amountMinor: number; status: string}>
   /** Optional so reports from an older API still render. orderId is an internal reference, never buyer data. */
-  transactions?: Array<{orderId: string; saleDate: string; releaseId: string; releaseTitle: string; songTitle?: string | null; priceMinor: number; earningsMinor: number; status: string; payoutStatus: string}>
+  transactions?: Array<{orderId: string; saleDate: string; releaseId: string; releaseTitle: string; songTitle?: string | null; buyerEmail?: string | null; priceMinor: number; earningsMinor: number; status: string; payoutStatus: string}>
   recipientLiabilities: Array<{name: string; email: string | null; role: string | null; allocatedMinor: number; refundAdjustmentMinor: number; owedMinor: number}>
 }
 
