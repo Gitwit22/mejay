@@ -169,6 +169,7 @@ Provider reports define their summary metrics as follows:
 - **Paid Out** is the amount transferred to the provider's Stripe Connect account. Reversed transfers count as zero.
 - **Downloads** counts successful private-file download events, not entitlements or attempts.
 - **Refunds** reports refund totals and order status separately from gross sales.
+- **Transactions** lists up to 200 sales, newest first, with the customer's email (the guest checkout email, otherwise the buyer's account email). Buyer emails appear only in the selling provider's own report; split-recipient earnings and industry-reporting exports never include them.
 
 Top Songs, Sales by Release, Sales by Day, Sales by Territory, Downloads, and Refunds all derive from immutable order, order-item, allocation, and download records scoped to the provider. Migration 9 stores the Stripe billing country on each fulfilled order, falling back to the payment card country. Territory is an uppercase ISO alpha-2 code; unavailable values are grouped as `Unknown`.
 
