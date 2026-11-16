@@ -6,6 +6,8 @@ interface ImportMetaEnv {
 	readonly VITE_DEV_BYPASS_AUTH?: string
 	readonly VITE_AUTH_BYPASS?: string
 	readonly VITE_AUTH_BYPASS_TOGGLE?: string
+	/** Beat Wing base URL for the artist portal Partners tab; defaults to production. */
+	readonly VITE_BEATWING_URL?: string
 }
 
 interface ImportMeta {
