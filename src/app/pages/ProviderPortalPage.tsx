@@ -10,6 +10,7 @@ import {
   Disc3,
   ExternalLink,
   Fingerprint,
+  Handshake,
   LayoutDashboard,
   Menu,
   Plus,
@@ -33,6 +34,7 @@ import {getProviderStatusLabel, parseProviderStatus} from '@/lib/marketplace'
 import {ArtistProfileEditor} from '@/app/components/provider/ArtistProfileEditor'
 import {ProviderSettings} from '@/app/components/provider/ProviderSettings'
 import {ProviderIsrcs} from '@/app/components/provider/ProviderIsrcs'
+import {ProviderPartners} from '@/app/components/provider/ProviderPartners'
 import {getConnectStatus, openConnectDashboard, startConnectOnboarding, type ConnectOnboardingStatus, type ConnectStatus} from '@/lib/marketplaceCommerceApi'
 import {ProviderEarningsReporting, ProviderOverviewReporting, ProviderSalesReporting} from '@/app/components/provider/ProviderReporting'
 import {
@@ -47,7 +49,7 @@ import {
   type ReportingRange,
 } from '@/lib/providerApi'
 
-type Section = 'overview' | 'artists' | 'releases' | 'sales' | 'earnings' | 'isrcs' | 'payout' | 'settings'
+type Section = 'overview' | 'artists' | 'releases' | 'sales' | 'earnings' | 'isrcs' | 'payout' | 'partners' | 'settings'
 
 const navigation: Array<{id: Section; label: string; icon: typeof LayoutDashboard}> = [
   {id: 'overview', label: 'Overview', icon: LayoutDashboard},
@@ -57,6 +59,7 @@ const navigation: Array<{id: Section; label: string; icon: typeof LayoutDashboar
   {id: 'earnings', label: 'Earnings', icon: Banknote},
   {id: 'isrcs', label: 'ISRCs', icon: Fingerprint},
   {id: 'payout', label: 'Payout Account', icon: WalletCards},
+  {id: 'partners', label: 'Partners', icon: Handshake},
   {id: 'settings', label: 'Settings', icon: Settings},
 ]
 
@@ -154,6 +157,7 @@ function PortalSection({section, dashboard, loading, onNavigate, range, onRangeC
   if (section === 'sales') return <ProviderSalesReporting range={range} onRangeChange={onRangeChange} />
   if (section === 'earnings') return <ProviderEarningsReporting range={range} onRangeChange={onRangeChange} />
   if (section === 'payout') return <PayoutAccount />
+  if (section === 'partners') return <ProviderPartners />
   if (section === 'settings') return loading || !dashboard ? <Skeleton className="h-96 bg-white/5" /> : <ProviderSettings provider={dashboard.provider} onOpenPayout={() => onNavigate('payout')} />
   return <ProviderIsrcs />
 }

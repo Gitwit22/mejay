@@ -81,3 +81,42 @@ describe('My Releases deletion', () => {
     expect(screen.getByText('Draft Song', {selector: 'p'})).toBeInTheDocument()
   })
 })
+
+describe('Partners tab', () => {
+  function renderPartners() {
+    vi.mocked(getProviderDashboard).mockResolvedValue({
+      provider: {id: 'p1', display_name: 'John Blaze', status: 'approved', role: 'owner'},
+      counts: {artists: 1, releases: 0, drafts: 0, live_releases: 0, active_isrcs: 0},
+    })
+    const client = new QueryClient({defaultOptions: {queries: {retry: false}}})
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/app/artist']}>
+      <Routes><Route path="/app/artist" element={<ProviderPortalPage />} /></Routes>
+    </MemoryRouter></QueryClientProvider>)
+  }
+
+  it('opens from the sidebar and links artists to Beat Wing in a new tab', async () => {
+    renderPartners()
+    const nav = screen.getAllByRole('navigation', {name: 'Provider portal'})[0]
+    fireEvent.click(within(nav).getByRole('button', {name: 'Partners'}))
+
+    expect(await screen.findByRole('heading', {name: 'Partners', level: 1})).toBeInTheDocument()
+    const link = screen.getByRole('link', {name: /Open Beat Wing/})
+    const href = new URL(link.getAttribute('href')!)
+    expect(href.origin).toBe('https://beatwing.mejayapp.com')
+    expect(href.searchParams.get('utm_source')).toBe('mejay')
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+  })
+
+  it('shows Shows and Venues as coming soon without any action to take', async () => {
+    renderPartners()
+    fireEvent.click(within(screen.getAllByRole('navigation', {name: 'Provider portal'})[0]).getByRole('button', {name: 'Partners'}))
+
+    for (const label of ['Shows', 'Venues']) {
+      const section = (await screen.findByRole('heading', {name: label, level: 2})).closest('section')!
+      expect(within(section).getByText(`${label} partners are coming soon.`)).toBeInTheDocument()
+      expect(within(section).queryByRole('link')).toBeNull()
+      expect(within(section).queryByRole('button')).toBeNull()
+    }
+  })
+})
