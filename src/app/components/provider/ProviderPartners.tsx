@@ -41,6 +41,7 @@ export function ProviderPartners({partners = getPartners()}: {partners?: Partner
 function PartnerCard({partner}: {partner: Partner}) {
   const launchUrl = partnerLaunchUrl(partner)
   return <article className="flex flex-col rounded-md border border-white/10 bg-[#141417] p-5">
+    {partner.logo && <img src={partner.logo.src} alt={`${partner.name} logo`} width={partner.logo.width} height={partner.logo.height} loading="lazy" decoding="async" className="mb-4 h-16 w-auto self-start object-contain" />}
     <div className="flex flex-wrap items-center gap-3">
       <h3 className="font-semibold">{partner.name}</h3>
       {launchUrl

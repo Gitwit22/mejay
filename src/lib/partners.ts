@@ -1,3 +1,5 @@
+import beatwingLogoUrl from '@/assets/partners/beatwing-logo.webp'
+
 /**
  * Partner directory for the artist portal's Partners tab.
  *
@@ -28,6 +30,8 @@ export type Partner = {
   availability: PartnerAvailability
   /** Base URL of the partner app. Required for an `available` partner to be actionable. */
   url: string | null
+  /** Bundled logo (never hot-linked from the partner's site), with its intrinsic size to avoid layout shift. */
+  logo: {src: string; width: number; height: number} | null
 }
 
 export const PARTNER_CATEGORIES: readonly PartnerCategory[] = [
@@ -73,6 +77,8 @@ export function getPartners(env: PartnerEnv = import.meta.env): Partner[] {
       highlights: ['Lease or buy exclusive rights', 'License agreement and receipt with every purchase', 'Download exactly the files your license grants'],
       availability: 'available',
       url: beatwingUrl,
+      // Copied from Beat Wing's repo (src/assets/beatwing-logo.webp).
+      logo: {src: beatwingLogoUrl, width: 480, height: 292},
     },
   ]
 }
