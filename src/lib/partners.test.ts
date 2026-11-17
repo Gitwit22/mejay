@@ -19,6 +19,8 @@ describe('getPartners', () => {
   it('lists Beat Wing as an available beats partner on production by default', () => {
     const beatwing = getPartners({}).find((partner) => partner.id === 'beatwing')
     expect(beatwing).toMatchObject({category: 'beats', availability: 'available', url: DEFAULT_BEATWING_URL})
+    expect(beatwing?.logo).toMatchObject({width: 480, height: 292})
+    expect(beatwing?.logo?.src).toMatch(/beatwing-logo/)
   })
 
   it('uses a valid configured URL and falls back to production for an invalid one', () => {
@@ -33,7 +35,7 @@ describe('getPartners', () => {
 })
 
 describe('partnerLaunchUrl', () => {
-  const partner = (overrides: Partial<Partner>): Partner => ({id: 'x', name: 'X', category: 'shows', tagline: '', description: '', highlights: [], availability: 'available', url: 'https://x.example.com', ...overrides})
+  const partner = (overrides: Partial<Partner>): Partner => ({id: 'x', name: 'X', category: 'shows', tagline: '', description: '', highlights: [], availability: 'available', url: 'https://x.example.com', logo: null, ...overrides})
 
   it('adds attribution while keeping the base URL and its query', () => {
     const url = new URL(partnerLaunchUrl(partner({url: 'https://x.example.com/path?keep=1'}))!)

@@ -106,6 +106,7 @@ describe('Partners tab', () => {
     expect(href.searchParams.get('utm_source')).toBe('mejay')
     expect(link).toHaveAttribute('target', '_blank')
     expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+    expect(screen.getByRole('img', {name: 'Beat Wing logo'})).toHaveAttribute('src', expect.stringMatching(/beatwing-logo/))
   })
 
   it('shows Shows and Venues as coming soon without any action to take', async () => {
