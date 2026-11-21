@@ -1,12 +1,14 @@
+import {useEffect, useRef, useState} from 'react'
 import {useMutation, useQuery} from '@tanstack/react-query'
-import {ArrowLeft, Disc3, Pause, Play, Share2, UserRound} from 'lucide-react'
-import {Link, useParams} from 'react-router-dom'
+import {ArrowLeft, Disc3, Pause, Play, Share2, Tag, UserRound, X} from 'lucide-react'
+import {Link, useParams, useSearchParams} from 'react-router-dom'
 
 import {Button} from '@/components/ui/button'
+import {Input} from '@/components/ui/input'
 import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
 import {getStoreRelease, storeAssetUrl, type StoreRelease, type StoreTrack} from '@/lib/musicStoreApi'
-import {startStoreCheckout} from '@/lib/marketplaceCommerceApi'
+import {checkDiscountCode, startStoreCheckout, type DiscountQuote} from '@/lib/marketplaceCommerceApi'
 import {usePreview, type PreviewController} from '@/hooks/useStorePreview'
 import {isPreorder, PREORDER_CHARGE_NOTICE, preorderLabel} from '@/lib/releaseTime'
 import {shareLink} from '@/lib/shareLink'
@@ -21,12 +23,16 @@ export function StoreReleasePage() {
   const {releaseId = ''} = useParams()
   const detail = useQuery({queryKey: ['music-store', 'release', releaseId], queryFn: () => getStoreRelease(releaseId), enabled: Boolean(releaseId)})
   const preview = usePreview()
+  // A shared link can carry a code (/app/store/<id>?code=BOLDY20); it is applied on arrival.
+  const [searchParams] = useSearchParams()
+  const linkCode = searchParams.get('code')?.trim().slice(0, 64) || null
+  const [discount, setDiscount] = useState<DiscountQuote | null>(null)
   if (detail.isLoading) return <StoreLoading />
   if (detail.isError || !detail.data) return <StoreError message={detail.error?.message || 'Release not found'} />
   const {release, tracks} = detail.data
   return <div className="min-h-screen bg-[#0a0a0b] text-zinc-100"><main className="mx-auto max-w-6xl px-4 py-6 sm:px-8 sm:py-10"><Button asChild variant="ghost" className="mb-7 gap-2"><Link to="/app?tab=music"><ArrowLeft className="h-4 w-4" />Back to Discover</Link></Button>
-    <div className="grid gap-8 md:grid-cols-[minmax(240px,380px)_1fr] md:gap-12"><Cover release={release} className="aspect-square w-full" /><div className="min-w-0 md:pt-4"><p className="text-sm font-semibold uppercase text-emerald-400"><ArtistCredit release={release} linkClassName="hover:underline" /></p><h1 className="mt-2 text-4xl font-black sm:text-5xl">{release.title}</h1>{release.version_title && <p className="mt-2 text-lg text-zinc-400">{release.version_title}</p>}<div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-sm text-zinc-400"><span>{releaseTypeLabel(release.release_type)}</span><span>{release.genre || 'Uncategorized'}</span>{!isPreorder(release) && <span>{formatDate(release.original_release_date || release.published_at)}</span>}{release.label_name && <span>{release.label_name}</span>}</div><PreorderBadge release={release} className="mt-5 text-sm" /><p className="mt-8 text-3xl font-bold">{formatPrice(release.amount_minor, release.currency)}</p><PurchaseButton className="mt-5 h-12 w-full sm:w-56" label={isPreorder(release) ? 'Pre-order' : undefined} available={release.purchase_available} productId={release.product_id} />{isPreorder(release) && <p className="mt-3 max-w-sm text-xs text-zinc-400">{PREORDER_CHARGE_NOTICE}{tracks.some((track) => track.preview_asset_id) ? ' Play a preview below.' : ' Previews unlock on release day.'}</p>}<div className="mt-5 flex flex-wrap gap-3"><Button variant="outline" className="gap-2" onClick={() => void shareLink(`${release.title} by ${release.artist_credit || release.artist_name} on MeJay`, `${window.location.origin}/app/store/${release.id}`)}><Share2 className="h-4 w-4" />Share</Button>{release.artist_slug && <Button asChild variant="outline" className="gap-2"><Link to={`/artist/${release.artist_slug}`}><UserRound className="h-4 w-4" />View artist page</Link></Button>}</div></div></div>
-    <section className="mt-12"><SectionTitle title="Track List" /><div className="divide-y divide-white/10 border-y border-white/10">{tracks.map((track) => <TrackRow key={track.id} track={track} purchaseAvailable={release.purchase_available} preview={preview} preorder={isPreorder(release)} />)}</div></section>
+    <div className="grid gap-8 md:grid-cols-[minmax(240px,380px)_1fr] md:gap-12"><Cover release={release} className="aspect-square w-full" /><div className="min-w-0 md:pt-4"><p className="text-sm font-semibold uppercase text-emerald-400"><ArtistCredit release={release} linkClassName="hover:underline" /></p><h1 className="mt-2 text-4xl font-black sm:text-5xl">{release.title}</h1>{release.version_title && <p className="mt-2 text-lg text-zinc-400">{release.version_title}</p>}<div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-sm text-zinc-400"><span>{releaseTypeLabel(release.release_type)}</span><span>{release.genre || 'Uncategorized'}</span>{!isPreorder(release) && <span>{formatDate(release.original_release_date || release.published_at)}</span>}{release.label_name && <span>{release.label_name}</span>}</div><PreorderBadge release={release} className="mt-5 text-sm" />{discount ? <p className="mt-8 flex flex-wrap items-baseline gap-x-3 text-3xl font-bold"><span>{formatPrice(discount.amountMinor, discount.currency)}</span><span className="text-lg font-medium text-zinc-500 line-through">{formatPrice(discount.listAmountMinor, discount.currency)}</span></p> : <p className="mt-8 text-3xl font-bold">{formatPrice(release.amount_minor, release.currency)}</p>}<PurchaseButton className="mt-5 h-12 w-full sm:w-56" label={isPreorder(release) ? 'Pre-order' : undefined} available={release.purchase_available} productId={release.product_id} discountCode={discount?.code} />{release.purchase_available && <DiscountCodeField productId={release.product_id} initialCode={linkCode} applied={discount} onChange={setDiscount} />}{isPreorder(release) && <p className="mt-3 max-w-sm text-xs text-zinc-400">{PREORDER_CHARGE_NOTICE}{tracks.some((track) => track.preview_asset_id) ? ' Play a preview below.' : ' Previews unlock on release day.'}</p>}<div className="mt-5 flex flex-wrap gap-3"><Button variant="outline" className="gap-2" onClick={() => void shareLink(`${release.title} by ${release.artist_credit || release.artist_name} on MeJay`, `${window.location.origin}/app/store/${release.id}`)}><Share2 className="h-4 w-4" />Share</Button>{release.artist_slug && <Button asChild variant="outline" className="gap-2"><Link to={`/artist/${release.artist_slug}`}><UserRound className="h-4 w-4" />View artist page</Link></Button>}</div></div></div>
+    <section className="mt-12"><SectionTitle title="Track List" /><div className="divide-y divide-white/10 border-y border-white/10">{tracks.map((track) => <TrackRow key={track.id} track={track} purchaseAvailable={release.purchase_available} preview={preview} preorder={isPreorder(release)} discount={discount} />)}</div></section>
   </main></div>
 }
 
@@ -40,19 +46,56 @@ export function Cover({release, className}: {release: Pick<StoreRelease, 'artwor
   return <div className={`overflow-hidden rounded-md bg-[#19191c] ${className || ''}`}>{url ? <img src={url} alt={`${release.title} cover`} className="h-full w-full object-cover" loading="lazy" /> : <div className="grid h-full place-items-center"><Disc3 className="h-16 w-16 text-zinc-700" /></div>}</div>
 }
 
-function TrackRow({track, preview, purchaseAvailable, preorder = false}: {track: StoreTrack; preview: PreviewController; purchaseAvailable: boolean; preorder?: boolean}) {
+function TrackRow({track, preview, purchaseAvailable, preorder = false, discount = null}: {track: StoreTrack; preview: PreviewController; purchaseAvailable: boolean; preorder?: boolean; discount?: DiscountQuote | null}) {
   const playing = preview.playingId === track.id
-  return <div className="grid grid-cols-[2rem_1fr_auto_auto] items-center gap-3 py-4 sm:grid-cols-[2rem_1fr_auto_auto_auto]"><span className="text-sm text-zinc-600">{track.track_number}</span><div className="min-w-0"><p className="truncate font-medium">{track.title}{track.version_title ? ` (${track.version_title})` : ''}</p>{track.explicit && <span className="text-[10px] uppercase text-zinc-500">Explicit</span>}</div><span className="text-xs text-zinc-500">{formatDuration(track.duration_ms)}</span><Button size="icon" variant="ghost" aria-label={`${playing ? 'Pause' : 'Play'} ${track.title}`} disabled={!track.preview_asset_id} onClick={() => preview.toggle(track.id, track.preview_asset_id)}>{playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}</Button>{track.product_id && track.amount_minor != null ? <div className="col-span-4 flex items-center justify-end gap-3 sm:col-span-1"><span className="text-sm font-semibold tabular-nums">{formatPrice(track.amount_minor, track.currency ?? 'USD')}</span><PurchaseButton className="h-8" label={preorder ? 'Pre-order song' : 'Buy song'} available={purchaseAvailable} productId={track.product_id} /></div> : <span className="hidden sm:block" />}</div>
+  return <div className="grid grid-cols-[2rem_1fr_auto_auto] items-center gap-3 py-4 sm:grid-cols-[2rem_1fr_auto_auto_auto]"><span className="text-sm text-zinc-600">{track.track_number}</span><div className="min-w-0"><p className="truncate font-medium">{track.title}{track.version_title ? ` (${track.version_title})` : ''}</p>{track.explicit && <span className="text-[10px] uppercase text-zinc-500">Explicit</span>}</div><span className="text-xs text-zinc-500">{formatDuration(track.duration_ms)}</span><Button size="icon" variant="ghost" aria-label={`${playing ? 'Pause' : 'Play'} ${track.title}`} disabled={!track.preview_asset_id} onClick={() => preview.toggle(track.id, track.preview_asset_id)}>{playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}</Button>{track.product_id && track.amount_minor != null ? <div className="col-span-4 flex items-center justify-end gap-3 sm:col-span-1"><span className="text-sm font-semibold tabular-nums">{formatPrice(track.amount_minor, track.currency ?? 'USD')}{discount && <span className="ml-1.5 text-xs font-medium text-emerald-400">-{discount.percentOff}%</span>}</span><PurchaseButton className="h-8" label={preorder ? 'Pre-order song' : 'Buy song'} available={purchaseAvailable} productId={track.product_id} discountCode={discount?.code} /></div> : <span className="hidden sm:block" />}</div>
 }
 
 /** Signed-in buyers check out with their account; anyone else checks out as a guest (no account needed). */
-export function PurchaseButton({className, label = 'Purchase', available, productId}: {className?: string; label?: string; available: boolean; productId: string}) {
+export function PurchaseButton({className, label = 'Purchase', available, productId, discountCode}: {className?: string; label?: string; available: boolean; productId: string; discountCode?: string | null}) {
   const mutation = useMutation({
-    mutationFn: () => startStoreCheckout(productId),
+    // Without a code the call is exactly what it was before codes existed.
+    mutationFn: () => discountCode ? startStoreCheckout(productId, discountCode) : startStoreCheckout(productId),
     onError: (error) => toast({title: 'Checkout unavailable', description: error.message, variant: 'destructive'}),
   })
   const purchase = () => mutation.mutate()
   return <Button disabled={!available || mutation.isPending} title={available ? undefined : 'This provider is completing payout setup'} className={`bg-emerald-400 font-bold text-zinc-950 hover:bg-emerald-300 ${className || ''}`} onClick={purchase}>{available ? mutation.isPending ? 'Opening Stripe...' : label : 'Payout setup pending'}</Button>
+}
+
+/**
+ * "Have a discount code?" on a release page. Checking a code only previews the price; checkout
+ * validates it again on the server, so nothing here can lower what a buyer is charged.
+ */
+function DiscountCodeField({productId, initialCode, applied, onChange}: {productId: string; initialCode: string | null; applied: DiscountQuote | null; onChange: (quote: DiscountQuote | null) => void}) {
+  const [open, setOpen] = useState(Boolean(initialCode))
+  const [code, setCode] = useState(initialCode ?? '')
+  const [error, setError] = useState<string | null>(null)
+  const check = useMutation({
+    mutationFn: (value: string) => checkDiscountCode(productId, value),
+    onSuccess: (quote) => { setError(null); onChange(quote) },
+    onError: (failure) => { onChange(null); setError(failure.message) },
+  })
+  const autoApplied = useRef(false)
+  useEffect(() => {
+    if (!initialCode || autoApplied.current) return
+    autoApplied.current = true
+    check.mutate(initialCode)
+  }, [initialCode, check])
+
+  if (applied) {
+    return <div className="mt-3 flex max-w-sm items-center gap-2 text-sm text-emerald-300" role="status">
+      <Tag className="h-4 w-4 shrink-0" /><span><span className="font-semibold">{applied.code}</span> applied: {applied.percentOff}% off</span>
+      <Button type="button" size="sm" variant="ghost" className="ml-auto h-7 gap-1 px-2 text-zinc-400" onClick={() => { onChange(null); setCode(''); setOpen(false) }}><X className="h-3.5 w-3.5" />Remove</Button>
+    </div>
+  }
+  if (!open) return <button type="button" className="mt-3 block text-sm text-zinc-400 underline-offset-4 hover:text-zinc-200 hover:underline" onClick={() => setOpen(true)}>Have a discount code?</button>
+  return <form className="mt-3 max-w-sm" onSubmit={(event) => { event.preventDefault(); if (code.trim()) check.mutate(code.trim()) }}>
+    <div className="flex gap-2">
+      <Input value={code} onChange={(event) => { setCode(event.target.value); setError(null) }} placeholder="Discount code" aria-label="Discount code" aria-invalid={Boolean(error)} maxLength={32} autoCapitalize="characters" autoComplete="off" className="h-10 border-white/15 bg-transparent uppercase" />
+      <Button type="submit" variant="outline" className="h-10" disabled={!code.trim() || check.isPending}>{check.isPending ? 'Checking...' : 'Apply'}</Button>
+    </div>
+    {error && <p className="mt-2 text-xs text-red-300" role="alert">{error}</p>}
+  </form>
 }
 
 /** The full artist credit, with the lead artist linked to their page: "<a>John Blaze</a> & Kay feat. Boldy James". */

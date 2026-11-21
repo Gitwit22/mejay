@@ -35,6 +35,7 @@ import {EditorialStoryService} from '../editorial/story-service'
 import {mediaUploadSchema} from '../editorial/schemas'
 import {recordStoryView} from '../routes/stories'
 import {DiscoveryService} from './discovery-service'
+import {createDiscountCodeSchema, DiscountCodeAdminService, quoteDiscount} from './discount-codes'
 
 const connectionString = process.env.TEST_DATABASE_URL
 const describeWithDatabase = connectionString ? describe : describe.skip
@@ -592,6 +593,127 @@ describeWithDatabase('marketplace PostgreSQL flow', () => {
         {account_code: 'provider_payable', debit: 841, credit: 0},
         {account_code: 'stripe_clearing', debit: 0, credit: 1000},
       ])
+    })
+
+    describe('discount codes', () => {
+      function discountAdmin() {
+        return new DiscountCodeAdminService(new Database(connectionString!, pool) as never)
+      }
+
+      /** A live $10.00 release, a buyer, and a Stripe stub that can report a session as still open. */
+      async function setup(label: string) {
+        await resetIsrcState()
+        const fixture = await prepareLiveRelease(label)
+        const product = await pool.query<{id: string}>('SELECT id FROM products WHERE release_id = $1', [fixture.release.id])
+        await pool.query('UPDATE prices SET amount_minor = 1000 WHERE product_id = $1', [product.rows[0].id])
+        const buyerId = crypto.randomUUID()
+        await pool.query(`INSERT INTO users (id, email, account_intent) VALUES ($1, $2, 'consumer')`, [buyerId, `buyer-${buyerId.slice(0, 8)}@example.test`])
+        const calls: Array<{url: string; method: string; body: URLSearchParams | null}> = []
+        vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+          const url = String(input)
+          const body = init?.body instanceof URLSearchParams ? init.body : null
+          calls.push({url, method: init?.method ?? 'GET', body})
+          const reply = (data: unknown) => new Response(JSON.stringify(data), {status: 200})
+          if (url.endsWith('/v1/checkout/sessions')) return reply({id: `cs_${crypto.randomUUID()}`, url: 'https://checkout.stripe.test'})
+          if (url.includes('/v1/checkout/sessions/')) {
+            const id = url.split('/v1/checkout/sessions/')[1]
+            return reply({id, url: 'https://checkout.stripe.test', status: 'open'})
+          }
+          if (url.includes('/v1/payment_intents/')) {
+            return reply({id: url.split('/v1/payment_intents/')[1].split('?')[0], status: 'succeeded', latest_charge: {id: `ch_${crypto.randomUUID()}`, balance_transaction: {id: 'txn_1', fee: 59}}})
+          }
+          if (url.endsWith('/v1/transfers')) return reply({id: `tr_${crypto.randomUUID()}`})
+          throw new Error(`Unexpected Stripe call ${url}`)
+        }))
+        const commerce = new CommerceService(new Database(connectionString!, pool) as never, 'sk_test', 1000)
+        const paidSession = async (sessionId: string, amountMinor: number) => {
+          const attempt = await pool.query<{id: string}>('SELECT id FROM marketplace_checkout_attempts WHERE stripe_checkout_session_id = $1', [sessionId])
+          return {
+            id: sessionId, payment_status: 'paid', payment_intent: `pi_${crypto.randomUUID()}`, amount_total: amountMinor, currency: 'usd', livemode: false,
+            metadata: {kind: 'marketplace_purchase', attemptId: attempt.rows[0].id, userId: buyerId, productId: product.rows[0].id},
+          }
+        }
+        return {fixture, productId: product.rows[0].id, buyerId, calls, commerce, paidSession}
+      }
+
+      it('lets admins create codes, reviewers only view them, and keeps names unique', async () => {
+        const created = await discountAdmin().create(adminUserId, createDiscountCodeSchema.parse({code: ' summer-10 ', percentOff: 10}))
+        expect(created).toMatchObject({code: 'SUMMER-10', percent_off: 10, release_id: null, active: true, max_redemptions: null, redemption_count: 0})
+        await expect(discountAdmin().create(adminUserId, createDiscountCodeSchema.parse({code: 'summer-10', percentOff: 15}))).rejects.toMatchObject({code: 'discount_code_taken'})
+        await expect(discountAdmin().create(reviewerUserId, createDiscountCodeSchema.parse({code: 'REVIEWER', percentOff: 15}))).rejects.toMatchObject({code: 'marketplace_admin_required'})
+        await expect(discountAdmin().update(reviewerUserId, created.id, {active: false})).rejects.toMatchObject({code: 'marketplace_admin_required'})
+        const listed = await discountAdmin().list(reviewerUserId)
+        expect(listed.role).toBe('reviewer')
+        expect(listed.codes.some((code) => code.id === created.id)).toBe(true)
+        await expect(discountAdmin().list(crypto.randomUUID())).rejects.toMatchObject({code: 'marketplace_staff_required'})
+        expect(await discountAdmin().update(adminUserId, created.id, {active: false})).toMatchObject({active: false, max_redemptions: null})
+        expect(await discountAdmin().update(adminUserId, created.id, {maxRedemptions: 5})).toMatchObject({active: false, max_redemptions: 5})
+      })
+
+      it('charges the discounted price, splits what the buyer paid, and counts the use once', async () => {
+        const {fixture, productId, buyerId, calls, commerce, paidSession} = await setup('Discounted')
+        const code = await discountAdmin().create(adminUserId, createDiscountCodeSchema.parse({code: 'BOLDY20', percentOff: 20, releaseId: fixture.release.id}))
+        const quote = await quoteDiscount(new Database(connectionString!, pool) as never, productId, 'boldy20')
+        expect(quote).toMatchObject({code: 'BOLDY20', percentOff: 20, listAmountMinor: 1000, discountMinor: 200, amountMinor: 800, currency: 'USD'})
+
+        const checkout = await commerce.createCheckout(buyerId, productId, 'https://app.test', ' boldy20 ')
+        const created = calls.find((call) => call.url.endsWith('/v1/checkout/sessions'))
+        expect(created?.body?.get('line_items[0][price_data][unit_amount]')).toBe('800')
+        expect(created?.body?.get('line_items[0][price_data][product_data][description]')).toContain('Code BOLDY20: 20% off $10.00')
+        expect(created?.body?.get('metadata[discountCode]')).toBe('BOLDY20')
+        const attempt = await pool.query('SELECT amount_minor, list_amount_minor, discount_minor, discount_code, discount_code_id FROM marketplace_checkout_attempts WHERE stripe_checkout_session_id = $1', [checkout.sessionId])
+        expect(attempt.rows[0]).toEqual({amount_minor: 800, list_amount_minor: 1000, discount_minor: 200, discount_code: 'BOLDY20', discount_code_id: code.id})
+
+        const session = await paidSession(checkout.sessionId, 800)
+        const {orderId} = await commerce.fulfillPaidSession(session)
+        const order = (await pool.query('SELECT * FROM marketplace_orders WHERE id = $1', [orderId])).rows[0]
+        // 80¢ commission (10% of 800) + 59¢ recovered Stripe fee; artist receives 661¢.
+        expect(order).toMatchObject({gross_amount_minor: 800, platform_fee_minor: 139, provider_proceeds_minor: 661, discount_code: 'BOLDY20', discount_minor: 200})
+        expect(calls.find((call) => call.url.endsWith('/v1/transfers'))?.body?.get('amount')).toBe('661')
+        const item = await pool.query('SELECT unit_amount_minor FROM marketplace_order_items WHERE order_id = $1', [orderId])
+        expect(item.rows[0].unit_amount_minor).toBe(800)
+
+        // A replayed webhook returns the same order and does not count the code twice.
+        expect((await commerce.fulfillPaidSession(session)).orderId).toBe(orderId)
+        const counted = await pool.query('SELECT redemption_count FROM marketplace_discount_codes WHERE id = $1', [code.id])
+        expect(counted.rows[0].redemption_count).toBe(1)
+
+        // Stripe charging anything other than the discounted price is refused.
+        const other = await setup('DiscountMismatch')
+        await discountAdmin().create(adminUserId, createDiscountCodeSchema.parse({code: 'MISMATCH20', percentOff: 20}))
+        const mismatch = await other.commerce.createCheckout(other.buyerId, other.productId, 'https://app.test', 'MISMATCH20')
+        await expect(other.commerce.fulfillPaidSession(await other.paidSession(mismatch.sessionId, 1000))).rejects.toMatchObject({code: 'checkout_amount_mismatch'})
+      })
+
+      it('refuses codes for other releases, switched-off, used-up or too-deep codes, and never falls back to full price', async () => {
+        const {fixture, productId, buyerId, calls, commerce} = await setup('DiscountRules')
+        const elsewhere = await prepareLiveRelease('DiscountElsewhere')
+        await discountAdmin().create(adminUserId, createDiscountCodeSchema.parse({code: 'OTHERONLY', percentOff: 20, releaseId: elsewhere.release.id}))
+        const off = await discountAdmin().create(adminUserId, createDiscountCodeSchema.parse({code: 'SWITCHEDOFF', percentOff: 20}))
+        await discountAdmin().update(adminUserId, off.id, {active: false})
+        const capped = await discountAdmin().create(adminUserId, createDiscountCodeSchema.parse({code: 'ONEUSE', percentOff: 20, maxRedemptions: 1}))
+        await pool.query('UPDATE marketplace_discount_codes SET redemption_count = 1 WHERE id = $1', [capped.id])
+        await discountAdmin().create(adminUserId, createDiscountCodeSchema.parse({code: 'DEEP90', percentOff: 90, releaseId: fixture.release.id}))
+        await pool.query('UPDATE prices SET amount_minor = 300 WHERE product_id = $1', [productId])
+
+        for (const [code, error] of [['OTHERONLY', 'discount_code_invalid'], ['SWITCHEDOFF', 'discount_code_invalid'], ['NOPE-NOT-REAL', 'discount_code_invalid'], ['!!', 'discount_code_invalid'], ['ONEUSE', 'discount_code_used_up'], ['DEEP90', 'discount_code_below_minimum']] as const) {
+          await expect(commerce.createCheckout(buyerId, productId, 'https://app.test', code)).rejects.toMatchObject({code: error, status: 422})
+        }
+        expect(calls.some((call) => call.url.endsWith('/v1/checkout/sessions'))).toBe(false)
+        expect((await pool.query('SELECT COUNT(*)::integer AS count FROM marketplace_checkout_attempts WHERE buyer_user_id = $1', [buyerId])).rows[0].count).toBe(0)
+      })
+
+      it('starts a new session when the code changes instead of reusing one at another price', async () => {
+        const {productId, buyerId, calls, commerce} = await setup('DiscountReuse')
+        await discountAdmin().create(adminUserId, createDiscountCodeSchema.parse({code: 'REUSE15', percentOff: 15}))
+        const fullPrice = await commerce.createCheckout(buyerId, productId, 'https://app.test')
+        const discounted = await commerce.createCheckout(buyerId, productId, 'https://app.test', 'reuse15')
+        expect(discounted.sessionId).not.toBe(fullPrice.sessionId)
+        expect(calls.filter((call) => call.url.endsWith('/v1/checkout/sessions')).map((call) => call.body?.get('line_items[0][price_data][unit_amount]'))).toEqual(['1000', '850'])
+        // Same code again (a double click): the open discounted session is reused.
+        expect((await commerce.createCheckout(buyerId, productId, 'https://app.test', 'REUSE15')).sessionId).toBe(discounted.sessionId)
+        expect((await commerce.createCheckout(buyerId, productId, 'https://app.test')).sessionId).toBe(fullPrice.sessionId)
+      })
     })
 
     describe('purchase confirmation email', () => {
