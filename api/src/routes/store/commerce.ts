@@ -4,6 +4,7 @@ import {applyRateLimit, getClientIp} from '../_security'
 import {claimGuestPurchases, CommerceService} from '../../marketplace/commerce-service'
 import {exchangeEmailLink, hashAccessToken, resolveSessionDownload} from '../../marketplace/guest-access'
 import {sendAccessRecovery} from '../../marketplace/email-jobs'
+import {quoteDiscount} from '../../marketplace/discount-codes'
 import type {OrderEmailEnv} from '../../marketplace/order-email'
 import {MarketplaceError} from '../../marketplace/service'
 import type {PrivateBucket} from '../../services/r2'
@@ -45,9 +46,11 @@ function failed(error: unknown): Response {
 export async function createStoreCheckout(context: Context): Promise<Response> {
   const userId = await getSessionUserId(context.request, context.env)
   try {
-    const body = await context.request.json().catch(() => null) as {productId?: unknown} | null
+    const body = await context.request.json().catch(() => null) as {productId?: unknown; discountCode?: unknown} | null
     const productId = typeof body?.productId === 'string' ? body.productId.trim() : ''
     if (!productId) return json({ok: false, error: 'product_id_required'}, 400)
+    // Optional. Blank means no code; anything else is validated by the commerce service.
+    const discountCode = typeof body?.discountCode === 'string' && body.discountCode.trim() ? body.discountCode.trim().slice(0, 64) : null
     // Each attempt creates a Stripe Checkout Session; cap per buyer (or per IP for guests) to stop
     // scripted session spam.
     const limit = await applyRateLimit({
@@ -57,8 +60,32 @@ export async function createStoreCheckout(context: Context): Promise<Response> {
     if (!limit.ok) return json({ok: false, error: 'rate_limited', message: 'Too many checkout attempts. Try again in a few minutes.'}, 429)
     const configuredOrigin = String(context.env.FRONTEND_URL || '').split(',')[0]?.trim()
     if (!configuredOrigin) throw new MarketplaceError(500, 'frontend_url_missing', 'Frontend URL is not configured')
-    const data = await commerceService(context).createCheckout(userId, productId, new URL(configuredOrigin).origin)
+    const data = await commerceService(context).createCheckout(userId, productId, new URL(configuredOrigin).origin, discountCode)
     return json({ok: true, data})
+  } catch (error) {
+    return failed(error)
+  }
+}
+
+/**
+ * The store page's "Apply" button: the price with a discount code applied, for anyone (guests
+ * included). Rate limited per IP so codes can't be guessed by brute force. Checkout re-validates.
+ */
+export async function checkDiscountCode(context: Context): Promise<Response> {
+  try {
+    const body = await context.request.json().catch(() => null) as {productId?: unknown; code?: unknown} | null
+    const productId = typeof body?.productId === 'string' ? body.productId.trim() : ''
+    if (!productId || typeof body?.code !== 'string' || !body.code.trim()) return json({ok: false, error: 'invalid_request'}, 400)
+    const limit = await applyRateLimit({
+      db: context.env.DB, key: `ip:${getClientIp(context.request)}`, purpose: 'store_discount_check', kind: 'check',
+      maxPerWindow: 20, windowSeconds: 10 * 60, lockoutMs: 10 * 60 * 1000,
+    })
+    if (!limit.ok) return json({ok: false, error: 'rate_limited', message: 'Too many code attempts. Try again in a few minutes.'}, 429)
+    const quote = await quoteDiscount(context.env.DB, productId, body.code.slice(0, 64))
+    return json({ok: true, data: {
+      code: quote.code, percentOff: quote.percentOff, currency: quote.currency,
+      listAmountMinor: quote.listAmountMinor, discountMinor: quote.discountMinor, amountMinor: quote.amountMinor,
+    }})
   } catch (error) {
     return failed(error)
   }

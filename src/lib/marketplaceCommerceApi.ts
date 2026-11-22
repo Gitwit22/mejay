@@ -90,13 +90,56 @@ export type StoreOrderStatus = {
   transfer_status: string | null
 }
 
-export async function startStoreCheckout(productId: string): Promise<void> {
+/** `discountCode` is optional; the API validates it and charges the discounted price, or refuses the checkout. */
+export async function startStoreCheckout(productId: string, discountCode?: string | null): Promise<void> {
   const result = await request<{url: string}>('/api/store/checkout', {
     method: 'POST',
     headers: {'content-type': 'application/json'},
-    body: JSON.stringify({productId}),
+    body: JSON.stringify(discountCode ? {productId, discountCode} : {productId}),
   })
   window.location.assign(result.url)
+}
+
+export type DiscountQuote = {
+  code: string
+  percentOff: number
+  currency: string
+  listAmountMinor: number
+  discountMinor: number
+  amountMinor: number
+}
+
+/** Price preview for a code on a product. Throws with a readable message when the code can't be used. */
+export function checkDiscountCode(productId: string, code: string): Promise<DiscountQuote> {
+  return request('/api/store/discount-codes/check', {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify({productId, code}),
+  })
+}
+
+export type DiscountCode = {
+  id: string
+  code: string
+  percent_off: number
+  release_id: string | null
+  release_title: string | null
+  active: boolean
+  max_redemptions: number | null
+  redemption_count: number
+  created_at: string
+}
+
+export function listDiscountCodes(): Promise<{role: 'reviewer' | 'admin'; codes: DiscountCode[]}> {
+  return request('/api/marketplace-admin/discount-codes')
+}
+
+export function createDiscountCode(input: {code: string; percentOff: number; releaseId?: string | null; maxRedemptions?: number | null}): Promise<DiscountCode> {
+  return request('/api/marketplace-admin/discount-codes', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
+}
+
+export function updateDiscountCode(id: string, input: {active?: boolean; maxRedemptions?: number | null}): Promise<DiscountCode> {
+  return request(`/api/marketplace-admin/discount-codes/${encodeURIComponent(id)}`, {method: 'PATCH', headers: {'content-type': 'application/json'}, body: JSON.stringify(input)})
 }
 
 export function getStoreOrderStatus(sessionId: string): Promise<StoreOrderStatus> {

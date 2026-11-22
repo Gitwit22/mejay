@@ -46,14 +46,14 @@ import {
   updateTrack,
   finalizeUpload,
 } from './marketplace'
-import {commandProvider as marketplaceAdminCommandProvider, commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview, recordSplitDispute, replaceDiscoveryFeatures, retryProviderPayouts, getFinanceSummary as marketplaceAdminFinance, exportFinance as marketplaceAdminFinanceExport, getFinanceOrder as marketplaceAdminFinanceOrder, getReleaseReview as marketplaceAdminReleaseReview, getReviewAsset as marketplaceAdminReviewAsset, listChangeRequests, getChangeRequestReview, commandChangeRequest, createOrderDownloadLink, changeOrderBuyerEmail, lookupCustomer, setCustomerFullAccess} from './marketplace-admin'
+import {commandProvider as marketplaceAdminCommandProvider, commandRelease as marketplaceAdminCommandRelease, getOverview as marketplaceAdminOverview, recordSplitDispute, replaceDiscoveryFeatures, retryProviderPayouts, getFinanceSummary as marketplaceAdminFinance, exportFinance as marketplaceAdminFinanceExport, getFinanceOrder as marketplaceAdminFinanceOrder, getReleaseReview as marketplaceAdminReleaseReview, getReviewAsset as marketplaceAdminReviewAsset, listChangeRequests, getChangeRequestReview, commandChangeRequest, createOrderDownloadLink, changeOrderBuyerEmail, lookupCustomer, setCustomerFullAccess, listDiscountCodes, createDiscountCode, updateDiscountCode} from './marketplace-admin'
 import {createIndustryReportingBatch, createIndustryReportingCorrection, exportIndustryReportingBatch, getIndustryReporting, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting} from './marketplace-admin/reporting'
 import {onRequest as stripeWebhook} from './stripe-webhook'
 import {getCatalogAsset, getCatalogRelease, getPublicArtist, listCatalog, recordCatalogPreview} from './store'
 import {createConnectDashboard, createConnectOnboarding, getConnectStatus} from './marketplace/connect'
 import {getProviderReporting, getRecipientEarnings} from './marketplace/reporting'
 import {getPricingPolicy} from './marketplace/pricing'
-import {claimStorePurchases, createStoreCheckout, downloadGuestFile, downloadStorePurchase, exchangeGuestAccess, getGuestOrderStatus, getStoreOrderStatus, getStorePurchaseArtwork, listStorePurchases, recoverGuestAccess} from './store/commerce'
+import {checkDiscountCode, claimStorePurchases, createStoreCheckout, downloadGuestFile, downloadStorePurchase, exchangeGuestAccess, getGuestOrderStatus, getStoreOrderStatus, getStorePurchaseArtwork, listStorePurchases, recoverGuestAccess} from './store/commerce'
 import {getMusicDiscovery} from './music'
 import {getStoriesHome, getStory, getStoryMedia, listStories, recordStoryView} from './stories'
 import {commandAdminStory, createAdminStory, deleteStoryMedia, finalizeStoryUpload, getAdminStory, getStaffStoryMedia, initiateStoryUpload, listAdminStories, lookupStoryLinks, updateAdminStory} from './marketplace-admin/stories'
@@ -92,6 +92,7 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'get', path: '/api/store/assets/:assetId', handler: getCatalogAsset},
   {method: 'post', path: '/api/store/previews', handler: recordCatalogPreview},
   {method: 'post', path: '/api/store/checkout', handler: createStoreCheckout},
+  {method: 'post', path: '/api/store/discount-codes/check', handler: checkDiscountCode},
   {method: 'get', path: '/api/store/orders/by-session/:sessionId', handler: getStoreOrderStatus},
   {method: 'get', path: '/api/store/purchases', handler: listStorePurchases},
   {method: 'get', path: '/api/store/purchases/:entitlementId/files/:fileId/download', handler: downloadStorePurchase},
@@ -184,6 +185,9 @@ export const routes: Array<{method: string; path: string; handler: RouteHandler}
   {method: 'get', path: '/api/marketplace-admin/change-requests/:changeRequestId', handler: getChangeRequestReview},
   {method: 'post', path: '/api/marketplace-admin/change-requests/:changeRequestId/commands', handler: commandChangeRequest},
   {method: 'put', path: '/api/marketplace-admin/discovery/features', handler: replaceDiscoveryFeatures},
+  {method: 'get', path: '/api/marketplace-admin/discount-codes', handler: listDiscountCodes},
+  {method: 'post', path: '/api/marketplace-admin/discount-codes', handler: createDiscountCode},
+  {method: 'patch', path: '/api/marketplace-admin/discount-codes/:codeId', handler: updateDiscountCode},
   {method: 'get', path: '/api/marketplace-admin/reporting', handler: getIndustryReporting},
   {method: 'post', path: '/api/marketplace-admin/reporting/validate', handler: validateIndustryReporting},
   {method: 'post', path: '/api/marketplace-admin/reporting/batches', handler: createIndustryReportingBatch},

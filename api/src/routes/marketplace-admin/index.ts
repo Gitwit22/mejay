@@ -15,6 +15,7 @@ import {MarketplaceError} from '../../marketplace/service'
 import {changeRequestReviewCommandSchema, ReleaseChangeRequestService} from '../../marketplace/change-request-service'
 import {deleteDiscardedUploads} from '../marketplace'
 import {getSessionUserId, readJson, type EnvWithDb} from '../_auth'
+import {createDiscountCodeSchema, DiscountCodeAdminService, updateDiscountCodeSchema} from '../../marketplace/discount-codes'
 
 type AdminEnv = EnvWithDb & {STRIPE_SECRET_KEY?: string; MARKETPLACE_PLATFORM_FEE_BPS?: string}
 
@@ -316,3 +317,27 @@ export const setCustomerFullAccess = async (context: AdminContext): Promise<Resp
     return json({ok: false, error: 'server_error'}, {status: 500})
   }
 }
+
+
+type DiscountContext = {request: Request; env: EnvWithDb; params: Record<string, string | undefined>}
+
+/** Staff discount codes: session and error mapping here; DiscountCodeAdminService enforces roles. */
+async function discountRoute(context: DiscountContext, run: (service: DiscountCodeAdminService, userId: string) => Promise<unknown>, status = 200): Promise<Response> {
+  if (!context.env.DB) return json({ok: false, error: 'db_not_configured'}, {status: 500})
+  const userId = await getSessionUserId(context.request, context.env)
+  if (!userId) return json({ok: false, error: 'unauthorized'}, {status: 401})
+  try {
+    return json({ok: true, data: await run(new DiscountCodeAdminService(context.env.DB), userId)}, {status})
+  } catch (error) {
+    if (error instanceof ZodError) return json({ok: false, error: 'invalid_request', message: error.issues[0]?.message, issues: error.issues}, {status: 400})
+    if (error instanceof MarketplaceError) return json({ok: false, error: error.code, message: error.message}, {status: error.status})
+    console.error('[marketplace-admin] discount code request failed', error)
+    return json({ok: false, error: 'server_error'}, {status: 500})
+  }
+}
+
+export const listDiscountCodes = (context: DiscountContext) => discountRoute(context, (service, userId) => service.list(userId))
+export const createDiscountCode = (context: DiscountContext) => discountRoute(context, async (service, userId) =>
+  service.create(userId, createDiscountCodeSchema.parse(await readJson(context.request))), 201)
+export const updateDiscountCode = (context: DiscountContext) => discountRoute(context, async (service, userId) =>
+  service.update(userId, context.params.codeId?.trim() ?? '', updateDiscountCodeSchema.parse(await readJson(context.request))))

@@ -1,6 +1,6 @@
 import {useEffect, useState} from 'react'
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
-import {ArrowDown, ArrowLeft, ArrowUp, FilePen, Newspaper, BarChart3, BadgeDollarSign, Landmark, CheckCircle2, Copy, Copyright, Disc3, Download, Fingerprint, Menu, Plus, RefreshCw, Scale, Scissors, Search, Send, ShieldAlert, Sparkles, Trash2, Users, UserRound, X, XCircle} from 'lucide-react'
+import {ArrowDown, ArrowLeft, ArrowUp, FilePen, Newspaper, BarChart3, BadgeDollarSign, Landmark, CheckCircle2, Copy, Copyright, Disc3, Download, Fingerprint, Menu, Plus, RefreshCw, Scale, Scissors, Search, Send, ShieldAlert, Sparkles, Tag, Trash2, Users, UserRound, X, XCircle} from 'lucide-react'
 import {Link, useSearchParams} from 'react-router-dom'
 
 import {ReleaseReviewDialog} from '@/app/components/admin/ReleaseReviewDialog'
@@ -8,6 +8,7 @@ import {ChangeRequestsSection} from '@/app/components/admin/ChangeRequestReviewD
 import {StoriesSection} from '@/app/components/admin/stories/StoriesSection'
 import {FinanceOrderDialog} from '@/app/components/admin/FinanceOrderDialog'
 import {CustomerLookupSheet} from '@/app/components/admin/CustomerLookupSheet'
+import {DiscountCodesSection} from '@/app/components/admin/DiscountCodesSection'
 import {Button} from '@/components/ui/button'
 import {Dialog, DialogContent, DialogHeader, DialogTitle} from '@/components/ui/dialog'
 import {Input} from '@/components/ui/input'
@@ -15,12 +16,12 @@ import {Skeleton} from '@/components/ui/skeleton'
 import {toast} from '@/hooks/use-toast'
 import {downloadMarketplaceFinanceCsv, getMarketplaceFinance, type MarketplaceFinanceFilters, type MarketplaceFinanceSummary, commandMarketplaceProvider, commandMarketplaceRelease, recordSplitDispute, retryMarketplacePayouts, type ProviderAdminAction, createIndustryReportingBatch, downloadIndustryReportingBatch, downloadIsrcRegistryExport, getIndustryReporting, getIsrcRegistry, getIsrcRegistryRecord, getIsrcSequence, getMarketplaceAdminOverview, replaceMarketplaceDiscoveryFeatures, resolveIndustryReportingBatch, submitIndustryReportingBatch, validateIndustryReporting, type AdminRecord, type IndustryReportingDashboard, type IsrcRegistryRecord, type MarketplaceAdminOverview, type ReleaseAdminAction} from '@/lib/marketplaceAdminApi'
 
-type Section = 'pending' | 'changes' | 'stories' | 'catalog' | 'discovery' | 'providers' | 'artists' | 'isrcs' | 'rights' | 'pricing' | 'splits' | 'takedowns' | 'reporting' | 'finance'
+type Section = 'pending' | 'changes' | 'stories' | 'catalog' | 'discovery' | 'providers' | 'artists' | 'isrcs' | 'rights' | 'pricing' | 'discounts' | 'splits' | 'takedowns' | 'reporting' | 'finance'
 
 const navigation = [
   ['pending', 'Pending Releases', ShieldAlert], ['changes', 'Change Requests', FilePen], ['stories', 'Stories', Newspaper], ['catalog', 'Live Catalog', Disc3], ['discovery', 'Discovery', Sparkles], ['providers', 'Providers', Users],
   ['artists', 'Artists', UserRound], ['isrcs', 'ISRC Registry', Fingerprint], ['rights', 'Rights Review', Copyright],
-  ['pricing', 'Pricing', BadgeDollarSign], ['splits', 'Splits', Scissors], ['takedowns', 'Takedowns', Scale],
+  ['pricing', 'Pricing', BadgeDollarSign], ['discounts', 'Discount Codes', Tag], ['splits', 'Splits', Scissors], ['takedowns', 'Takedowns', Scale],
   ['reporting', 'Reporting', BarChart3], ['finance', 'Finance', Landmark],
 ] as const
 
@@ -62,6 +63,7 @@ function SectionView({section, data, onNavigate}: {section: Section; data: Await
   if (section === 'reporting') return <Reporting />
   if (section === 'changes') return <ChangeRequestsSection />
   if (section === 'stories') return <StoriesSection role={data.role} />
+  if (section === 'discounts') return <DiscountCodesSection />
   if (section === 'finance') return <FinanceSection data={data} />
   if (section === 'discovery') return <DiscoveryCuration data={data} />
   if (section === 'isrcs') return <IsrcRegistrySection />

@@ -5,6 +5,7 @@ import {stripeRequest, StripeRequestError} from '../services/stripe'
 import {formatReleaseTime} from './release-schedule'
 import {formatArtistCredit, parseCredits, releaseCreditsJsonSql} from './artist-credit'
 import {downloadAssetSql, downloadFileName, extensionForMime} from './download-asset'
+import {resolveDiscount, type AppliedDiscount} from './discount-codes'
 
 type Statement = {
   bind: (...values: unknown[]) => Statement
@@ -49,6 +50,10 @@ export type PurchaseType = 'standard' | 'preorder'
 
 /** Shown at checkout and in confirmations for every pre-order. */
 export const PREORDER_CHARGE_NOTICE = "You'll be charged today. Downloads become available on release day."
+
+function formatUsd(amountMinor: number): string {
+  return '$' + (amountMinor / 100).toFixed(2)
+}
 
 function normalizeBuyerEmail(value: string | null | undefined): string | null {
   const email = value?.trim().toLowerCase() ?? ''
@@ -103,6 +108,10 @@ type AttemptRow = {
   snapshot: CheckoutSnapshot
   purchase_type?: PurchaseType
   guest_checkout?: boolean
+  /** Null on attempts created without a discount code (and on every attempt before codes existed). */
+  discount_code_id?: string | null
+  discount_code?: string | null
+  discount_minor?: number | null
 }
 
 type StripeCheckoutSession = {
@@ -207,14 +216,18 @@ export class CommerceService {
    * Creates a Stripe Checkout Session for a LIVE release, or a pre-order for a SCHEDULED release with
    * pre-orders enabled. `userId` is null for a guest: Stripe collects the email, and the purchase is
    * delivered by emailed download links (and can be claimed later by a verified account).
+   *
+   * `discountCode` is optional; when given it is validated here and the buyer is charged the
+   * discounted price (see discount-codes.ts). An invalid code fails the checkout with a 422 rather
+   * than silently charging full price.
    */
-  async createCheckout(userId: string | null, productId: string, frontendOrigin: string): Promise<{url: string; sessionId: string}> {
+  async createCheckout(userId: string | null, productId: string, frontendOrigin: string, discountCode: string | null = null): Promise<{url: string; sessionId: string}> {
     if (userId) await this.assertNotOwned(userId, productId)
     if (userId) {
-      const reused = await this.reuseOpenCheckout(userId, productId)
+      const reused = await this.reuseOpenCheckout(userId, productId, discountCode)
       if (reused) return reused
     }
-    return this.createCheckoutSession(userId, productId, frontendOrigin)
+    return this.createCheckoutSession(userId, productId, frontendOrigin, discountCode)
   }
 
   private async assertNotOwned(userId: string, productId: string): Promise<void> {
@@ -226,15 +239,17 @@ export class CommerceService {
     if (existing) throw new MarketplaceError(409, 'already_owned', 'This release is already in Purchased Music')
   }
 
-  private async reuseOpenCheckout(userId: string, productId: string): Promise<{url: string; sessionId: string} | null> {
+  private async reuseOpenCheckout(userId: string, productId: string, discountCode: string | null): Promise<{url: string; sessionId: string} | null> {
     // Reuse a still-open Checkout Session for the same buyer+product (double clicks, second tab)
-    // instead of creating a second session that could be paid twice.
+    // instead of creating a second session that could be paid twice. Only one started with the
+    // same code (or no code) is reused, so adding or changing a code gets a session at that price.
     const openAttempt = await this.database.prepare(
       `SELECT stripe_checkout_session_id FROM marketplace_checkout_attempts
        WHERE buyer_user_id = ?1 AND product_id = ?2 AND status = 'checkout_created'
          AND stripe_checkout_session_id IS NOT NULL AND expires_at > CURRENT_TIMESTAMP
+         AND COALESCE(discount_code, '') = ?3
        ORDER BY created_at DESC LIMIT 1`,
-    ).bind(userId, productId).first<{stripe_checkout_session_id: string}>()
+    ).bind(userId, productId, discountCode?.trim().toUpperCase() ?? '').first<{stripe_checkout_session_id: string}>()
     if (openAttempt?.stripe_checkout_session_id) {
       const session = await stripeRequest<{id?: string; url?: string | null; status?: string}>({
         secretKey: this.secretKey,
@@ -247,7 +262,7 @@ export class CommerceService {
     return null
   }
 
-  private async createCheckoutSession(userId: string | null, productId: string, frontendOrigin: string): Promise<{url: string; sessionId: string}> {
+  private async createCheckoutSession(userId: string | null, productId: string, frontendOrigin: string, discountCode: string | null): Promise<{url: string; sessionId: string}> {
     const product = await this.database.prepare(
       `SELECT product.id AS product_id, product.name AS product_name, price.id AS price_id,
         product.track_id, sold_track.title AS track_title,
@@ -290,6 +305,12 @@ export class CommerceService {
       throw new MarketplaceError(409, 'provider_payout_not_ready', 'This provider is still completing Stripe payout setup')
     }
     if (product.currency !== 'USD') throw new MarketplaceError(422, 'currency_not_supported', 'Only USD marketplace checkout is available')
+    const discount: AppliedDiscount | null = discountCode
+      ? await resolveDiscount(this.database, discountCode, {releaseId: product.release_id, listAmountMinor: product.amount_minor})
+      : null
+    // The authoritative charge: fulfillment checks Stripe's total against this, and the sale's fee,
+    // proceeds and splits are all worked out from it.
+    const chargeAmountMinor = discount?.amountMinor ?? product.amount_minor
     if (product.track_id && userId) {
       // Owning the song through any purchase (the song itself or its release) means it is already owned.
       const ownedTrack = await this.database.prepare(
@@ -371,23 +392,24 @@ export class CommerceService {
       `INSERT INTO marketplace_checkout_attempts
         (id, buyer_user_id, provider_profile_id, product_id, release_id, price_id, amount_minor, currency,
           platform_fee_bps, stripe_idempotency_key, transfer_group, snapshot, stripe_destination_account_id, expires_at,
-          purchase_type, guest_checkout)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, CURRENT_TIMESTAMP + INTERVAL '30 minutes', ?14, ?15)`,
+          purchase_type, guest_checkout, discount_code_id, discount_code, list_amount_minor, discount_minor)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, CURRENT_TIMESTAMP + INTERVAL '30 minutes', ?14, ?15, ?16, ?17, ?18, ?19)`,
     ).bind(
       attemptId, userId, product.provider_profile_id, product.product_id, product.release_id, product.price_id,
-      product.amount_minor, product.currency, this.platformFeeBps, idempotencyKey, transferGroup, JSON.stringify(snapshot), product.stripe_account_id,
-      purchaseType, !userId,
+      chargeAmountMinor, product.currency, this.platformFeeBps, idempotencyKey, transferGroup, JSON.stringify(snapshot), product.stripe_account_id,
+      purchaseType, !userId, discount?.id ?? null, discount?.code ?? null, product.amount_minor, discount?.discountMinor ?? 0,
     ).run()
 
     const params = new URLSearchParams()
     params.set('mode', 'payment')
     params.set('line_items[0][price_data][currency]', product.currency.toLowerCase())
-    params.set('line_items[0][price_data][unit_amount]', String(product.amount_minor))
+    params.set('line_items[0][price_data][unit_amount]', String(chargeAmountMinor))
     params.set('line_items[0][price_data][product_data][name]', product.track_id ? product.track_title ?? product.product_name : product.release_title)
     const lineDescription = product.track_id
       ? `${product.artist_name} - song from ${product.release_title}`
       : `${product.artist_name} - ${product.release_type}`
-    params.set('line_items[0][price_data][product_data][description]', releaseLabel ? `Pre-order · releases ${releaseLabel}. ${lineDescription}` : lineDescription)
+    const discountNote = discount ? ` · Code ${discount.code}: ${discount.percentOff}% off ${formatUsd(discount.listAmountMinor)}` : ''
+    params.set('line_items[0][price_data][product_data][description]', `${releaseLabel ? `Pre-order · releases ${releaseLabel}. ` : ''}${lineDescription}${discountNote}`)
     params.set('line_items[0][quantity]', '1')
     params.set('customer_creation', 'always')
     // Guests: Stripe collects the email; it becomes the purchase email for download links.
@@ -406,6 +428,7 @@ export class CommerceService {
       releaseId: product.release_id,
       providerId: product.provider_profile_id,
       ...(product.track_id ? {trackId: product.track_id} : {}),
+      ...(discount ? {discountCode: discount.code} : {}),
     }
     for (const [key, value] of Object.entries(reconciliation)) {
       params.set(`metadata[${key}]`, value)
@@ -420,7 +443,7 @@ export class CommerceService {
     params.set('success_url', userId
       ? `${frontendOrigin}/app/purchased?checkout=success&session_id={CHECKOUT_SESSION_ID}`
       : `${frontendOrigin}/purchase/complete?session_id={CHECKOUT_SESSION_ID}`)
-    params.set('cancel_url', `${frontendOrigin}/app/store/${encodeURIComponent(product.release_id)}?checkout=cancel`)
+    params.set('cancel_url', `${frontendOrigin}/app/store/${encodeURIComponent(product.release_id)}?checkout=cancel${discount ? `&code=${encodeURIComponent(discount.code)}` : ''}`)
     try {
       const session = await stripeRequest<{id?: string; url?: string}>({
         secretKey: this.secretKey,
@@ -508,8 +531,9 @@ export class CommerceService {
           (id, buyer_user_id, provider_profile_id, checkout_attempt_id, buyer_email, buyer_country_code, currency,
             gross_amount_minor, platform_fee_minor, provider_proceeds_minor, stripe_fee_minor,
             stripe_checkout_session_id, stripe_payment_intent_id, stripe_charge_id, stripe_balance_transaction_id,
-            stripe_destination_account_id, payment_status, paid_at, platform_fee_bps, livemode, purchase_type)
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 'paid', ?17, ?18, ?19, ?20)
+            stripe_destination_account_id, payment_status, paid_at, platform_fee_bps, livemode, purchase_type,
+            discount_code, discount_minor)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 'paid', ?17, ?18, ?19, ?20, ?21, ?22)
          RETURNING *`,
       ).bind(
         orderId, userId, attempt.provider_profile_id, attempt.id,
@@ -519,8 +543,16 @@ export class CommerceService {
         charge.stripeFeeMinor, session.id, intentId, charge.chargeId, charge.balanceTransactionId,
         attempt.stripe_destination_account_id, paidAt, attempt.platform_fee_bps,
         typeof session.livemode === 'boolean' ? session.livemode : null, purchaseType,
+        attempt.discount_code ?? null, Number(attempt.discount_minor ?? 0),
       ).first<OrderRow>()
       if (!insertedOrder) throw new Error('Order insert failed')
+      // Counted once, with the order: a replayed webhook returns the existing order above first.
+      // Never refused here; the buyer has already paid.
+      if (attempt.discount_code_id) {
+        await db.prepare(
+          `UPDATE marketplace_discount_codes SET redemption_count = redemption_count + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?1`,
+        ).bind(attempt.discount_code_id).run()
+      }
 
       const itemId = crypto.randomUUID()
       await db.prepare(
