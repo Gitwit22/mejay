@@ -12,9 +12,17 @@ describe('resolveApiBase', () => {
     expect(resolveApiBase('', true, 'MEJAYAPP.COM')).toBe('')
   })
 
+  it('uses the same-origin proxy on the mejay.us production domain', () => {
+    expect(resolveApiBase('https://mejay-api.onrender.com', true, 'mejay.us')).toBe('')
+    expect(resolveApiBase('https://mejay-api.onrender.com', true, 'www.mejay.us')).toBe('')
+    expect(resolveApiBase('', true, 'MEJAY.US')).toBe('')
+  })
+
   it('does not treat look-alike hosts as the production domain', () => {
     expect(resolveApiBase('', true, 'evilmejayapp.com')).toBe('https://mejay-api.onrender.com')
     expect(resolveApiBase('', true, 'mejayapp.com.attacker.example')).toBe('https://mejay-api.onrender.com')
+    expect(resolveApiBase('', true, 'evilmejay.us')).toBe('https://mejay-api.onrender.com')
+    expect(resolveApiBase('', true, 'mejay.us.attacker.example')).toBe('https://mejay-api.onrender.com')
   })
 
   it('uses the configured API on a custom frontend domain', () => {
