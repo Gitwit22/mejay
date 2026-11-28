@@ -118,6 +118,22 @@ export default function WelcomePage() {
                     <span aria-hidden="true">→</span>
                   </span>
                 </button>
+                {/* Discover is the store's home and works signed out (guest mode). */}
+                <button
+                  type="button"
+                  className="cta-secondary cta-button"
+                  onClick={() => navigate('/app?tab=music')}
+                  style={{
+                    background: 'linear-gradient(135deg, #34d399 0%, #059669 100%)',
+                    boxShadow: '0 0 20px rgba(52, 211, 153, 0.35), 0 0 40px rgba(5, 150, 105, 0.2)',
+                    minWidth: '280px',
+                    fontWeight: '600',
+                  }}
+                >
+                  <span className="inline-flex items-center justify-center gap-2 w-full">
+                    Visit Music Store
+                  </span>
+                </button>
                 <button
                   type="button"
                   className="cta-secondary cta-button"
