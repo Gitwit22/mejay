@@ -1019,6 +1019,68 @@
   opacity: 0.9;
 }
 
+/* Landing CTAs: one main action, two side-by-side shortcuts, then the artist link. */
+.mejay-welcome .cta-stack {
+  width: min(440px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.mejay-welcome .cta-stack .cta-primary {
+  width: 100%;
+}
+
+.mejay-welcome .cta-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.mejay-welcome .cta-row .cta-secondary {
+  width: 100%;
+  height: 50px;
+  border-radius: 14px;
+  font-size: 15px;
+  cursor: pointer;
+  color: #fff;
+  backdrop-filter: blur(10px);
+}
+
+.mejay-welcome .cta-store {
+  background: linear-gradient(135deg, rgba(52, 211, 153, 0.24), rgba(5, 150, 105, 0.2));
+  border-color: rgba(52, 211, 153, 0.55);
+  box-shadow: 0 0 24px rgba(52, 211, 153, 0.16);
+}
+
+.mejay-welcome .cta-store:hover {
+  background: linear-gradient(135deg, rgba(52, 211, 153, 0.34), rgba(5, 150, 105, 0.28));
+  border-color: rgba(52, 211, 153, 0.8);
+}
+
+.mejay-welcome .cta-store .cta-secondary-icon {
+  color: #6ee7b7;
+  opacity: 1;
+}
+
+.mejay-welcome .cta-stack .cta-alt {
+  margin: 4px 0 0;
+  flex-wrap: wrap;
+}
+
+.mejay-welcome .cta-secondary:focus-visible,
+.mejay-welcome .cta-alt-link:focus-visible {
+  outline: 2px solid rgba(0, 245, 212, 0.8);
+  outline-offset: 3px;
+}
+
+@media (max-width: 340px) {
+  .mejay-welcome .cta-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .mejay-welcome .trust-row {
   margin-top: 6px;
   display: flex;

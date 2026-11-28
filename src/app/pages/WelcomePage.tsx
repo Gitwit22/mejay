@@ -1,6 +1,7 @@
 import {useCallback, useState} from 'react'
 import {Link, useNavigate} from 'react-router-dom'
 import {motion} from 'framer-motion'
+import {LogIn, ShoppingBag} from 'lucide-react'
 
 import {useGradientParallax} from '../hooks/useGradientParallax'
 import {appStatus} from '@/appStatus'
@@ -104,67 +105,48 @@ export default function WelcomePage() {
                 </p>
               </div>
 
-              <div className="hero-ctas cta-group" style={{ marginTop: '2.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <button
-                  type="button"
-                  className="cta-primary cta-login cta-button"
-                  onClick={() => navigate('/app?tab=library')}
-                  style={{
-                    animation: 'pulsate-glow 2s ease-in-out infinite',
-                  }}
-                >
-                  <span className="inline-flex items-center justify-center gap-2 w-full">
-                    Start the Party
-                    <span aria-hidden="true">→</span>
-                  </span>
-                </button>
-                {/* Discover is the store's home and works signed out (guest mode). */}
-                <button
-                  type="button"
-                  className="cta-secondary cta-button"
-                  onClick={() => navigate('/app?tab=music')}
-                  style={{
-                    background: 'linear-gradient(135deg, #34d399 0%, #059669 100%)',
-                    boxShadow: '0 0 20px rgba(52, 211, 153, 0.35), 0 0 40px rgba(5, 150, 105, 0.2)',
-                    minWidth: '280px',
-                    fontWeight: '600',
-                  }}
-                >
-                  <span className="inline-flex items-center justify-center gap-2 w-full">
-                    Visit Music Store
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="cta-secondary cta-button"
-                  onClick={() => navigate('/login')}
-                  style={{
-                    background: 'linear-gradient(135deg, #00d4ff 0%, #0099ff 100%)',
-                    backdropFilter: 'blur(10px)',
-                    boxShadow: '0 0 20px rgba(0, 212, 255, 0.4), 0 0 40px rgba(0, 153, 255, 0.2)',
-                    minWidth: '280px',
-                    fontWeight: '600',
-                  }}
-                >
-                  <span className="inline-flex items-center justify-center gap-2 w-full">
-                    Log In
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="cta-secondary cta-button"
-                  onClick={() => navigate('/login?intent=signup&accountIntent=provider')}
-                  style={{
-                    background: 'rgba(255,255,255,0.08)',
-                    border: '1px solid rgba(255,255,255,0.16)',
-                    minWidth: '280px',
-                    fontWeight: '600',
-                  }}
-                >
-                  <span className="inline-flex items-center justify-center gap-2 w-full">
-                    Sell Music on MEJay
-                  </span>
-                </button>
+              <div className="hero-ctas cta-group" style={{ marginTop: '2.5rem' }}>
+                <div className="cta-stack">
+                  <button
+                    type="button"
+                    className="cta-primary cta-login cta-button"
+                    onClick={() => navigate('/app?tab=library')}
+                    style={{
+                      animation: 'pulsate-glow 2s ease-in-out infinite',
+                    }}
+                  >
+                    <span className="inline-flex items-center justify-center gap-2 w-full">
+                      Start the Party
+                      <span aria-hidden="true">→</span>
+                    </span>
+                  </button>
+                  <div className="cta-row">
+                    {/* Discover is the store's home and works signed out (guest mode). */}
+                    <button
+                      type="button"
+                      className="cta-secondary cta-store"
+                      aria-label="Visit the music store"
+                      onClick={() => navigate('/app?tab=music')}
+                    >
+                      <ShoppingBag className="cta-secondary-icon" aria-hidden="true" />
+                      Music Store
+                    </button>
+                    <button type="button" className="cta-secondary" onClick={() => navigate('/login')}>
+                      <LogIn className="cta-secondary-icon" aria-hidden="true" />
+                      Log In
+                    </button>
+                  </div>
+                  <p className="cta-alt">
+                    <span className="cta-alt-label">Are you an artist?</span>
+                    <button
+                      type="button"
+                      className="cta-alt-link"
+                      onClick={() => navigate('/login?intent=signup&accountIntent=provider')}
+                    >
+                      Sell your music on MEJay →
+                    </button>
+                  </p>
+                </div>
               </div>
 
             </section>
